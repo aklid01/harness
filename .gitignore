@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# App secrets / local state (never commit)
+.env
+.envrc
+settings.json
+providers.json
+*.jsonl
+
+# Personal / agent-specific
+.explain/
+.agents/
+AGENTS.md
+
+# Backups & test scratch
+.pass-backup/
+.redesign-backup/
+tmp-session-test/
+
+# Node
+node_modules/
+electron/dist/
