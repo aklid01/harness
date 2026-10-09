@@ -12,15 +12,76 @@ export interface ContextInfo extends GitInfo {
   project_root: string;
 }
 
-export interface ProviderEntry {
+export interface ModelEntry {
+  id: string;
+  name: string;
+  model: string;
+  reasoning_effort?: string | null;
+  temperature?: number | null;
+  context_window?: number | null;
+  max_output_tokens?: number | null;
+  supports_tools?: boolean;
+  supports_reasoning?: boolean;
+  extra_params?: Record<string, string | number | boolean | null>;
+  disabled?: boolean;
+}
+
+export interface ProviderGroup {
   id: string;
   name: string;
   base_url: string;
-  model: string;
   headers?: Record<string, string>;
   disabled?: boolean;
-  reasoning_effort?: string | null;
-  temperature?: string | number | null;
+  models: ModelEntry[];
+}
+
+export interface ProviderEntry extends ModelEntry {
+  base_url: string;
+  headers?: Record<string, string>;
+  disabled?: boolean;
+  provider_id: string;
+  provider_name: string;
+  key?: string;
+  active?: boolean;
+}
+
+export interface ProviderState {
+  groups: ProviderGroup[];
+  providers: ProviderEntry[];
+  active_provider_id: string | null;
+  active_model_id: string | null;
+  statuses: Record<string, ProviderEntry>;
+  migration: string[];
+}
+
+export interface RequestFailure {
+  kind: string;
+  headline: string;
+  detail: string;
+  status?: number | null;
+  transient?: boolean;
+  exhausted?: boolean;
+  model?: string | null;
+  model_id?: string | null;
+}
+
+export interface RetryProgress {
+  attempt: number;
+  wait: number;
+  elapsed: number;
+  window: number;
+  model?: string | null;
+  model_id?: string | null;
+  kind?: string;
+  headline?: string;
+  detail?: string;
+  status?: number | null;
+}
+
+export interface RetryInfo {
+  count: number;
+  text: string;
+  model?: string | null;
 }
 
 export interface SessionListItem {
@@ -58,13 +119,14 @@ export type OpPayload =
   | { op: "set_effort"; id: string; effort: string | null }
   | { op: "set_permissions"; mode: string }
   | { op: "save_provider"; entry: ProviderEntry; key?: string }
-  | { op: "delete_provider"; id: string }
+  | { op: "delete_provider"; id: string; scope?: "model" | "provider" }
   | { op: "test_provider"; id: string }
     | { op: "migrate_keys" }
     | { op: "get_context" }
     | { op: "ws_sessions"; root: string }
   | { op: "approval_reply"; id: string; allow: boolean }
-  | { op: "pick_reply"; id: string; index: number | null };
+  | { op: "pick_reply"; id: string; index: number | null }
+  | { op: "retry"; count: number; text: string; mode: Mode };
 
 export type ClientOp = SessionOp & OpPayload;
 

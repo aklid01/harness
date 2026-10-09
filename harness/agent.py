@@ -7,7 +7,8 @@ from . import history
 from . import providers
 from . import session
 from .context import reminder
-from .errors import ModelError
+from .errors import ModelError  # noqa: F401 - kept for callers importing it from here
+from . import errors as errors_mod
 from .llm import call_llm, system_prompt
 from .todos import active_form
 from .tools import execute
@@ -89,8 +90,8 @@ class Runner:
 
     def _fail(self, failure):
         """Report a failed request without losing the message that caused it."""
-        error = failure if isinstance(failure, ModelError) else ModelError(
-            "unknown", f"{type(failure).__name__}: {failure}", model=self._model_label())
+        api_key = providers.active_config()[1]
+        error = errors_mod.classify(failure, api_key=api_key, model=self._model_label())
         if error.kind == "cancelled":
             events.emit(events.NOTE, {"text": "stopped"})
             return

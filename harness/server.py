@@ -370,14 +370,15 @@ def handle_op(service, obj):
     if op == "set_permissions":
         permissions.set_mode(obj.get("mode", "default"))
         return {"reply": op, "req_id": req_id, "ok": True}
-    if op == "save_provider":
-        entry = obj.get("entry", {})
-        stored = providers_mod.save_provider(entry)
-        if obj.get("key"):
-            providers_mod.set_key(stored["id"], obj["key"])
-        if not providers_mod.get_active_id():
-            providers_mod.set_active(stored["id"])
-        return {"reply": op, "req_id": req_id, "ok": True, "data": stored}
+        if op == "save_provider":
+            entry = obj.get("entry", {})
+            stored = providers_mod.save_provider(entry)
+            if obj.get("key"):
+                providers_mod.set_key(stored["id"], obj["key"])
+            if not providers_mod.get_active_id():
+                providers_mod.set_active(stored["id"])
+            return {"reply": op, "req_id": req_id, "ok": True,
+                    "data": providers_mod.get_provider(stored["id"])}
     if op == "delete_provider":
         target = obj.get("id", "")
         ok = providers_mod.delete_group(target) if obj.get("scope") == "provider" else providers_mod.delete_provider(target)
@@ -823,7 +824,7 @@ class Harness:
                 providers_mod.set_key(stored["id"], obj["key"])
             if not providers_mod.get_active_id():
                 providers_mod.set_active(stored["id"])
-            return {"reply": op, "ok": True, "data": stored}
+            return {"reply": op, "ok": True, "data": providers_mod.get_provider(stored["id"])}
         if op == "delete_provider":
             target = obj.get("id", "")
             if obj.get("scope") == "provider":

@@ -1,4 +1,4 @@
-import type { ClientOp, ContextInfo, OpPayload, ServerEnvelope, SessionListItem, TodoItem } from "../shared/protocol";
+import type { ClientOp, ContextInfo, OpPayload, ProviderEntry, ProviderGroup, ProviderState, RetryInfo, ServerEnvelope, SessionListItem, TodoItem } from "../shared/protocol";
 import type { PreloadHarness, WorkspaceRef } from "../shared/preload-types";
 
 declare global {
@@ -186,6 +186,8 @@ interface Ctx {
   pendingProviderId: string | null;
   pendingOpenSessionId: string | null;
   pendingResume: boolean;
+  failure: { retry: RetryInfo | null; headline: string; model: string | null } | null;
+  retryCard: HTMLDivElement | null;
   streamPre: HTMLDivElement | null;
   streamWrap: HTMLElement | null;
   streamText: string[];
@@ -211,10 +213,14 @@ let bootRoot = new URLSearchParams(location.search).get("projectRoot") ?? "";
 let recents: WorkspaceRef[] = [];
 let sessionsByRoot: Record<string, SessionListItem[]> = {};
 let collapsedWs = new Set<string>();
-let providerAll: Array<Record<string, unknown>> = [];
-let providerOptions: Array<{ id: string; label: string }> = [];
-let providerStatuses: Record<string, { key?: string; disabled?: boolean; active?: boolean }> = {};
-let providerActiveId: string | null = null;
+let providerGroups: ProviderGroup[] = [];
+let providerModels: ProviderEntry[] = [];
+let providerStatuses: Record<string, ProviderEntry> = {};
+let providerOptions: Array<{ id: string; label: string; sub: string }> = [];
+let providerActiveModelId: string | null = null;
+let providerActiveGroupId: string | null = null;
+let providerMigration: string[] = [];
+const providerById = new Map<string, ProviderEntry>();
 let settingsRequested = false;
 let settingsLastTab = "models";
 let activeApproval: { ctx: Ctx; id: string } | null = null;
@@ -245,6 +251,7 @@ function makeCtx(root: string, project: string, intent: Ctx["openIntent"], openI
     providerId: null, effortVal: prefs.effortGlobal, permsVal: "default",
     gitInfo: { has_git: false, branch: "", default_branch: "", is_protected: false }, lastBranch: "", branchAck: "",
     pendingText: null, pendingRewind: null, pendingEffort: null, pendingProviderId: null, pendingOpenSessionId: null, pendingResume: false,
+    failure: null, retryCard: null,
     streamPre: null, streamWrap: null, streamText: [], thinking: null, toolCards: new Map(),
     chatBody: document.createElement("div"), entryDraft: "",
   };
@@ -350,7 +357,7 @@ function attachMarquee(viewport: HTMLElement | null): void {
 /* ---------------- shared DOM state (active tab) ---------------- */
 function updateEmptyState(): void {
   if (!activeCtx) return;
-  const has = activeCtx.chatBody.querySelector(".msg, .tool, .note, .error, .thinking") !== null;
+  const has = activeCtx.chatBody.querySelector(".msg, .tool, .note, .error, .retry, .thinking") !== null;
   emptyState.classList.toggle("hidden", has);
 }
 function scrollBottom(ctx: Ctx): void {
@@ -454,16 +461,122 @@ function addNote(ctx: Ctx, text: string): void {
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
 }
-function addError(ctx: Ctx, text: string): void {
+function addError(ctx: Ctx, text: string, meta?: Record<string, unknown>): void {
   hideThinking(ctx);
-  ctx.streamWrap?.remove(); ctx.streamWrap = null; ctx.streamPre = null;
+  // A stream that broke halfway has already delivered its answer: keep it
+  // rather than throwing away what the model managed to say.
+  if (ctx.streamPre && ctx.streamText.join("").trim()) {
+    ctx.streamPre.innerHTML = renderMarkdown(ctx.streamText.join(""));
+  } else {
+    ctx.streamWrap?.remove();
+  }
+  ctx.streamWrap = null; ctx.streamPre = null; ctx.streamText = [];
+  clearRetryCard(ctx);
   if (ctx === activeCtx) setStatusState("error");
+  const retry = (meta?.["retry"] as RetryInfo | undefined) ?? null;
+  const model = String(meta?.["model"] ?? "") || (retry?.model ?? "");
+  ctx.failure = { retry, headline: text, model: model || null };
   const div = document.createElement("div");
   div.className = "error";
-  div.innerHTML = `<b>Error - no response produced</b><div>${escapeHtml(text)}</div>`;
+  const actions: string[] = [];
+  if (retry) actions.push(`<button class="btn small primary" data-retry="1">Retry</button>`);
+  if (providerGroups.length) actions.push(`<button class="btn small" data-switch="1">Switch model</button>`);
+  div.innerHTML =
+    `<b>${escapeHtml((meta?.["headline"] as string) ?? (model ? `${model} failed` : "Error - no response produced"))}</b>` +
+    `<div>${escapeHtml(text)}</div>` +
+    (actions.length ? `<div class="msg-actions" style="opacity:1;pointer-events:auto;margin-top:8px">${actions.join("")}</div>` : "");
   ctx.chatBody.appendChild(div);
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
+  div.querySelectorAll<HTMLButtonElement>("[data-retry]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); retryFailedRequest(ctx); }; });
+  div.querySelectorAll<HTMLButtonElement>("[data-switch]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); openModelPicker(ctx); }; });
+}
+/* One persistent status area for the whole retry process, so a failing
+   provider does not spam a card per attempt. */
+function clearRetryCard(ctx: Ctx): void {
+  ctx.retryCard?.remove();
+  ctx.retryCard = null;
+}
+function showRetry(ctx: Ctx, p: Record<string, unknown>): void {
+  if (ctx.retryCard?.parentElement !== ctx.chatBody) {
+    clearRetryCard(ctx);
+    const card = document.createElement("div");
+    card.className = "retry";
+    ctx.chatBody.appendChild(card);
+    ctx.retryCard = card;
+  }
+  const card = ctx.retryCard;
+  if (!card) return;
+  const model = String(p["model"] ?? ctx.failure?.model ?? "the model");
+  const wait = Number(p["wait"] ?? 0);
+  const attempt = Number(p["attempt"] ?? 1);
+  const elapsed = Number(p["elapsed"] ?? 0);
+  const window = Number(p["window"] ?? 30);
+  const reason = String(p["headline"] ?? p["kind"] ?? "the request failed");
+  card.innerHTML =
+    `<span class="r-spin"></span>` +
+    `<div class="r-body"><div class="r-title">${escapeHtml(model)}</div>` +
+    `<div class="r-detail">${escapeHtml(reason)}. Retrying…</div>` +
+    `<div class="r-sub">Retry ${attempt} · waiting ${wait.toFixed(wait < 1 ? 1 : 0)}s · ${elapsed.toFixed(0)}s of ${window.toFixed(0)}s elapsed</div></div>`;
+  if (ctx === activeCtx) setActivity(`${model} - ${reason}. Retrying…`);
+  scrollBottom(ctx);
+}
+function retryFailedRequest(ctx: Ctx): void {
+  const info = ctx.failure?.retry;
+  if (!info) { setActivity("nothing to retry"); return; }
+  if (ctx.busy) { setActivity("still busy - press Stop first"); return; }
+  clearRetryCard(ctx);
+  ctx.failure = null;
+  setBusy(ctx, true);
+  showThinking(ctx);
+  if (!send(ctx, { op: "retry", count: info.count, text: info.text, mode: ctx.modeVal })) {
+    setBusy(ctx, false);
+    setActivity("retry failed - engine busy");
+  }
+}
+/* Switching models after a failure: the session, its history and any unsaved
+   composer text stay exactly where they are. */
+function openModelPicker(ctx: Ctx): void {
+  const usable = providerGroups.filter((g) => !g.disabled && g.models.some((m) => !m.disabled));
+  if (!usable.length) { setActivity("no other model to switch to - open Settings to add one"); return; }
+  const groups = usable.map((group) => {
+    const rows = group.models.filter((m) => !m.disabled).map((model) => {
+      const entry = providerById.get(model.id);
+      if (!entry) return "";
+      const isCur = entry.id === ctx.providerId;
+      return `<button class="pick-item${isCur ? " selected" : ""}" data-model="${escapeHtml(entry.id)}">` +
+        `<span class="pm-name">${escapeHtml(entry.name || entry.model)}</span>` +
+        `<span class="pm-sub">${escapeHtml(modelSubtitle(entry))}</span></button>`;
+    }).join("");
+    return `<div class="pm-group"><div class="pm-group-name">${escapeHtml(group.name)}</div>${rows}</div>`;
+  }).join("");
+  const failed = ctx.failure?.retry;
+  const hint = failed
+    ? `<p class="perm-why">The request that failed can be retried with the model you pick. Your session, history and draft are untouched.</p>`
+    : "";
+  showModal(`<h3>Switch model</h3>${hint}<div class="pick-list pm-list">${groups}</div><div class="modal-actions"><button class="btn" id="pmCancel">Cancel</button></div>`);
+  modalBox.querySelectorAll<HTMLButtonElement>("[data-model]").forEach((btn) => {
+    btn.onclick = () => {
+      const id = btn.dataset["model"] ?? "";
+      const entry = providerById.get(id);
+      hideModal();
+      const changed = id !== ctx.providerId;
+      selectModel(ctx, id, { adoptEffort: true });
+      clearRetryCard(ctx);
+      if (ctx === activeCtx) setActivity(`switched to ${entry?.name ?? id}${changed ? "" : " (already selected)"}`);
+      if (failed) {
+        const card = Array.from(ctx.chatBody.querySelectorAll<HTMLElement>(".error")).pop();
+        if (card) {
+          const note = document.createElement("div");
+          note.className = "note";
+          note.innerHTML = `<span class="n-ico">${ICONS.info}</span><span>Switched to ${escapeHtml(entry?.name ?? id)}. Press Retry to try the same request with it.</span>`;
+          card.after(note);
+        }
+        scrollBottom(ctx);
+      }
+    };
+  });
+  el<HTMLButtonElement>("pmCancel").onclick = hideModal;
 }
 function addToolLine(ctx: Ctx, callId: string | null, name: string, args: Record<string, unknown>): string {
   hideThinking(ctx);
@@ -1054,6 +1167,8 @@ function autogrow(): void {
 }
 function doSubmit(ctx: Ctx, text: string): void {
   entry.value = ""; ctx.pendingRewind = null;
+  // A new turn supersedes any retry card or failure card from the last one.
+  clearRetryCard(ctx); ctx.failure = null;
   hideEditBar(); autogrow(); updateSendState(); setBusy(ctx, true); showThinking(ctx);
   send(ctx, { op: "submit", text, mode: ctx.modeVal });
 }
@@ -1159,7 +1274,12 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         break;
       }
       case "note": addNote(ctx, String(p["text"] ?? "")); break;
-      case "error": addError(ctx, String(p["text"] ?? "")); if (ctx === activeCtx) setActivity("error - see above"); break;
+      case "retry": showRetry(ctx, p); break;
+      case "error":
+        clearRetryCard(ctx);
+        addError(ctx, String(p["text"] ?? ""), p);
+        if (ctx === activeCtx) setActivity(String(p["model"] ? `${p["model"]} failed` : "error - see above"));
+        break;
       case "session": {
         const id = (p["id"] as string) ?? null;
         ctx.sessionId = id;
@@ -1191,20 +1311,28 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
     const d = msg.data as { root: string; sessions: SessionListItem[] };
     if (d.root) { sessionsByRoot[d.root] = d.sessions ?? []; renderTree(); }
   } else if (msg.reply === "list_providers" && msg.data && typeof msg.data === "object") {
-    const data = msg.data as { providers: Array<Record<string, unknown>>; active_id: string; statuses?: Record<string, { key?: string; disabled?: boolean; active?: boolean }> };
-    providerAll = data.providers;
-    providerActiveId = data.active_id ?? null;
+    const data = msg.data as ProviderState;
+    providerGroups = data.groups ?? [];
+    providerModels = data.providers ?? [];
     providerStatuses = data.statuses ?? {};
-    providerOptions = data.providers.filter((p) => !p["disabled"]).map((p) => ({ id: String(p["id"]), label: `${p["name"]} (${p["model"]})` }));
-    if (ctx.pendingProviderId && providerOptions.some((p) => p.id === ctx.pendingProviderId)) ctx.providerId = ctx.pendingProviderId;
-    else if (data.active_id && providerOptions.some((p) => p.id === data.active_id)) ctx.providerId = data.active_id;
-    else ctx.providerId = providerOptions[0]?.id ?? null;
+    providerActiveModelId = data.active_model_id ?? null;
+    providerActiveGroupId = data.active_provider_id ?? null;
+    providerMigration = data.migration ?? [];
+    providerById.clear();
+    for (const model of providerModels) providerById.set(model.id, model);
+    providerOptions = providerModels
+      .filter((p) => !p.disabled)
+      .map((p) => ({ id: p.id, label: p.name || p.model, sub: p.provider_name }));
+    const pick = (id: string | null): string | null =>
+      id && providerOptions.some((p) => p.id === id) ? id : null;
+    ctx.providerId = pick(ctx.pendingProviderId) ?? pick(providerActiveModelId) ?? providerOptions[0]?.id ?? null;
     ctx.pendingProviderId = null;
-    if (ctx.pendingEffort !== null) { const eff = ctx.pendingEffort; ctx.pendingEffort = null; if (eff !== ctx.effortVal) ctx.effortVal = eff; if (ctx.providerId) send(ctx, { op: "set_effort", id: ctx.providerId, effort: (ctx.effortVal === "default" ? null : ctx.effortVal) }); }
+    if (ctx.pendingEffort !== null) { const eff = ctx.pendingEffort; ctx.pendingEffort = null; if (eff !== ctx.effortVal) ctx.effortVal = eff; }
+    syncEffortFromModel(ctx);
     if (ctx === activeCtx) {
       const cur = providerOptions.find((p) => p.id === ctx.providerId);
       providerLabel.textContent = cur ? cur.label : "No providers";
-      providerLabel.title = providerLabel.textContent ?? "";
+      providerLabel.title = cur ? `${cur.label} · ${cur.sub}` : "No providers";
       providerBtn.classList.toggle("no-provider", !cur);
       effortLabel.textContent = ctx.effortVal;
       refreshProviderMenu();
@@ -1212,7 +1340,19 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
     }
     if (settingsRequested) { settingsRequested = false; openSettings(settingsLastTab); }
   } else if (msg.reply === "set_active" || msg.reply === "delete_provider" || msg.reply === "save_provider") {
-    if (msg.ok) { ctx.providerId = providerActiveId; send(ctx, { op: "list_providers" }); } else if (ctx === activeCtx) setActivity(`provider change failed: ${String(msg.error ?? "unknown")}`);
+    if (msg.ok) {
+      if (msg.reply === "save_provider" && msg.data && typeof msg.data === "object") {
+        const saved = msg.data as ProviderEntry;
+        ctx.providerId = saved.id;
+        prefs.providerByWs[ctx.root] = saved.id;
+        savePrefs();
+        syncEffortFromModel(ctx);
+      }
+      send(ctx, { op: "list_providers" });
+    } else if (ctx === activeCtx) setActivity(`provider change failed: ${String(msg.error ?? "unknown")}`);
+  } else if (msg.reply === "retry") {
+    if (msg.ok) { setBusy(ctx, true); showThinking(ctx); }
+    else if (ctx === activeCtx) setActivity("retry failed - engine busy");
   } else if (msg.reply === "git_create_branch") {
     if (msg.ok) { send(ctx, { op: "get_context" }); if (ctx.pendingText !== null) { const t = ctx.pendingText; ctx.pendingText = null; doSubmit(ctx, t); } }
     else { ctx.pendingText = null; if (ctx === activeCtx) setActivity(`branch creation failed: ${String(msg.error ?? "unknown")}`); }
@@ -1271,23 +1411,112 @@ function pickEffort(ctx: Ctx, value: string): void {
   ctx.effortVal = value;
   if (ctx === activeCtx) { effortLabel.textContent = value; renderMenu(effortMenu, EFFORTS.map((e) => ({ label: e, value: e })), ctx.effortVal, (v) => pickEffort(ctx, v)); }
   prefs.effortByWs[ctx.root] = value; savePrefs();
-  if (!ctx.providerId) { if (ctx === activeCtx) setActivity("no provider selected - open Settings to add one"); return; }
-  send(ctx, { op: "set_effort", id: ctx.providerId, effort: value === "default" ? null : value });
+  pushEffort(ctx);
 }
 function pickPerms(ctx: Ctx, value: string): void {
   ctx.permsVal = value;
   if (ctx === activeCtx) { permsLabel.textContent = PERMS.find((p) => p.value === value)?.label ?? value; renderMenu(permsMenu, PERMS.map((p) => ({ label: p.label, value: p.value })), ctx.permsVal, (v) => pickPerms(ctx, v)); }
   send(ctx, { op: "set_permissions", mode: value });
 }
+/* ---------------- model selection ---------------- */
+function effortForModel(modelId: string | null): string {
+  if (!modelId) return "default";
+  const entry = providerById.get(modelId);
+  return (entry?.reasoning_effort as string) || "default";
+}
+function modelSubtitle(entry: ProviderEntry): string {
+  const bits: string[] = [entry.model || "(no model id)"];
+  if (entry.context_window) bits.push(`${Math.round(Number(entry.context_window) / 1000)}k ctx`);
+  if (entry.max_output_tokens) bits.push(`${entry.max_output_tokens} out`);
+  if (entry.supports_tools === false) bits.push("no tools");
+  return bits.join(" · ");
+}
+function pushEffort(ctx: Ctx): void {
+  if (ctx === activeCtx) effortLabel.textContent = ctx.effortVal;
+  if (ctx.providerId) {
+    send(ctx, { op: "set_effort", id: ctx.providerId, effort: ctx.effortVal === "default" ? null : ctx.effortVal });
+  }
+}
+function syncEffortFromModel(ctx: Ctx): void {
+  /* No explicit choice for this workspace yet: the model's own setting wins,
+     falling back to the app-wide default. */
+  if (prefs.effortByWs[ctx.root] !== undefined) return;
+  const own = effortForModel(ctx.providerId);
+  ctx.effortVal = own !== "default" ? own : prefs.effortGlobal;
+  if (ctx === activeCtx) effortLabel.textContent = ctx.effortVal;
+}
+function selectModel(ctx: Ctx, modelId: string | null, options: { adoptEffort?: boolean } = {}): void {
+  ctx.providerId = modelId;
+  prefs.providerByWs[ctx.root] = modelId ?? "";
+  savePrefs();
+  if (options.adoptEffort) {
+    // A different model has different capabilities, so it brings its own.
+    ctx.effortVal = effortForModel(modelId);
+    prefs.effortByWs[ctx.root] = ctx.effortVal;
+    savePrefs();
+  }
+  send(ctx, { op: "set_active", id: modelId ?? "" });
+  pushEffort(ctx);
+  if (ctx === activeCtx) {
+    const cur = providerOptions.find((p) => p.id === ctx.providerId);
+    providerLabel.textContent = cur ? cur.label : "No providers";
+    providerLabel.title = cur ? `${cur.label} · ${cur.sub}` : "No providers";
+    providerBtn.classList.toggle("no-provider", !cur);
+    effortLabel.textContent = ctx.effortVal;
+    refreshProviderMenu();
+    renderTabs();
+  }
+}
 function refreshProviderMenu(): void {
   if (!activeCtx) return;
-  renderMenu(providerMenu, providerOptions.map((p) => ({ label: p.label, value: p.id })), activeCtx.providerId ?? "", (value) => {
-    const ctx = activeCtx;
-    if (!ctx) return;
-    ctx.providerId = value;
-    prefs.providerByWs[ctx.root] = value; savePrefs();
-    send(ctx, { op: "set_active", id: value });
-  });
+  const ctx = activeCtx;
+  providerMenu.replaceChildren();
+  const usable = providerGroups.filter((g) => g.models.some((m) => !m.disabled && !g.disabled));
+  if (!usable.length) {
+    providerMenu.innerHTML = `<div class="menu-empty">No models yet. Add one in Settings.</div>`;
+    return;
+  }
+  for (const group of usable) {
+    const head = document.createElement("div");
+    head.className = "menu-group";
+    head.innerHTML = `<span class="mg-name">${escapeHtml(group.name)}</span>` +
+      `<span class="mg-count">${group.models.filter((m) => !m.disabled).length}</span>`;
+    providerMenu.appendChild(head);
+    for (const model of group.models) {
+      if (model.disabled || group.disabled) continue;
+      const entry = providerById.get(model.id);
+      if (!entry) continue;
+      const btn = document.createElement("button");
+      const isCur = entry.id === ctx.providerId;
+      if (isCur) btn.classList.add("current");
+      btn.innerHTML = `<span class="m-check">${isCur ? ICONS.check : ""}</span>` +
+        `<span class="m-label">${escapeHtml(entry.name || entry.model)}</span>` +
+        `<span class="m-sub">${escapeHtml(modelSubtitle(entry))}</span>`;
+      btn.title = `${group.name} · ${entry.model}`;
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        closeAllMenus();
+        if (entry.id === ctx.providerId) return;
+        if (ctx.busy) {
+          setActivity("switching model - the request in flight is stopped");
+        }
+        selectModel(ctx, entry.id, { adoptEffort: true });
+        setActivity(`${entry.name || entry.model} selected`);
+      };
+      providerMenu.appendChild(btn);
+    }
+  }
+  const foot = document.createElement("div");
+  foot.className = "menu-foot";
+  foot.innerHTML = `<button class="m-manage" id="mManageModels">${ICONS.sliders}<span>Manage models…</span></button>`;
+  providerMenu.appendChild(foot);
+  el<HTMLButtonElement>("mManageModels").onclick = (e) => {
+    e.stopPropagation();
+    closeAllMenus();
+    settingsRequested = true;
+    settingsLastTab = "models";
+    send(ensureAppCtx(), { op: "list_providers" });
+  };
 }
 
 /* ---------------- providers / settings ---------------- */
@@ -1301,32 +1530,102 @@ function keyTag(key: string | undefined, disabled: boolean | undefined, active: 
   if (disabled) tags.push(`<span class="tag disabled">disabled</span>`);
   return tags.join(" ");
 }
-function providerForm(existing?: Record<string, unknown>): void {
-  const e = existing ?? {};
+function modelTags(entry: ProviderEntry, active: boolean): string {
+  const tags: string[] = [];
+  tags.push(active ? `<span class="tag active">active</span>` : "");
+  if (entry.reasoning_effort) tags.push(`<span class="tag">effort ${escapeHtml(String(entry.reasoning_effort))}</span>`);
+  if (entry.context_window) tags.push(`<span class="tag">${Math.round(Number(entry.context_window) / 1000)}k ctx</span>`);
+  if (entry.supports_tools === false) tags.push(`<span class="tag">no tools</span>`);
+  if (entry.disabled) tags.push(`<span class="tag disabled">disabled</span>`);
+  return tags.filter(Boolean).join(" ");
+}
+/* The provider + model editor. One provider may hold many models, so adding
+   a model to an existing provider is the default path. */
+function providerForm(existing?: ProviderEntry, groupId?: string): void {
+  const e: Partial<ProviderEntry> = existing ?? {};
   const opts = ["default", "low", "medium", "high", "xhigh"];
+  const group = groupId ? providerGroups.find((g) => g.id === groupId) : null;
+  const isNewModel = !existing;
+  const providerOptionsHtml =
+    `<option value="">+ New provider…</option>` +
+    providerGroups.map((g) => `<option value="${escapeHtml(g.id)}"${group && g.id === group.id ? " selected" : ""}>${escapeHtml(g.name)}</option>`).join("");
+  const showNewProvider = isNewModel && !group;
+  const keyLabel = existing
+    ? (providerStatuses[existing.id]?.key === "keyring" ? "saved key - leave blank to keep" : "no key stored - paste one")
+    : "paste API key";
   showModal(
-    `<h3>${existing ? "Edit provider" : "Add provider"}</h3>` +
-      `<div class="field"><label>Name</label><input id="fName" value="${escapeHtml(String(e["name"] ?? ""))}" placeholder="My provider" /></div>` +
-      `<div class="field"><label>Base URL</label><input id="fBase" value="${escapeHtml(String(e["base_url"] ?? "https://"))}" /></div>` +
-      `<div class="field"><label>Model</label><input id="fModel" value="${escapeHtml(String(e["model"] ?? ""))}" placeholder="model-id" /></div>` +
-      `<div class="field"><label>API key</label><input id="fKey" type="password" placeholder="${existing ? "leave blank to keep" : "paste API key"}" /></div>` +
-      `<div class="form-grid"><div class="field"><label>Effort</label><select id="fEffort">${opts.map((x) => `<option${String(e["reasoning_effort"] ?? "default") === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>` +
-      `<div class="field"><label>Temperature</label><input id="fTemp" value="${escapeHtml(String(e["temperature"] ?? ""))}" placeholder="default" /></div></div>` +
-      `<div class="modal-actions"><button class="btn" id="fBack">Back</button><button class="btn primary" id="fSave">Save</button></div>`,
+    `<h3>${existing ? "Edit model" : "Add model"}</h3>` +
+      `<div class="field"><label>Provider</label><select id="fProvider">${providerOptionsHtml}</select></div>` +
+      `<div id="fNewProviderBlock"${showNewProvider ? "" : ' class="hidden"'}>` +
+      `<div class="field"><label>Provider name</label><input id="fProviderName" value="${escapeHtml(group?.name ?? "")}" placeholder="NVIDIA, OpenRouter, …" /></div>` +
+      `<div class="field"><label>Base URL</label><input id="fBase" value="${escapeHtml(group?.base_url ?? "https://")}" placeholder="https://api.example.com/v1" /></div>` +
+      `</div>` +
+      `<div class="field"><label>Display name</label><input id="fName" value="${escapeHtml(String(e["name"] ?? ""))}" placeholder="GLM 5.3 Flash" /></div>` +
+      `<div class="field"><label>Model id</label><input id="fModel" value="${escapeHtml(String(e["model"] ?? ""))}" placeholder="glm-5.3-flash" /></div>` +
+      `<div class="field"><label>API key</label><input id="fKey" type="password" value="" placeholder="${keyLabel}" /></div>` +
+      `<div class="form-grid"><div class="field"><label>Reasoning effort</label><select id="fEffort">${opts.map((x) => `<option${String(e["reasoning_effort"] ?? "default") === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>` +
+      `<div class="field"><label>Temperature</label><input id="fTemp" value="${e["temperature"] === null || e["temperature"] === undefined ? "" : escapeHtml(String(e["temperature"]))}" placeholder="default" /></div></div>` +
+      `<div class="form-grid"><div class="field"><label>Context window (tokens)</label><input id="fCtx" value="${e["context_window"] ? escapeHtml(String(e["context_window"])) : ""}" placeholder="provider default" /></div>` +
+      `<div class="field"><label>Max output tokens</label><input id="fMax" value="${e["max_output_tokens"] ? escapeHtml(String(e["max_output_tokens"])) : ""}" placeholder="no limit" /></div></div>` +
+      `<div class="set-row"><div class="set-info"><div class="set-label">Tool calling</div><div class="set-desc">Turn off for models that reject the tools parameter.</div></div><div class="set-ctl"><span id="swTools"></span><span class="set-desc" id="toolsState"></span></div></div>` +
+      `<div class="set-row"><div class="set-info"><div class="set-label">Reasoning effort parameter</div><div class="set-desc">Turn off for models without a reasoning knob.</div></div><div class="set-ctl"><span id="swReason"></span></div></div>` +
+      `<div class="field"><label>Extra parameters (JSON)</label><input id="fExtra" value="${escapeHtml(Object.keys(e["extra_params"] ?? {}).length ? JSON.stringify(e["extra_params"]) : "")}" placeholder='{"top_p":0.9}' /></div>` +
+      `<div class="modal-actions"><button class="btn" id="fBack">Back</button><button class="btn primary" id="fSave">Save model</button></div>`,
   );
+  const providerSelect = el<HTMLSelectElement>("fProvider");
+  const newBlock = el<HTMLDivElement>("fNewProviderBlock");
+  const toggleNewBlock = (): void => { newBlock.classList.toggle("hidden", providerSelect.value !== ""); };
+  providerSelect.onchange = toggleNewBlock;
+  toggleNewBlock();
+  const tools = e["supports_tools"] !== false;
+  const reasoning = e["supports_reasoning"] !== false;
+  const toolsState = el<HTMLSpanElement>("toolsState");
+  const describeTools = (value: boolean): void => { toolsState.textContent = value ? "sent with every request" : "omitted from requests"; };
+  wireSwitch(modalBox, "swTools", tools, describeTools);
+  wireSwitch(modalBox, "swReason", reasoning, () => { /* no label needed */ });
+  describeTools(tools);
   el<HTMLButtonElement>("fBack").onclick = () => { settingsRequested = true; settingsLastTab = "models"; send(ensureAppCtx(), { op: "list_providers" }); };
   el<HTMLButtonElement>("fSave").onclick = () => {
-    const base = el<HTMLInputElement>("fBase").value.trim();
-    if (!base) return;
+    const name = el<HTMLInputElement>("fName").value.trim();
+    const model = el<HTMLInputElement>("fModel").value.trim();
+    if (!model) { setActivity("a model id is required"); return; }
+    const picked = providerSelect.value;
+    let entry: Record<string, unknown>;
+    if (picked) {
+      const target = providerGroups.find((g) => g.id === picked);
+      entry = { id: existing?.id ?? "", provider_id: picked, provider_name: target?.name ?? "", name, model };
+    } else {
+      const base = el<HTMLInputElement>("fBase").value.trim();
+      if (!base) { setActivity("a base URL is required for a new provider"); return; }
+      const pname = el<HTMLInputElement>("fProviderName").value.trim() || base;
+      entry = { id: existing?.id ?? "", provider_id: base, provider_name: pname, name, model, base_url: base };
+    }
     const effort = el<HTMLSelectElement>("fEffort").value;
     const temp = el<HTMLInputElement>("fTemp").value.trim();
-    const id = String(existing?.["id"] ?? base);
-    send(ensureAppCtx(), {
-      op: "save_provider",
-      entry: { id, name: el<HTMLInputElement>("fName").value.trim() || id, base_url: base, model: el<HTMLInputElement>("fModel").value.trim(), headers: {}, disabled: Boolean(existing?.["disabled"] ?? false), reasoning_effort: effort === "default" ? null : effort, temperature: temp || null },
-      key: el<HTMLInputElement>("fKey").value.trim() || undefined,
+    const ctxWindow = el<HTMLInputElement>("fCtx").value.trim();
+    const maxOut = el<HTMLInputElement>("fMax").value.trim();
+    const extra = el<HTMLInputElement>("fExtra").value.trim();
+    let extraParams: Record<string, string | number | boolean | null> = {};
+    if (extra) {
+      try {
+        const parsed = JSON.parse(extra) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) extraParams = parsed as Record<string, string | number | boolean | null>;
+        else { setActivity("extra parameters must be a JSON object"); return; }
+      } catch { setActivity("extra parameters are not valid JSON"); return; }
+    }
+    Object.assign(entry, {
+      reasoning_effort: effort === "default" ? null : effort,
+      temperature: temp || null,
+      context_window: ctxWindow || null,
+      max_output_tokens: maxOut || null,
+      supports_tools: tools,
+      supports_reasoning: reasoning,
+      extra_params: extraParams,
     });
+    const key = el<HTMLInputElement>("fKey").value.trim();
     settingsRequested = true;
+    settingsLastTab = "models";
+    send(ensureAppCtx(), { op: "save_provider", entry: entry as unknown as ProviderEntry, key: key || undefined });
   };
 }
 const SETTINGS_TABS = [
@@ -1377,30 +1676,70 @@ function settingsPanel(tab: string): [string, () => void] {
   return settingsModels();
 }
 function settingsModels(): [string, () => void] {
-  const ctx = activeCtx;
-  const rows = providerAll.map((p) => {
-    const id = String(p["id"]); const st = providerStatuses[id] ?? {};
-    return `<tr><td class="p-name">${escapeHtml(String(p["name"] ?? ""))}</td><td class="p-model">${escapeHtml(String(p["model"] ?? ""))}</td><td>${keyTag(st.key, st.disabled, id === providerActiveId)}</td>` +
-      `<td><div class="prov-actions"><button class="btn small" data-act="${escapeHtml(id)}">Use</button> <button class="btn small" data-test="${escapeHtml(id)}">Test</button> <button class="btn small" data-edit="${escapeHtml(id)}">Edit</button> <button class="btn small danger" data-del="${escapeHtml(id)}">Del</button></div></td></tr>`;
+  const migrateNote = providerMigration.length
+    ? `<div class="mig-note">${ICONS.info}<span>${escapeHtml(providerMigration.join(" "))}</span></div>`
+    : "";
+  const groups = providerGroups.map((group) => {
+    const activeModelId = providerModels.find((m) => m.id === providerActiveModelId && m.provider_id === group.id)?.id;
+    const rows = group.models.map((model) => {
+      const entry = providerById.get(model.id);
+      if (!entry) return "";
+      const active = entry.id === providerActiveModelId;
+      return `<tr><td class="p-name">${escapeHtml(entry.name || entry.model)}</td>` +
+        `<td class="p-model">${escapeHtml(entry.model || "")}</td>` +
+        `<td>${modelTags(entry, active)}</td>` +
+        `<td><div class="prov-actions"><button class="btn small ${active ? "" : "primary"}" data-act="${escapeHtml(entry.id)}">Use</button> ` +
+        `<button class="btn small" data-test="${escapeHtml(entry.id)}">Test</button> ` +
+        `<button class="btn small" data-edit="${escapeHtml(entry.id)}">Edit</button> ` +
+        `<button class="btn small danger" data-del="${escapeHtml(entry.id)}">Del</button></div></td></tr>`;
+    }).join("");
+    const st = providerStatuses[group.models[0]?.id ?? ""] ?? {};
+    return `<div class="prov-group${activeModelId ? " active" : ""}">` +
+      `<div class="prov-group-head"><span class="pg-name">${escapeHtml(group.name)}</span>` +
+      `<span class="pg-meta">${escapeHtml(group.base_url || "")} ${keyTag(st.key, group.disabled, false)}</span>` +
+      `<span class="prov-actions"><button class="btn small" data-addmodel="${escapeHtml(group.id)}">Add model</button>` +
+      `<button class="btn small" data-test="${escapeHtml(group.id)}">Test</button>` +
+      `<button class="btn small danger" data-delgroup="${escapeHtml(group.id)}">Delete provider</button></span></div>` +
+      (rows ? `<table class="prov-table"><colgroup><col style="width:26%"><col style="width:31%"><col style="width:22%"><col style="width:21%"></colgroup><thead><tr><th>Model</th><th>Model id</th><th>Settings</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="panel-empty">No models in this provider yet.</div>`) +
+      `</div>`;
   }).join("");
   const html =
-    `<p class="sub">Providers and the reasoning effort used for new work. The active model is applied from here or the composer. Preferences are remembered per workspace.</p>` +
-    (providerAll.length ? `<table class="prov-table"><colgroup><col style="width:24%"><col style="width:33%"><col style="width:20%"><col style="width:23%"></colgroup><thead><tr><th>Name</th><th>Model</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="panel-empty">No providers yet. Add one to get started.</div>`) +
-    `<div class="modal-actions" style="justify-content:flex-start"><button class="btn" id="mMigrate">Migrate keys</button><button class="btn primary" id="mAdd">Add provider</button></div><div id="setStatus" class="status-line"></div>` +
+    `<p class="sub">Providers hold credentials; each model keeps its own id and settings. Several models can share one provider, and deleting one leaves the rest alone. The active model is applied here or from the composer.</p>` +
+    (providerGroups.length ? groups : `<div class="panel-empty">No providers yet. Add one to get started.</div>`) +
+    migrateNote +
+    `<div class="modal-actions" style="justify-content:flex-start"><button class="btn" id="mMigrate">Migrate keys</button><button class="btn primary" id="mAdd">Add model</button></div><div id="setStatus" class="status-line"></div>` +
     `<h4 class="card-title" style="margin-top:18px">Default effort</h4>` +
-    `<div class="set-row"><div class="set-info"><div class="set-label">Reasoning effort for new workspaces</div><div class="set-desc">Used when a workspace has no effort saved. Current: <b>${escapeHtml(ctx?.effortVal ?? "default")}</b>.</div></div><div class="set-ctl"><select class="sel-inline" id="defEffort">${EFFORTS.map((e) => `<option${e === prefs.effortGlobal ? " selected" : ""}>${e}</option>`).join("")}</select></div></div>`;
+    `<div class="set-row"><div class="set-info"><div class="set-label">Reasoning effort for new workspaces</div><div class="set-desc">Each model keeps its own effort; switching models loads that model's setting.</div></div><div class="set-ctl"><select class="sel-inline" id="defEffort">${EFFORTS.map((e) => `<option${e === prefs.effortGlobal ? " selected" : ""}>${e}</option>`).join("")}</select></div></div>`;
   const wire = (): void => {
     const body = el<HTMLDivElement>("settingsBody");
-    body.querySelectorAll("[data-act]").forEach((b) => { (b as HTMLButtonElement).onclick = () => { settingsRequested = true; send(ensureAppCtx(), { op: "set_active", id: (b as HTMLElement).dataset["act"] ?? "" }); }; });
+    body.querySelectorAll("[data-act]").forEach((b) => { (b as HTMLButtonElement).onclick = () => {
+      settingsRequested = true;
+      const id = (b as HTMLElement).dataset["act"] ?? "";
+      selectModel(ensureAppCtx(), id, { adoptEffort: true });
+      send(ensureAppCtx(), { op: "set_active", id });
+    }; });
     body.querySelectorAll("[data-test]").forEach((b) => { (b as HTMLButtonElement).onclick = () => { const s = document.getElementById("setStatus"); if (s) { s.textContent = "testing…"; s.className = "status-line"; } send(ensureAppCtx(), { op: "test_provider", id: (b as HTMLElement).dataset["test"] ?? "" }); }; });
-    body.querySelectorAll("[data-edit]").forEach((b) => { (b as HTMLButtonElement).onclick = () => providerForm(providerAll.find((p) => String(p["id"]) === (b as HTMLElement).dataset["edit"])); });
+    body.querySelectorAll("[data-edit]").forEach((b) => { (b as HTMLButtonElement).onclick = () => {
+      const id = (b as HTMLElement).dataset["edit"] ?? "";
+      providerForm(providerById.get(id), providerById.get(id)?.provider_id);
+    }; });
+    body.querySelectorAll("[data-addmodel]").forEach((b) => { (b as HTMLButtonElement).onclick = () => providerForm(undefined, (b as HTMLElement).dataset["addmodel"]); });
     body.querySelectorAll("[data-del]").forEach((b) => {
       (b as HTMLButtonElement).onclick = () => {
         const id = (b as HTMLElement).dataset["del"] ?? "";
-        const prov = providerAll.find((p) => String(p["id"]) === id);
-        showModal(`<h3>Delete provider</h3><p>Delete <b>${escapeHtml(String(prov?.["name"] ?? id))}</b>? Its stored key will be removed too.</p><div class="modal-actions"><button class="btn" id="pdCancel">Cancel</button><button class="btn danger" id="pdOk">Delete</button></div>`);
-        el<HTMLButtonElement>("pdOk").onclick = () => { settingsRequested = true; send(ensureAppCtx(), { op: "delete_provider", id }); };
+        const model = providerById.get(id);
+        showModal(`<h3>Delete model</h3><p>Delete <b>${escapeHtml(model?.name ?? id)}</b>? The provider and its other models stay.</p><div class="modal-actions"><button class="btn" id="pdCancel">Cancel</button><button class="btn danger" id="pdOk">Delete</button></div>`);
+        el<HTMLButtonElement>("pdOk").onclick = () => { settingsRequested = true; send(ensureAppCtx(), { op: "delete_provider", id, scope: "model" }); };
         el<HTMLButtonElement>("pdCancel").onclick = () => openSettings("models");
+      };
+    });
+    body.querySelectorAll("[data-delgroup]").forEach((b) => {
+      (b as HTMLButtonElement).onclick = () => {
+        const id = (b as HTMLElement).dataset["delgroup"] ?? "";
+        const group = providerGroups.find((g) => g.id === id);
+        showModal(`<h3>Delete provider</h3><p>Delete <b>${escapeHtml(group?.name ?? id)}</b> and its ${group?.models.length ?? 0} model(s)? Stored keys are removed too.</p><div class="modal-actions"><button class="btn" id="pgCancel">Cancel</button><button class="btn danger" id="pgOk">Delete</button></div>`);
+        el<HTMLButtonElement>("pgOk").onclick = () => { settingsRequested = true; send(ensureAppCtx(), { op: "delete_provider", id, scope: "provider" }); };
+        el<HTMLButtonElement>("pgCancel").onclick = () => openSettings("models");
       };
     });
     el<HTMLButtonElement>("mAdd").onclick = () => providerForm();
@@ -1408,7 +1747,7 @@ function settingsModels(): [string, () => void] {
     el<HTMLSelectElement>("defEffort").onchange = () => {
       prefs.effortGlobal = el<HTMLSelectElement>("defEffort").value; savePrefs();
       const ctx2 = activeCtx;
-      if (ctx2 && !prefs.effortByWs[ctx2.root]) { ctx2.effortVal = prefs.effortGlobal; if (ctx2.providerId) send(ctx2, { op: "set_effort", id: ctx2.providerId, effort: ctx2.effortVal === "default" ? null : ctx2.effortVal }); }
+      if (ctx2 && !prefs.effortByWs[ctx2.root]) { ctx2.effortVal = prefs.effortGlobal; pushEffort(ctx2); }
     };
   };
   return [html, wire];

@@ -417,6 +417,13 @@ button { font-family: inherit; }
 .error { background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r); padding: 10px 12px; margin: 8px 0; color: var(--text); }
 .error b { color: var(--danger); display: block; margin-bottom: 2px; }
 .error > div { color: var(--text-2); font-size: var(--t-body); word-break: break-word; }
+.error .msg-actions button { margin-right: 6px; }
+.retry { display: flex; gap: 10px; align-items: flex-start; background: var(--warn-soft); border: 1px solid var(--warn-soft); border-radius: var(--r); padding: 10px 12px; margin: 8px 0; }
+.retry .r-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--warn); animation: spin 0.7s linear infinite; flex: none; margin-top: 3px; }
+.retry .r-body { min-width: 0; }
+.retry .r-title { color: var(--text); font-weight: 600; font-size: var(--t-body); }
+.retry .r-detail { color: var(--warn); font-size: var(--t-caption); margin-top: 1px; }
+.retry .r-sub { color: var(--text-3); font-family: var(--mono); font-size: var(--t-micro); margin-top: 3px; }
 
 /* ---------- status bar ---------- */
 .status-bar {
@@ -502,7 +509,16 @@ button { font-family: inherit; }
 .menu button:hover { background: var(--panel-2); color: var(--text); }
 .menu button.current { color: var(--accent-text); }
 .menu button .m-check { display: grid; place-items: center; width: 14px; flex: none; color: var(--accent); }
-.menu button .m-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu button .m-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu button .m-sub { flex: none; font-family: var(--mono); font-size: var(--t-micro); color: var(--text-3); max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu button.current .m-sub { color: var(--accent-text); }
+.menu-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 9px 4px; font-size: var(--t-micro); text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-3); font-weight: 650; }
+.menu-group + .menu-group { border-top: 1px solid var(--border-soft); margin-top: 2px; }
+.menu-group .mg-count { font-size: var(--t-micro); color: var(--text-3); background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; letter-spacing: 0; text-transform: none; }
+.menu-empty { padding: 10px 9px; font-size: var(--t-caption); color: var(--text-3); }
+.menu-foot { margin-top: 2px; padding-top: 2px; border-top: 1px solid var(--border-soft); }
+.menu-foot button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: transparent; border: none; border-radius: var(--r-xs); padding: 7px 9px; color: var(--text-3); font-size: var(--t-body); cursor: pointer; }
+.menu-foot button:hover { background: var(--panel-2); color: var(--text); }
 
 /* ---------- right panel ---------- */
 .panel-section { padding: var(--pad-block) 14px 8px; border-bottom: 1px solid var(--border-soft); }
@@ -696,6 +712,26 @@ button { font-family: inherit; }
 .settings-panel .prov-table { table-layout: fixed; width: 100%; }
 .settings-panel .prov-actions { flex-wrap: wrap; }
 .settings-panel .prov-table td { word-break: break-word; }
+
+/* providers hold models: a group header, then its model rows */
+.prov-group { border: 1px solid var(--border-soft); border-radius: var(--r); margin-bottom: 10px; overflow: hidden; }
+.prov-group.active { border-color: var(--accent-line); }
+.prov-group-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--panel-2); flex-wrap: wrap; }
+.prov-group-head .pg-name { font-size: var(--t-base); font-weight: 650; color: var(--text); }
+.prov-group-head .pg-meta { flex: 1; min-width: 120px; font-family: var(--mono); font-size: var(--t-micro); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
+.prov-group .prov-table { padding: 0 10px 4px; }
+.prov-group .panel-empty { text-align: left; padding: 6px 10px 8px; }
+.mig-note { display: flex; gap: 8px; align-items: flex-start; font-size: var(--t-caption); color: var(--warn); background: var(--warn-soft); border-radius: var(--r-sm); padding: 8px 10px; margin: 4px 0 10px; line-height: 1.45; }
+.mig-note svg { flex: none; margin-top: 2px; }
+
+/* model switcher modal */
+.pm-list { max-height: 52vh; overflow-y: auto; }
+.pm-group { margin-bottom: 10px; }
+.pm-group-name { font-size: var(--t-micro); text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-3); font-weight: 650; padding: 2px 2px 6px; }
+.pm-group .pick-item { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.pm-group .pick-item .pm-name { color: var(--text); }
+.pm-group .pick-item .pm-sub { font-family: var(--mono); font-size: var(--t-micro); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-group .pick-item.selected .pm-sub { color: var(--accent-text); }
 
 /* ---------- usage chip + popover (shown when context panel closed) ---------- */
 .usage-chip .usage-chip-text { font-family: var(--mono); font-size: var(--t-caption); }
