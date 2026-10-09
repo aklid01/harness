@@ -1365,6 +1365,7 @@ function wireSeg(body: HTMLElement, hook: string, onPick: (v: string) => void): 
 function wireSwitch(body: HTMLElement, id: string, on: boolean, onToggle: (v: boolean) => void): void {
   const sw = body.querySelector<HTMLElement>(`#${id}`);
   if (!sw) return;
+  sw.classList.add("switch");
   sw.classList.toggle("on", on); sw.setAttribute("role", "switch"); sw.setAttribute("aria-checked", String(on));
   sw.onclick = () => { const next = !sw.classList.contains("on"); sw.classList.toggle("on", next); sw.setAttribute("aria-checked", String(next)); onToggle(next); };
 }

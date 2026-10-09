@@ -143,6 +143,15 @@
   --item-gap: 4px;
 }
 
+/* reduced motion: disable transitions and animations */
+:root[data-motion="reduce"] *,
+:root[data-motion="reduce"] *::before,
+:root[data-motion="reduce"] *::after {
+  transition: none !important;
+  animation: none !important;
+  scroll-behavior: auto !important;
+}
+
 * { box-sizing: border-box; }
 
 html, body { margin: 0; height: 100%; overflow: hidden; }
@@ -307,7 +316,7 @@ button { font-family: inherit; }
 .tab-ws { font-size: var(--t-micro); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tab-title { font-size: var(--t-caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tab.active .tab-title { color: var(--text); font-weight: 600; }
-.tab-close { flex: none; display: grid; place-items: center; width: 18px; height: 18px; border-radius: var(--r-xs); color: var(--text-3); opacity: 0; cursor: pointer; }
+.tab-close { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: none; background: transparent; line-height: 0; border-radius: var(--r-xs); color: var(--text-3); opacity: 0; cursor: pointer; }
 .tab:hover .tab-close, .tab.active .tab-close { opacity: 0.8; }
 .tab-close:hover { background: var(--raised); color: var(--text); opacity: 1; }
 .tab-new { flex: none; display: grid; place-items: center; width: 28px; height: 28px; margin-bottom: 3px; border-radius: var(--r-sm); background: var(--panel-2); border: 1px solid var(--border); color: var(--text-2); cursor: pointer; }
