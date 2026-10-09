@@ -253,6 +253,20 @@ function makeCtx(root: string, project: string, intent: Ctx["openIntent"], openI
   return ctx;
 }
 
+/* A non-tab context used for app-level ops (providers, settings) so they work
+   even when no session tab is open (e.g. from the landing state). */
+let appCtx: Ctx | null = null;
+function ensureAppCtx(): Ctx {
+  const root = activeCtx?.root ?? bootRoot ?? "";
+  if (!appCtx) {
+    appCtx = makeCtx(root, baseName(root || "Workspace"), "resume", null);
+    appCtx.draft = true;
+  } else if (appCtx.root !== root) {
+    appCtx.root = root;
+  }
+  return appCtx;
+}
+
 /* ---------------- generic helpers ---------------- */
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -910,7 +924,7 @@ function clearWorkspaceUI(ctx: Ctx): void {
 /* ---------------- modal ---------------- */
 function showModal(html: string): void {
   modalBox.classList.remove("wide");
-  modalBox.classList.remove("settings");
+  modalBox.classList.remove("settings-modal");
   modalBox.style.width = "";
   modalBox.style.maxWidth = "";
   modalBox.style.maxHeight = "";
@@ -1300,14 +1314,14 @@ function providerForm(existing?: Record<string, unknown>): void {
       `<div class="field"><label>Temperature</label><input id="fTemp" value="${escapeHtml(String(e["temperature"] ?? ""))}" placeholder="default" /></div></div>` +
       `<div class="modal-actions"><button class="btn" id="fBack">Back</button><button class="btn primary" id="fSave">Save</button></div>`,
   );
-  el<HTMLButtonElement>("fBack").onclick = () => { settingsRequested = true; settingsLastTab = "models"; send(activeCtx as Ctx, { op: "list_providers" }); };
+  el<HTMLButtonElement>("fBack").onclick = () => { settingsRequested = true; settingsLastTab = "models"; send(ensureAppCtx(), { op: "list_providers" }); };
   el<HTMLButtonElement>("fSave").onclick = () => {
     const base = el<HTMLInputElement>("fBase").value.trim();
     if (!base) return;
     const effort = el<HTMLSelectElement>("fEffort").value;
     const temp = el<HTMLInputElement>("fTemp").value.trim();
     const id = String(existing?.["id"] ?? base);
-    send(activeCtx as Ctx, {
+    send(ensureAppCtx(), {
       op: "save_provider",
       entry: { id, name: el<HTMLInputElement>("fName").value.trim() || id, base_url: base, model: el<HTMLInputElement>("fModel").value.trim(), headers: {}, disabled: Boolean(existing?.["disabled"] ?? false), reasoning_effort: effort === "default" ? null : effort, temperature: temp || null },
       key: el<HTMLInputElement>("fKey").value.trim() || undefined,
@@ -1324,7 +1338,7 @@ const SETTINGS_TABS = [
 ];
 function openSettings(tab = settingsLastTab): void {
   settingsLastTab = tab;
-  modalBox.classList.add("settings");
+  modalBox.classList.add("settings-modal");
   // Force a compact, fixed dialog size inline so no other rule can stretch it.
   modalBox.style.width = "700px";
   modalBox.style.maxWidth = "92vw";
@@ -1376,20 +1390,20 @@ function settingsModels(): [string, () => void] {
     `<div class="set-row"><div class="set-info"><div class="set-label">Reasoning effort for new workspaces</div><div class="set-desc">Used when a workspace has no effort saved. Current: <b>${escapeHtml(ctx?.effortVal ?? "default")}</b>.</div></div><div class="set-ctl"><select class="sel-inline" id="defEffort">${EFFORTS.map((e) => `<option${e === prefs.effortGlobal ? " selected" : ""}>${e}</option>`).join("")}</select></div></div>`;
   const wire = (): void => {
     const body = el<HTMLDivElement>("settingsBody");
-    body.querySelectorAll("[data-act]").forEach((b) => { (b as HTMLButtonElement).onclick = () => { settingsRequested = true; send(activeCtx as Ctx, { op: "set_active", id: (b as HTMLElement).dataset["act"] ?? "" }); }; });
-    body.querySelectorAll("[data-test]").forEach((b) => { (b as HTMLButtonElement).onclick = () => { const s = document.getElementById("setStatus"); if (s) { s.textContent = "testing…"; s.className = "status-line"; } send(activeCtx as Ctx, { op: "test_provider", id: (b as HTMLElement).dataset["test"] ?? "" }); }; });
+    body.querySelectorAll("[data-act]").forEach((b) => { (b as HTMLButtonElement).onclick = () => { settingsRequested = true; send(ensureAppCtx(), { op: "set_active", id: (b as HTMLElement).dataset["act"] ?? "" }); }; });
+    body.querySelectorAll("[data-test]").forEach((b) => { (b as HTMLButtonElement).onclick = () => { const s = document.getElementById("setStatus"); if (s) { s.textContent = "testing…"; s.className = "status-line"; } send(ensureAppCtx(), { op: "test_provider", id: (b as HTMLElement).dataset["test"] ?? "" }); }; });
     body.querySelectorAll("[data-edit]").forEach((b) => { (b as HTMLButtonElement).onclick = () => providerForm(providerAll.find((p) => String(p["id"]) === (b as HTMLElement).dataset["edit"])); });
     body.querySelectorAll("[data-del]").forEach((b) => {
       (b as HTMLButtonElement).onclick = () => {
         const id = (b as HTMLElement).dataset["del"] ?? "";
         const prov = providerAll.find((p) => String(p["id"]) === id);
         showModal(`<h3>Delete provider</h3><p>Delete <b>${escapeHtml(String(prov?.["name"] ?? id))}</b>? Its stored key will be removed too.</p><div class="modal-actions"><button class="btn" id="pdCancel">Cancel</button><button class="btn danger" id="pdOk">Delete</button></div>`);
-        el<HTMLButtonElement>("pdOk").onclick = () => { settingsRequested = true; send(activeCtx as Ctx, { op: "delete_provider", id }); };
+        el<HTMLButtonElement>("pdOk").onclick = () => { settingsRequested = true; send(ensureAppCtx(), { op: "delete_provider", id }); };
         el<HTMLButtonElement>("pdCancel").onclick = () => openSettings("models");
       };
     });
     el<HTMLButtonElement>("mAdd").onclick = () => providerForm();
-    el<HTMLButtonElement>("mMigrate").onclick = () => send(activeCtx as Ctx, { op: "migrate_keys" });
+    el<HTMLButtonElement>("mMigrate").onclick = () => send(ensureAppCtx(), { op: "migrate_keys" });
     el<HTMLSelectElement>("defEffort").onchange = () => {
       prefs.effortGlobal = el<HTMLSelectElement>("defEffort").value; savePrefs();
       const ctx2 = activeCtx;
@@ -1463,7 +1477,12 @@ el<HTMLButtonElement>("newTab").onclick = () => newSessionTab();
 el<HTMLButtonElement>("landingNew").onclick = () => newSessionTab();
 el<HTMLButtonElement>("btnOpenFolder").onclick = () => openFolder();
 el<HTMLButtonElement>("editCancel").onclick = () => { if (activeCtx) cancelEdit(activeCtx); };
-el<HTMLButtonElement>("btnSettings").onclick = () => { if (!activeCtx) return; settingsRequested = true; settingsLastTab = settingsLastTab || "models"; if (!send(activeCtx, { op: "list_providers" })) settingsRequested = false; };
+el<HTMLButtonElement>("btnSettings").onclick = () => {
+  dlog("boot", "CLICK settings");
+  settingsRequested = true;
+  settingsLastTab = settingsLastTab || "models";
+  if (!send(ensureAppCtx(), { op: "list_providers" })) settingsRequested = false;
+};
 
 sendstop.onclick = () => { if (!activeCtx) return; if (activeCtx.busy) send(activeCtx, { op: "stop" }); else submit(activeCtx, entry.value); };
 entry.addEventListener("input", () => { autogrow(); if (activeCtx) activeCtx.entryDraft = entry.value; updateSendState(); });
@@ -1480,7 +1499,7 @@ wireMenu(permsBtn, permsMenu);
 providerBtn.onclick = (e) => {
   e.stopPropagation();
   if (!activeCtx) return;
-  if (!providerOptions.length) { settingsRequested = true; settingsLastTab = "models"; if (!send(activeCtx, { op: "list_providers" })) settingsRequested = false; else setActivity("no providers yet - opening Settings…"); return; }
+  if (!providerOptions.length) { settingsRequested = true; settingsLastTab = "models"; if (!send(ensureAppCtx(), { op: "list_providers" })) settingsRequested = false; else setActivity("no providers yet - opening Settings…"); return; }
   const was = providerMenu.classList.contains("hidden"); closeAllMenus(); if (was) providerMenu.classList.remove("hidden");
 };
 

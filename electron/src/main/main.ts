@@ -199,16 +199,45 @@ function createWindow(port: number, projectRoot: string): void {
   win.setMenu(null);
   blockDevtoolsShortcuts(win);
   const target = path.join(__dirname, "..", "renderer", "index.html");
-  log("main", `loading renderer: ${target} with query port=${port} projectRoot=${projectRoot}`);
+  const stamp = Date.now();
+  const bootFile = writeBootHtml(target, stamp);
+  log("main", `loading renderer: ${bootFile} with query port=${port} projectRoot=${projectRoot}`);
   win.webContents.on("did-fail-load", (_e, code, desc) => log("main", `renderer did-fail-load code=${code} desc=${desc}`));
   win.webContents.on("did-finish-load", () => {
     log("main", `renderer finished load, sending sidecar-config port=${port}`);
     win?.webContents.send("sidecar-config", { port, projectRoot });
   });
-  win.loadFile(target, { query: { port: String(port), projectRoot, _v: String(Date.now()) } });
+  win.loadFile(bootFile, { query: { port: String(port), projectRoot, _v: String(stamp) } });
   win.on("closed", () => {
     win = null;
   });
+}
+
+/* Read index.html, version-bust the local css/js so Chromium always fetches the
+   freshly built files (file:// sub-resources otherwise stick in the disk cache
+   across relaunches), write a uniquely-named boot copy, and clean old ones. */
+function writeBootHtml(indexPath: string, stamp: number): string {
+  try {
+    const dir = path.dirname(indexPath);
+    let html = fs.readFileSync(indexPath, "utf-8");
+    html = html.replace(/(["'])(\.\/styles\.css)(\?[^"']*)?(\1)/g, `$1$2?v=${stamp}$4`);
+    html = html.replace(/(["'])(\.\/renderer\.js)(\?[^"']*)?(\1)/g, `$1$2?v=${stamp}$4`);
+    const bootFile = path.join(dir, `.boot-${stamp}.html`);
+    fs.writeFileSync(bootFile, html);
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (/^\.boot-\d+\.html$/.test(f) && f !== path.basename(bootFile)) {
+          fs.unlinkSync(path.join(dir, f));
+        }
+      }
+    } catch {
+      /* cleanup best-effort */
+    }
+    return bootFile;
+  } catch (err) {
+    log("main", `writeBootHtml fallback to index.html: ${String(err)}`);
+    return indexPath;
+  }
 }
 
 app.whenReady().then(async () => {
