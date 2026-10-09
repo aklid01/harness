@@ -30,6 +30,70 @@ TRIMMED = "[output trimmed:"  # marker, so stripping twice is a no-op
 SUMMARY = "<summary>"  # marks the handoff note compaction leaves behind
 SPILLS = []  # temp files belonging to the current turn
 
+OMITTED = "[left out of this request to fit the model's context window]"
+
+# Oldest-to-newest: shrink tool output, then whole exchanges, then give up on
+# the middle. Only ever applied to a copy, never to the stored transcript.
+TAIL = 8
+
+
+def _droppable(message):
+    """Can this message go without orphaning the tool result that follows it?"""
+    return message.get("role") != "tool" and not message.get("tool_calls")
+
+
+def prepare(messages, window=None, tail=TAIL):
+    """Assemble one request's messages without touching the stored history.
+
+    Returns (request_messages, note). Smaller models do not get the whole
+    transcript: the locked prefix and the live tail always go, older tool
+    results shrink to a stub and older exchanges are left out entirely. The
+    caller keeps its own copy, so what is stored stays exactly as it was - the
+    note is what gets shown to the user instead of pretending it all fit.
+    """
+    from . import config
+
+    limit = (int(window) if int(window or 0) > 0 else config.CONTEXT_WINDOW) * config.COMPACT_AT
+    if estimate(messages) <= limit:
+        return list(messages), ""
+
+    frozen = locked(messages)
+    protected = set(range(max(frozen, len(messages) - tail), len(messages)))
+    request, omitted, stubbed = [], 0, 0
+    for index, message in enumerate(messages):
+        if index < frozen or index == 0 or index in protected:
+            request.append(message)
+            continue
+        if message.get("role") == "tool":
+            stub = dict(message)
+            stub["content"] = OMITTED
+            request.append(stub)
+            stubbed += 1
+        elif _droppable(message):
+            omitted += 1
+        else:
+            request.append(message)
+
+    # Still too big: leave out whole exchanges from the middle, oldest first.
+    # Never the system prompt, the compaction handoff, or the live tail.
+    index = max(frozen, 1)
+    floor = max(frozen, 1)
+    while estimate(request) > limit and index < len(request):
+        if index in protected or not _droppable(request[index]):
+            index += 1
+            continue
+        del request[index]
+        omitted += 1
+        index = floor
+
+    if not (omitted or stubbed):
+        return request, ""
+    note = (f"trimmed the request to fit this model's context window: "
+            f"{omitted} older message(s) left out, {stubbed} tool result(s) stubbed. "
+            "The stored history is unchanged.")
+    return request, note
+
+
 
 # ------------------------------------------------------------------- 1. cap
 

@@ -172,8 +172,11 @@ class SettingsDialog(QDialog):
         self.refresh()
 
     def _store(self, values, provider_id):
+        existing = providers.get_provider(provider_id) or {}
+        # Keep the model inside its provider, whatever that provider's id is.
         providers.save_provider({
             "id": provider_id,
+            "provider_id": existing.get("provider_id") or provider_id,
             "name": values["name"] or provider_id,
             "base_url": values["base_url"],
             "model": values["model"],

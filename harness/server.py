@@ -195,17 +195,17 @@ class EngineService:
                                          "id": session_mod.CURRENT})
             return True
 
-    def resubmit(self, count, text, mode="build"):
+    def resubmit(self, count, text, mode="build", restore_files=True):
         with self._lock:
             if self.running:
                 self._send({"event": events.NOTE, "payload": {"text": "already running - press Stop first"}})
                 return False
             self.running = True
         self.cancel.clear()
-        threading.Thread(target=self._resend, args=(count, text, mode), daemon=True).start()
+        threading.Thread(target=self._resend, args=(count, text, mode, restore_files), daemon=True).start()
         return True
 
-    def _resend(self, count, text, mode):
+    def _resend(self, count, text, mode, restore_files=True):
         try:
             from . import session as session_mod
 
@@ -214,7 +214,8 @@ class EngineService:
                 count = max(0, min(int(count), len(self.runner.messages)))
             except (TypeError, ValueError):
                 count = len(self.runner.messages)
-            checkpoints.restore_since(session_mod.CURRENT, count)
+            if restore_files:
+                checkpoints.restore_since(session_mod.CURRENT, count)
             session_mod.rewind_to(count)
             self.runner.messages = self.runner.messages[:count]
             events.emit(events.SESSION, {"label": "rewound", "messages": self.runner.messages,
@@ -321,6 +322,10 @@ def handle_op(service, obj):
     if op == "resend":
         ok = service.resubmit(obj.get("count", 0), obj.get("text", ""), obj.get("mode", "build"))
         return {"reply": "resend", "req_id": req_id, "ok": ok}
+    if op == "retry":
+        ok = service.resubmit(obj.get("count", 0), obj.get("text", ""),
+                              obj.get("mode", "build"), restore_files=False)
+        return {"reply": "retry", "req_id": req_id, "ok": ok}
     if op == "git_status":
         return {"reply": op, "req_id": req_id, "ok": True,
                 "data": git_status(paths_mod.project_root())}
@@ -353,7 +358,10 @@ def handle_op(service, obj):
         statuses = {e["id"]: providers_mod.provider_status(e["id"]) for e in entries}
         return {"reply": op, "req_id": req_id, "ok": True,
                 "data": {"providers": entries, "active_id": providers_mod.get_active_id(),
-                         "statuses": statuses}}
+                         "statuses": statuses,
+                         "groups": providers_mod.list_groups(),
+                         "active_provider_id": providers_mod.get_active_provider_id(),
+                         "active_model_id": providers_mod.get_active_id()}}
     if op == "set_active":
         return {"reply": op, "req_id": req_id, "ok": providers_mod.set_active(obj.get("id"))}
     if op == "set_effort":
@@ -364,13 +372,16 @@ def handle_op(service, obj):
         return {"reply": op, "req_id": req_id, "ok": True}
     if op == "save_provider":
         entry = obj.get("entry", {})
-        providers_mod.save_provider(entry)
+        stored = providers_mod.save_provider(entry)
         if obj.get("key"):
-            providers_mod.set_key(entry["id"], obj["key"])
-        return {"reply": op, "req_id": req_id, "ok": True}
+            providers_mod.set_key(stored["id"], obj["key"])
+        if not providers_mod.get_active_id():
+            providers_mod.set_active(stored["id"])
+        return {"reply": op, "req_id": req_id, "ok": True, "data": stored}
     if op == "delete_provider":
-        providers_mod.delete_provider(obj.get("id", ""))
-        return {"reply": op, "req_id": req_id, "ok": True}
+        target = obj.get("id", "")
+        ok = providers_mod.delete_group(target) if obj.get("scope") == "provider" else providers_mod.delete_provider(target)
+        return {"reply": op, "req_id": req_id, "ok": True, "data": bool(ok)}
     if op == "test_provider":
         ok, detail = providers_mod.test_provider(obj.get("id", ""))
         return {"reply": op, "req_id": req_id, "ok": ok, "data": detail}
@@ -561,17 +572,17 @@ class Session:
         from .agent import Runner
         return Runner(stream=True, cancel_event=self.cancel, mode=mode)
 
-    def resubmit(self, count, text, mode):
+    def resubmit(self, count, text, mode, restore_files=True):
         with self.lock:
             if self.running:
                 self.on_event(events.NOTE, {"text": "already running - press Stop first"})
                 return False
             self.running = True
         self.cancel.clear()
-        self._thread(self._resend, count, text, mode)
+        self._thread(self._resend, count, text, mode, restore_files)
         return True
 
-    def _resend(self, count, text, mode):
+    def _resend(self, count, text, mode, restore_files=True):
         try:
             with self.bound():
                 self.ensure_runner(mode)
@@ -579,7 +590,8 @@ class Session:
                     count = max(0, min(int(count), len(self.runner.messages)))
                 except (TypeError, ValueError):
                     count = len(self.runner.messages)
-                checkpoints.restore_since(self.session_id, count)
+                if restore_files:
+                    checkpoints.restore_since(self.session_id, count)
                 session_mod.rewind_to(count)
                 self.written = count
                 self.runner.messages = self.runner.messages[:count]
@@ -772,6 +784,11 @@ class Harness:
         if op == "set_active":
             ok = providers_mod.set_active(obj.get("id"))
             if ok:
+                if s.running:
+                    # Abandon the generation in flight instead of letting the
+                    # rest of the turn keep writing on a model the user left.
+                    s.stop()
+                    s.on_event(events.NOTE, {"text": "model switched - the request in flight was stopped"})
                 s.active_provider = obj.get("id")
             return R({"reply": op, "ok": bool(ok)})
         if op == "set_effort":
@@ -779,22 +796,41 @@ class Harness:
             providers_mod.set_effort(pid, obj.get("effort") or None)
             s.effort = obj.get("effort") or "default"
             return R({"reply": op, "ok": True})
+        if op == "retry":
+            ok = s.resubmit(obj.get("count", 0), obj.get("text", ""), obj.get("mode", s.mode),
+                            restore_files=False)
+            return R({"reply": "retry", "ok": bool(ok)})
         return R({"reply": op, "ok": False, "error": f"unknown op: {op}"})
 
     def _provider_op(self, op, obj):
+        from . import providers as providers_mod
+
         if op == "list_providers":
-            entries = providers_mod.list_providers()
-            statuses = {e["id"]: providers_mod.provider_status(e["id"]) for e in entries}
-            return {"reply": op, "ok": True, "data": {"providers": entries, "active_id": providers_mod.get_active_id(), "statuses": statuses}}
+            models = providers_mod.list_models()
+            statuses = {m["id"]: providers_mod.provider_status(m["id"]) for m in models}
+            return {"reply": op, "ok": True, "data": {
+                "groups": providers_mod.list_groups(),
+                "providers": models,
+                "active_provider_id": providers_mod.get_active_provider_id(),
+                "active_model_id": providers_mod.get_active_id(),
+                "statuses": statuses,
+                "migration": providers_mod.migration_report(),
+            }}
         if op == "save_provider":
             entry = obj.get("entry", {})
-            providers_mod.save_provider(entry)
+            stored = providers_mod.save_provider(entry)
             if obj.get("key"):
-                providers_mod.set_key(entry["id"], obj["key"])
-            return {"reply": op, "ok": True}
+                providers_mod.set_key(stored["id"], obj["key"])
+            if not providers_mod.get_active_id():
+                providers_mod.set_active(stored["id"])
+            return {"reply": op, "ok": True, "data": stored}
         if op == "delete_provider":
-            providers_mod.delete_provider(obj.get("id", ""))
-            return {"reply": op, "ok": True}
+            target = obj.get("id", "")
+            if obj.get("scope") == "provider":
+                ok = providers_mod.delete_group(target)
+            else:
+                ok = providers_mod.delete_provider(target)
+            return {"reply": op, "ok": True, "data": bool(ok)}
         if op == "test_provider":
             ok, detail = providers_mod.test_provider(obj.get("id", ""))
             return {"reply": op, "ok": ok, "data": detail}

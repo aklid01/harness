@@ -74,10 +74,11 @@ def task(description: str) -> str:
     """Run a fresh agent on one question and return only its final answer."""
     # Imported inside the function, not at the top: llm imports tools, and
     # tools imports us, so importing them up there would close the circle.
-    from .history import fit
+    from .history import prepare
     from .llm import call_llm
     from .tools import execute
     from . import events
+    from . import providers
 
     # --- rule 1 ---
     # Two messages. Not a copy of the caller's transcript, not a trimmed
@@ -96,11 +97,15 @@ def task(description: str) -> str:
     # tools, append, repeat. A subagent is not a new kind of thing. It is the
     # loop you already have, pointed at a different list of messages.
     for _ in range(MAX_TURNS):
-        fit(messages)  # its context can overflow too, and nobody compacts it
+        # Its context can overflow too, and nobody compacts it. Prepared as a
+        # copy: the throwaway list is the only thing that ever gets trimmed.
+        request, trimmed = prepare(messages, providers.active_context_window())
+        if trimmed:
+            events.emit(events.NOTE, {"text": trimmed})
 
         events.emit(events.STATUS, {"active": "subagent exploring"})
         try:
-            message, usage = call_llm(messages, tools=toolset())
+            message, usage = call_llm(request, tools=toolset())
         except Exception as failure:  # noqa: BLE001
             events.emit(events.STATUS, {"active": None})
             events.emit(events.ERROR, {"text": f"subagent failed - {type(failure).__name__}: {failure}", "nested": True})

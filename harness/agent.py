@@ -4,8 +4,10 @@ from . import commands
 from . import compact
 from . import events
 from . import history
+from . import providers
 from . import session
 from .context import reminder
+from .errors import ModelError
 from .llm import call_llm, system_prompt
 from .todos import active_form
 from .tools import execute
@@ -24,7 +26,6 @@ BUILD_NOTICE = (
     "<system-reminder>\n"
     "Your operational mode has changed to BUILD.\n"
     "You are no longer read-only. You may edit files, run commands, and use tools.\n"
-    "If asked which mode you are in, say build mode.\n"
     "</system-reminder>"
 )
 
@@ -38,6 +39,8 @@ class Runner:
         self.cancel_event = cancel_event
         self.mode = mode
         self._announced_mode = None
+        self._turn_index = 0
+        self._turn_text = ""
         self.messages = [{"role": "system", "content": system_prompt(mode)}]
         if resume:
             saved = session.all_sessions()
@@ -53,6 +56,8 @@ class Runner:
             return
 
         self.messages.append({"role": "user", "content": user_text})
+        # Saved before the call, so a failed request never loses what was asked.
+        session.save(self.messages)
         events.emit(events.MESSAGE, {"role": "user", "content": user_text})
         self._turn()
 
@@ -73,8 +78,38 @@ class Runner:
     def cancelled(self):
         return self.cancel_event is not None and self.cancel_event.is_set()
 
+    def _model_label(self):
+        caps = providers.active_model_capabilities()
+        return caps.get("name") or caps.get("model")
+
+    def _retry_info(self):
+        """Where to resume from if the user retries this request later."""
+        return {"count": self._turn_index, "text": self._turn_text,
+                "model": self._model_label()}
+
+    def _fail(self, failure):
+        """Report a failed request without losing the message that caused it."""
+        error = failure if isinstance(failure, ModelError) else ModelError(
+            "unknown", f"{type(failure).__name__}: {failure}", model=self._model_label())
+        if error.kind == "cancelled":
+            events.emit(events.NOTE, {"text": "stopped"})
+            return
+        events.emit(events.STATUS, {"active": None})
+        payload = error.payload()
+        payload["text"] = error.text()
+        if error.kind != "stream_interrupted":
+            payload["retry"] = self._retry_info()
+        events.emit(events.ERROR, payload)
+
     def _turn(self):
         self._announce_mode()
+        # The user message that opened this turn, so a retry resumes from it
+        # instead of appending a second copy.
+        self._turn_index = len(self.messages) - 1
+        for message in reversed(self.messages[:self._turn_index + 1]):
+            if message.get("role") == "user" and not str(message.get("content") or "").startswith("<"):
+                self._turn_text = str(message.get("content") or "")
+                break
         while True:
             if self.cancelled():
                 events.emit(events.NOTE, {"text": "stopped"})
@@ -88,21 +123,36 @@ class Runner:
                 )
             events.emit(events.INJECTION, {"content": injection["content"]})
 
-            if history.fit(self.messages):
-                events.emit(events.NOTE, {"text": "dropped old tool output to make this request fit"})
+            # Assemble the request separately from the stored history, so a
+            # model with a smaller context window gets a trimmed copy and the
+            # transcript on disk stays exactly as it was.
+            request, trimmed = history.prepare(
+                self.messages + [injection], providers.active_context_window())
+            if trimmed:
+                events.emit(events.NOTE, {"text": trimmed})
 
             events.emit(events.STATUS, {"active": active_form()})
             try:
                 on_delta = None
                 if self.stream:
                     def on_delta(text):
+                        if self.cancelled():
+                            return
                         events.emit(events.MESSAGE_DELTA, {"text": text})
-                message, usage = call_llm(self.messages + [injection], on_delta=on_delta)
+                message, usage = call_llm(request, on_delta=on_delta,
+                                          cancel=self.cancel_event)
             except Exception as failure:  # noqa: BLE001 - report, don't kill the session
-                events.emit(events.STATUS, {"active": None})
-                events.emit(events.ERROR, {"text": f"{type(failure).__name__}: {failure}"})
+                if self.cancelled():
+                    events.emit(events.NOTE, {"text": "stopped"})
+                    return
+                self._fail(failure)
                 return
             events.emit(events.STATUS, {"active": None})
+            # A generation the user has moved on from (stop, model switch) is
+            # abandoned here: its answer is not appended and its turn is over.
+            if self.cancelled():
+                events.emit(events.NOTE, {"text": "stopped"})
+                return
 
             self.messages.append(message.model_dump(exclude_none=True))
             session.save(self.messages)

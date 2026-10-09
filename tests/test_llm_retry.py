@@ -1,0 +1,264 @@
+"""The model call: retries transient failures, never retries a broken stream,
+and never sends a smaller model more than it can hold."""
+
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
+os.environ.setdefault("API_KEY", "test-key")
+os.environ.setdefault("MODEL", "test-model")
+
+from harness import errors, history, llm, providers  # noqa: E402
+
+
+class FakeKeyring:
+    def __init__(self):
+        self.store = {}
+
+    def set_password(self, service, user, secret):
+        self.store[(service, user)] = secret
+
+    def get_password(self, service, user):
+        return self.store.get((service, user))
+
+    def delete_password(self, service, user):
+        self.store.pop((service, user), None)
+
+
+def canned(content="ok", usage=None):
+    message = SimpleNamespace(content=content, tool_calls=[])
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)],
+                           usage=usage or SimpleNamespace(
+                               prompt_tokens=1, completion_tokens=1,
+                               completion_tokens_details=SimpleNamespace(reasoning_tokens=None),
+                               prompt_tokens_details=SimpleNamespace(cached_tokens=None)))
+
+
+class FakeCompletions:
+    def __init__(self, script=None):
+        self.calls = []
+        self.script = list(script or [])
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if not self.script:
+            return canned()
+        step = self.script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+
+class LlmCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        mock.patch.object(providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json").start()
+        mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def use(self, **extra):
+        providers.save_provider({"id": "p", "name": "P", "base_url": "https://x/v1",
+                                 "model": "m", **extra})
+        providers.set_active("p")
+        return self
+
+    def client(self, script=None):
+        self.completions = FakeCompletions(script)
+        client = SimpleNamespace(chat=SimpleNamespace(completions=self.completions))
+        mock.patch.object(llm, "get_client", return_value=client).start()
+        return client
+
+    def test_transient_failure_is_retried(self):
+        self.use()
+        self.client([RuntimeError("connection reset by peer"), canned("recovered")])
+        message, _ = llm.call_llm([{"role": "user", "content": "hi"}])
+        self.assertEqual(message.content, "recovered")
+        self.assertEqual(len(self.completions.calls), 2)
+
+    def test_permanent_failure_is_not_retried(self):
+        self.use()
+        failure = errors.classify(_status(401, "Incorrect API key provided"))
+        self.client([failure, canned()])
+        with self.assertRaises(errors.ModelError) as raised:
+            llm.call_llm([{"role": "user", "content": "hi"}])
+        self.assertEqual(len(self.completions.calls), 1)
+        self.assertEqual(raised.exception.kind, "auth")
+
+    def test_tools_are_omitted_for_a_model_without_them(self):
+        self.use(supports_tools=False)
+        self.client()
+        llm.call_llm([{"role": "user", "content": "hi"}])
+        self.assertNotIn("tools", self.completions.calls[0])
+
+    def test_stream_break_after_text_is_not_retried(self):
+        self.use()
+        chunks = 0
+
+        class Broken:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                nonlocal chunks
+                chunks += 1
+                if chunks == 1:
+                    return SimpleNamespace(usage=None, choices=[SimpleNamespace(
+                        delta=SimpleNamespace(content="partial", tool_calls=None))])
+                raise ConnectionResetError("connection reset by peer")
+
+            def close(self):
+                pass
+
+        completions = FakeCompletions([Broken(), canned("should not happen")])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        mock.patch.object(llm, "get_client", return_value=client).start()
+
+        seen = []
+        with self.assertRaises(errors.ModelError) as raised:
+            llm.call_llm([{"role": "user", "content": "hi"}], on_delta=seen.append)
+        self.assertEqual(seen, ["partial"])
+        self.assertEqual(raised.exception.kind, "stream_interrupted")
+        self.assertFalse(raised.exception.transient)
+        self.assertEqual(len(completions.calls), 1, "no second request is sent")
+
+    def test_stream_failure_before_text_is_retried(self):
+        self.use()
+        state = {"n": 0}
+
+        class Flaky:
+            def close(self):
+                pass
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                state["n"] += 1
+                if state["n"] == 1:
+                    raise ConnectionResetError("connection reset by peer")
+                raise StopIteration
+
+        good = [
+            SimpleNamespace(usage=None, choices=[SimpleNamespace(
+                delta=SimpleNamespace(content="fine", tool_calls=None))]),
+            SimpleNamespace(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=2,
+                                                  completion_tokens_details=None,
+                                                  prompt_tokens_details=None),
+                            choices=[]),
+        ]
+
+        class Steady:
+            def __init__(self):
+                self.items = list(good)
+
+            def close(self):
+                pass
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if not self.items:
+                    raise StopIteration
+                return self.items.pop(0)
+
+        completions = FakeCompletions([Flaky(), Steady()])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        mock.patch.object(llm, "get_client", return_value=client).start()
+
+        seen = []
+        message, _ = llm.call_llm([{"role": "user", "content": "hi"}], on_delta=seen.append)
+        self.assertEqual(seen, ["fine"])
+        self.assertEqual(message.content, "fine")
+        self.assertEqual(len(completions.calls), 2)
+
+    def test_retry_events_reach_the_event_bus(self):
+        from harness import events
+        self.use()
+        seen = []
+        events.subscribe(lambda kind, payload: seen.append((kind, payload)))
+        self.addCleanup(events.reset)
+        self.client([RuntimeError("connection reset by peer"), canned("recovered")])
+        llm.call_llm([{"role": "user", "content": "hi"}])
+        retries = [payload for kind, payload in seen if kind == events.RETRY]
+        self.assertEqual(len(retries), 1)
+        self.assertTrue(retries[0]["kind"])
+        self.assertEqual(retries[0]["model"], "P")
+        self.assertIn("wait", retries[0])
+
+
+def _status(status, message):
+    return errors.classify(_StatusError(status, message))
+
+
+class _StatusError(Exception):
+    def __init__(self, status, message=""):
+        super().__init__(message)
+        self.status_code = status
+        self.response = SimpleNamespace(status_code=status, headers={},
+                                        request=None, url="https://x/v1")
+        self.body = {"error": {"message": message}}
+
+
+class ContextCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        mock.patch.object(providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json").start()
+        mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def transcript(self, turns=6):
+        messages = [{"role": "system", "content": "system prompt"}]
+        for index in range(turns):
+            messages.append({"role": "user", "content": f"question {index} " + "x" * 400})
+            messages.append({"role": "assistant", "content": f"answer {index} " + "y" * 400})
+        return messages
+
+    def test_stored_history_is_untouched_when_it_does_not_fit(self):
+        messages = self.transcript()
+        before = json.dumps(messages)
+        request, note = history.prepare(messages, window=500)
+        self.assertTrue(note)
+        self.assertLess(history.estimate(request), history.estimate(messages))
+        self.assertEqual(json.dumps(messages), before, "the caller's copy must not change")
+
+    def test_system_and_live_tail_always_survive(self):
+        messages = self.transcript()
+        request, _ = history.prepare(messages, window=400)
+        self.assertEqual(request[0], messages[0])
+        self.assertEqual(request[-1], messages[-1])
+        self.assertEqual(request[-2], messages[-2])
+
+    def test_a_roomy_window_keeps_everything(self):
+        messages = self.transcript()
+        request, note = history.prepare(messages, window=1_000_000)
+        self.assertEqual(request, messages)
+        self.assertEqual(note, "")
+
+    def test_a_smaller_window_trims_more(self):
+        messages = self.transcript(12)
+        big, _ = history.prepare(messages, window=4000)
+        small, _ = history.prepare(messages, window=800)
+        self.assertLess(history.estimate(small), history.estimate(big))
+
+    def test_locked_prefix_survives(self):
+        messages = [{"role": "system", "content": "system"}]
+        messages.append({"role": "user", "content": "<summary>handoff</summary>"})
+        for index in range(8):
+            messages.append({"role": "user", "content": f"q{index} " + "z" * 300})
+            messages.append({"role": "tool", "tool_call_id": f"c{index}", "content": "r" * 300})
+        request, note = history.prepare(messages, window=600)
+        self.assertEqual(request[1], messages[1])
+        self.assertTrue(note)
+        self.assertLess(len(request), len(messages))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

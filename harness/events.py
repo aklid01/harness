@@ -37,6 +37,7 @@ COMPACTED = "compacted"
 SESSION = "session"
 SUBAGENT = "subagent"
 ERROR = "error"
+RETRY = "retry"
 
 APPROVAL = "approval"
 PICK = "pick"
