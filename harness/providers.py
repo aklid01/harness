@@ -20,8 +20,10 @@ per provider id. Callers only ever see masked forms.
 import contextlib
 import contextvars
 import copy
+import functools
 import json
 import secrets
+import threading
 from pathlib import Path
 
 from . import paths
@@ -353,6 +355,21 @@ def _save(data):
     return _write(data)
 
 
+# Every tab's settings are written from one server process, and the WebSocket
+# handler is threaded, so read-modify-write runs stay serialised. Without this,
+# two saves a moment apart would let the second discard the first.
+_WRITE_LOCK = threading.RLock()
+
+
+def _transaction(function):
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        with _WRITE_LOCK:
+            return function(*args, **kwargs)
+
+    return wrapper
+
+
 # ------------------------------------------------------------------ lookups
 
 
@@ -435,6 +452,7 @@ def active_pair():
 # ------------------------------------------------------------------- writes
 
 
+@_transaction
 def save_group(group):
     """Create or replace a provider. Never put secrets here."""
     data = _cached()
@@ -460,6 +478,7 @@ def save_group(group):
     return target
 
 
+@_transaction
 def save_model(model, group_id=None):
     """Create or update one model, leaving its siblings and provider alone."""
     data = _cached()
@@ -516,6 +535,7 @@ def save_model(model, group_id=None):
     return target
 
 
+@_transaction
 def save_provider(entry):
     """Compat entry point: a flat payload carrying provider and model fields."""
     entry = dict(entry or {})
@@ -531,6 +551,7 @@ def _forget_key(group_id):
         pass
 
 
+@_transaction
 def delete_group(group_id):
     data = _cached()
     group = _find_group(data, group_id)
@@ -546,6 +567,7 @@ def delete_group(group_id):
     return _find_group(body, group_id) is None
 
 
+@_transaction
 def delete_model(model_id):
     """Drop one model. The provider lives on while any other model does."""
     data = _cached()
@@ -567,6 +589,7 @@ def delete_model(model_id):
     return _find_model(body, model_id)[1] is None
 
 
+@_transaction
 def delete_provider(target_id):
     """Accept either kind of id: a model, or a whole provider."""
     data = _cached()
@@ -575,6 +598,7 @@ def delete_provider(target_id):
     return delete_group(target_id)
 
 
+@_transaction
 def set_active(target_id):
     """Select a model by its own id, or a provider by its first live model."""
     data = _cached()
@@ -600,6 +624,7 @@ def get_active_provider_id():
     return group["id"] if group else None
 
 
+@_transaction
 def set_effort(target_id, effort):
     """Set reasoning effort on one model; a provider id targets its live model."""
     data = _cached()
@@ -864,6 +889,7 @@ def _import_target(base_url, model=""):
     return _find_group(_cached(), group_id)
 
 
+@_transaction
 def migrate_from_settings():
     """One-time import of settings.json/.env keys into keyring. Returns count."""
     try:

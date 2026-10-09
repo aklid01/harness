@@ -264,6 +264,27 @@ class ModelCase(unittest.TestCase):
         self.assertEqual(set(remaining), {"glm-5.3-flash", "third"})
         self.assertEqual(remaining["glm-5.3-flash"]["reasoning_effort"], "high")
 
+    def test_concurrent_saves_do_not_lose_each_other(self):
+        import threading
+
+        providers.save_group(self.group())
+        errors = []
+
+        def add(index):
+            try:
+                providers.save_model({"id": f"mdl-{index}", "name": f"m{index}",
+                                      "model": f"model-{index}"}, "grp-1")
+            except Exception as failure:  # pragma: no cover - reported below
+                errors.append(failure)
+
+        threads = [threading.Thread(target=add, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(providers.list_models("grp-1")), 8)
+
     def test_extra_params_are_whitelisted(self):
         providers.save_group(self.group())
         providers.save_model({"id": "mdl-a", "model": "m", "extra_params":
