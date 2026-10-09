@@ -480,7 +480,11 @@ def save_group(group):
 
 @_transaction
 def save_model(model, group_id=None):
-    """Create or update one model, leaving its siblings and provider alone."""
+    """Create or update one model, leaving its siblings and provider alone.
+
+    A payload that names a different provider moves the model to that provider;
+    anything else about the provider is left untouched unless it was sent.
+    """
     data = _cached()
     model = dict(model or {})
     model_id = _text(model.get("id"))
@@ -491,6 +495,12 @@ def save_model(model, group_id=None):
     group, existing = _find_model(data, model_id)
     if existing is not None:
         target_group, target = group, existing
+        wanted = _text(group_id) or _text(model.get("provider_id")) or _text(model.get("group_id"))
+        destination = _find_group(data, wanted) if wanted else None
+        if destination is not None and destination is not group:
+            target_group["models"] = [m for m in target_group["models"] if m["id"] != model_id]
+            destination["models"].append(existing)
+            target_group = destination
     else:
         explicit = _text(group_id) or _text(model.get("provider_id")) or _text(model.get("group_id"))
         if not explicit:

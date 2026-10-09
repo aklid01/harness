@@ -285,6 +285,19 @@ class ModelCase(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(len(providers.list_models("grp-1")), 8)
 
+    def test_a_model_can_be_moved_to_another_provider(self):
+        providers.save_group(self.group("grp-1", "NVIDIA", "https://nvidia.example/v1"))
+        providers.save_group(self.group("grp-2", "OpenRouter", "https://openrouter.ai/api/v1"))
+        self.model("mdl-a", "GLM 5.3 Flash", "glm-5.3-flash", gid="grp-1")
+
+        providers.save_model({"id": "mdl-a", "provider_id": "grp-2"}, "grp-2")
+
+        self.assertEqual([m["id"] for m in providers.list_models("grp-1")], [])
+        moved = providers.list_models("grp-2")[0]
+        self.assertEqual(moved["model"], "glm-5.3-flash")
+        self.assertEqual(moved["provider_id"], "grp-2")
+        self.assertEqual(moved["base_url"], "https://openrouter.ai/api/v1")
+
     def test_extra_params_are_whitelisted(self):
         providers.save_group(self.group())
         providers.save_model({"id": "mdl-a", "model": "m", "extra_params":
