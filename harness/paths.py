@@ -7,6 +7,7 @@ can pass an explicit project folder and user-data dir.
 
 import contextlib
 import contextvars
+import os
 import re
 from pathlib import Path
 
@@ -120,9 +121,17 @@ def migrate_providers() -> Path | None:
     return None
 
 
+def sessions_root() -> Path:
+    """Where transcripts live. Isolated for tests via HARNESS_SESSIONS_ROOT."""
+    override = os.environ.get("HARNESS_SESSIONS_ROOT")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".agents" / "sessions"
+
+
 def session_dir(root: Path | str | None = None) -> Path:
     base = Path(root).resolve() if root else project_root()
-    return Path.home() / ".agents" / "sessions" / slug_for(base)
+    return sessions_root() / slug_for(base)
 
 
 def titles_file(root: Path | str | None = None) -> Path:

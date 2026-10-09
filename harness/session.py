@@ -4,6 +4,7 @@ import contextlib
 import contextvars
 import json
 import re
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -160,18 +161,39 @@ def save(messages):
     _set_written(len(messages))
 
 
+_ID_LOCK = threading.Lock()
+
+
 def fresh_id():
-    """A unique 14-char timestamp id (YYYYMMDD-HHMMSS), bumping past collisions."""
+    """A unique 14-char timestamp id (YYYYMMDD-HHMMSS), reserved on disk.
+
+    The reservation happens under a process lock and creates the file, so two
+    tabs that start a session in the same second can no longer be handed the
+    same id. They used to be: each checked for a file that neither had created
+    yet, then both wrote into one session file and the first turn was
+    duplicated.
+    """
     base = datetime.now()
-    while True:
-        sid = base.strftime("%Y%m%d-%H%M%S")
-        if not path_for(sid).exists():
-            return sid
-        base += timedelta(seconds=1)
+    with _ID_LOCK:
+        while True:
+            sid = base.strftime("%Y%m%d-%H%M%S")
+            path = path_for(sid)
+            if not path.exists():
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.touch()
+                    return sid
+                except OSError:
+                    pass
+            base += timedelta(seconds=1)
 
 
 def blank(session_id):
-    """Materialise a session immediately so it shows up before the first turn."""
+    """Materialise a session immediately so it shows up before the first turn.
+
+    fresh_id already reserved the file; this covers callers that were handed
+    an id by some other means.
+    """
     _dir().mkdir(parents=True, exist_ok=True)
     path_for(session_id).touch()
 

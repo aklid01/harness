@@ -29,6 +29,7 @@ class EngineService:
         self._titling: set = set()
         self._seq = 0
         self.pending: dict = {}
+        self._submissions: dict = {}
         events.subscribe(self._forward)
         events.set_responder(self._respond)
 
@@ -301,7 +302,8 @@ def handle_op(service, obj):
         ok = service.reply(obj.get("id"), obj.get("allow") if op == "approval_reply" else obj.get("index"))
         return {"reply": op, "req_id": req_id, "ok": ok}
     if op == "submit":
-        ok = service.submit(obj.get("text", ""), obj.get("mode", "build"))
+        ok = service.submit(obj.get("text", ""), obj.get("mode", "build"),
+                            submission_id=obj.get("submission_id"))
         return {"reply": "submit", "req_id": req_id, "ok": ok}
     if op == "open":
         ok = service.open_session(obj.get("id", ""), obj.get("mode", "build"))
@@ -435,6 +437,7 @@ class Session:
         self.cancel = threading.Event()
         self.pending: dict = {}
         self._seq = 0
+        self._submissions: dict = {}
         self.mode = "build"
         self.effort = "default"
         self.active_provider: str | None = None
@@ -511,8 +514,22 @@ class Session:
     def stop(self):
         self.cancel.set()
 
-    def submit(self, text, mode):
+    def _seen_submission(self, submission_id):
+        """Exactly-once guard, keyed by submission id and never by text."""
+        if not submission_id:
+            return False
+        if submission_id in self._submissions:
+            return True
+        self._submissions[submission_id] = True
+        if len(self._submissions) > 32:
+            self._submissions.pop(next(iter(self._submissions)))
+        return False
+
+    def submit(self, text, mode, submission_id=None):
         with self.lock:
+            if self._seen_submission(submission_id):
+                self.on_event(events.NOTE, {"text": "that submission was already sent"})
+                return False
             if self.running:
                 self.on_event(events.NOTE, {"text": "already running - press Stop first"})
                 return False
@@ -521,19 +538,41 @@ class Session:
         self._thread(self._turn, text, mode)
         return True
 
-    def _turn(self, text, mode):
-        # A session is only materialised when the user actually sends a prompt,
-        # so opening/creating a tab never writes a session file on its own.
-        if not self.session_id and self.root is not None:
+    def _materialise(self):
+        """Create this tab's session once, and hand back the new id.
+
+        A brand-new tab has no session until the user actually sends a prompt,
+        so opening it never writes a session file. Creating it here, under the
+        session lock and through session.fresh_id (which reserves the file),
+        means a repeated or raced first prompt attaches to the same session
+        instead of starting a second one.
+        """
+        with self.lock:
+            if self.session_id:
+                return None
+            if self.root is None:
+                return None
             with paths_mod.rooted(self.root):
                 new_id = session_mod.fresh_id()
                 session_mod.blank(new_id)
             self.session_id = new_id
             self.written = 0
+            return new_id
+
+    def _turn(self, text, mode):
+        new_id = self._materialise()
         try:
             with self.bound():
+                if new_id:
+                    # Tell the frontend which session this tab now owns, so the
+                    # tab, the sidebar and the stored metadata all agree.
+                    self.on_event(events.SESSION, {"label": "new", "messages": [], "id": new_id})
                 self.ensure_runner(mode)
                 self.runner.handle_input(text)
+                # Keep the append cursor in step with what was just written.
+                # Losing it made the next turn re-save the whole prefix, which
+                # is how a transcript ended up holding its opening turn twice.
+                self.written = session_mod.written()
         except Exception as failure:  # noqa: BLE001 - report, don't kill the session
             self.on_event(events.ERROR, {"text": f"{type(failure).__name__}: {failure}"})
         finally:
@@ -599,6 +638,7 @@ class Session:
                 self.on_event(events.SESSION, {"label": "rewound", "messages": self.runner.messages, "id": self.session_id})
             with self.bound():
                 self.runner.handle_input(text)
+                self.written = session_mod.written()
         except Exception as failure:  # noqa: BLE001
             self.on_event(events.ERROR, {"text": f"{type(failure).__name__}: {failure}"})
         finally:
@@ -730,7 +770,8 @@ class Harness:
             s.open_chat(obj.get("id", ""), obj.get("mode", s.mode))
             return R({"reply": "open", "ok": True})
         if op == "submit":
-            return R({"reply": "submit", "ok": s.submit(obj.get("text", ""), obj.get("mode", s.mode))})
+            return R({"reply": "submit", "ok": s.submit(obj.get("text", ""), obj.get("mode", s.mode),
+                                                       submission_id=obj.get("submission_id"))})
         if op == "stop":
             s.stop()
             return R({"reply": "stop", "ok": True})

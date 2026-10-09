@@ -89,6 +89,14 @@ export interface SessionListItem {
   title: string;
 }
 
+/* A workspace's open tabs, persisted so a restart brings them back. */
+export interface TabRef {
+  session_id: string | null;
+  title: string;
+  mode: Mode;
+  dirty?: boolean;
+}
+
 export interface TodoItem {
   content: string;
   status: string;
@@ -99,10 +107,11 @@ export interface SessionOp {
   session: string;
   root?: string;
   req_id?: number;
+  submission_id?: string;
 }
 
 export type OpPayload =
-  | { op: "submit"; text: string; mode: Mode }
+  | { op: "submit"; text: string; mode: Mode; submission_id?: string }
   | { op: "open"; id: string; mode: Mode }
   | { op: "stop" }
   | { op: "rewind_to"; count: number }

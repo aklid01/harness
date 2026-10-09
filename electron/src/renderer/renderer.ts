@@ -1,4 +1,4 @@
-import type { ClientOp, ContextInfo, OpPayload, ProviderEntry, ProviderGroup, ProviderState, RetryInfo, RetryProgress, ServerEnvelope, SessionListItem, TodoItem } from "../shared/protocol";
+import type { ClientOp, ContextInfo, OpPayload, ProviderEntry, ProviderGroup, ProviderState, RetryInfo, RetryProgress, ServerEnvelope, SessionListItem, TabRef, TodoItem } from "../shared/protocol";
 import type { PreloadHarness, WorkspaceRef } from "../shared/preload-types";
 
 declare global {
@@ -44,12 +44,13 @@ interface Prefs {
   effortByWs: Record<string, string>;
   providerByWs: Record<string, string>;
   lastSessionByWs: Record<string, string>;
+  tabsByWs: Record<string, TabRef[]>;
 }
 const PREFS_KEY = "harness:prefs:v1";
 const DEFAULT_PREFS: Prefs = {
   theme: "neon", fontScale: "base", density: "comfortable", reduceMotion: false,
   confirmProtected: true, defaultMode: "build", effortGlobal: "default",
-  effortByWs: {}, providerByWs: {}, lastSessionByWs: {},
+  effortByWs: {}, providerByWs: {}, lastSessionByWs: {}, tabsByWs: {},
 };
 function loadPrefs(): Prefs {
   try {
@@ -58,7 +59,8 @@ function loadPrefs(): Prefs {
     const saved = JSON.parse(raw) as Partial<Prefs>;
     return {
       ...DEFAULT_PREFS, ...saved,
-      effortByWs: saved.effortByWs ?? {}, providerByWs: saved.providerByWs ?? {}, lastSessionByWs: saved.lastSessionByWs ?? {},
+      effortByWs: saved.effortByWs ?? {}, providerByWs: saved.providerByWs ?? {},
+      lastSessionByWs: saved.lastSessionByWs ?? {}, tabsByWs: saved.tabsByWs ?? {},
     };
   } catch {
     return { ...DEFAULT_PREFS };
@@ -388,6 +390,13 @@ function updateSendState(): void {
   sendstop.disabled = activeCtx.busy ? false : entry.value.trim().length === 0;
   sendstop.title = activeCtx.busy ? "Stop" : "Send";
 }
+/* One submission id per send, so a replayed or duplicated submit is dropped
+   by the backend instead of turning into a second message or turn. */
+let submissionSeq = 0;
+function nextSubmissionId(): string {
+  submissionSeq += 1;
+  return `s${Date.now().toString(36)}-${submissionSeq}`;
+}
 function send(ctx: Ctx, op: OpPayload): number {
   if (!sharedWs || sharedWs.readyState !== WebSocket.OPEN) {
     dlog(ctx.id, "SEND-BLOCKED", op.op, "readyState=", sharedWs?.readyState ?? "null");
@@ -396,6 +405,9 @@ function send(ctx: Ctx, op: OpPayload): number {
   }
   reqSeq += 1;
   const payload: ClientOp = { session: ctx.id, root: ctx.root, ...op, req_id: reqSeq } as ClientOp;
+  if (op.op === "submit") {
+    payload.submission_id = nextSubmissionId();
+  }
   sharedWs.send(JSON.stringify(payload));
   return reqSeq;
 }
@@ -860,6 +872,7 @@ function openTab(root: string, intent: Ctx["openIntent"], openId: string | null)
   activateTab(ctx.id);
   if (connected) issueOpen(ctx);
   else void fetchRecents();
+  persistTabs();
 }
 function closeTab(id: string): void {
   const idx = tabs.findIndex((t) => t.id === id);
@@ -868,9 +881,50 @@ function closeTab(id: string): void {
   if (activeCtx === ctx) activeCtx.entryDraft = entry.value;
   ctxById.delete(id);
   tabs.splice(idx, 1);
-  if (tabs.length === 0) { activeCtx = null; renderTabs(); renderLanding(); return; }
-  if (activeCtx === ctx) activateTab((tabs[idx] ?? tabs[idx - 1] ?? tabs[0]).id);
+  if (tabs.length === 0) { activeCtx = null; renderTabs(); renderLanding(); }
+  else if (activeCtx === ctx) activateTab((tabs[idx] ?? tabs[idx - 1] ?? tabs[0]).id);
   else renderTabs();
+  persistTabs();
+}
+
+/* Tabs are per-workspace state, so they are stored with the other per-workspace
+   prefs. A tab that never got a session and never held a draft is a ghost - the
+   kind that used to pile up in the tab bar with no session behind it. */
+function persistTabs(): void {
+  if (!activeCtx) return;
+  const refs: TabRef[] = tabs.map((t) => ({
+    session_id: t.sessionId,
+    title: t.sessionTitle,
+    mode: t.modeVal,
+    dirty: t === activeCtx ? Boolean(entry.value.trim()) : Boolean(t.entryDraft.trim()),
+  }));
+  prefs.tabsByWs[activeCtx.root] = refs;
+  savePrefs();
+}
+/* Reconcile persisted tab references against what actually exists on disk.
+   Only tab references are touched: a session pointing nowhere is dropped, and
+   an empty tab that was never used is dropped. Sessions themselves are never
+   deleted here, and anything repaired is reported in the log drawer. */
+function reconcileTabs(root: string, sessions: SessionListItem[]): void {
+  const stored = prefs.tabsByWs[root];
+  if (!stored || !stored.length) return;
+  const known = new Set(sessions.map((s) => s.id));
+  const keep: TabRef[] = [];
+  const dropped: string[] = [];
+  for (const ref of stored) {
+    if (ref.session_id) {
+      if (known.has(ref.session_id)) keep.push(ref);
+      else dropped.push(`${ref.title || ref.session_id} (session no longer exists)`);
+    } else if (ref.dirty) {
+      keep.push(ref);           // a real draft the user is still writing
+    } else {
+      dropped.push(`${ref.title || "New Session"} (never used)`);
+    }
+  }
+  if (!dropped.length) { prefs.tabsByWs[root] = keep; savePrefs(); return; }
+  for (const why of dropped) dlog("tabs", "repaired tab:", why);
+  prefs.tabsByWs[root] = keep;
+  savePrefs();
 }
 
 /* When no tab is open, show a full landing in the center instead of a session. */
@@ -1002,6 +1056,7 @@ function refreshSessionsCache(ctx: Ctx, list: SessionListItem[]): void {
 }
 function resumeIfNeeded(ctx: Ctx, list: SessionListItem[]): void {
   if (ctx.busy) return;
+  reconcileTabs(ctx.root, list);
   const ids = new Set(list.map((s) => s.id));
   if (ctx.pendingOpenSessionId) {
     const openId = ctx.pendingOpenSessionId;
@@ -1283,8 +1338,13 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         break;
       case "session": {
         const id = (p["id"] as string) ?? null;
+        const first = ctx.sessionId === null && id !== null;
         ctx.sessionId = id;
-        if (id) prefs.lastSessionByWs[ctx.root] = id, savePrefs();
+        if (id) { prefs.lastSessionByWs[ctx.root] = id; savePrefs(); }
+        // The tab just became a real session: remember it so a restart brings
+        // it back and nothing is left pointing at a session that exists only
+        // in memory.
+        if (first) persistTabs();
         ctx.sessionTitle = "New Session";
         renderTranscript(ctx, (p["messages"] as Array<Record<string, unknown>>) ?? []);
         primeContext(ctx);
@@ -1293,7 +1353,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       }
       case "session_title": {
         const title = String(p["title"] ?? "");
-        if (title) { ctx.sessionTitle = title; if (ctx === activeCtx) renderTabs(); }
+        if (title) { ctx.sessionTitle = title; if (ctx === activeCtx) renderTabs(); persistTabs(); }
         break;
       }
       case "compacted": renderTranscript(ctx, (p["messages"] as Array<Record<string, unknown>>) ?? []); addNote(ctx, `compacted ${p["before"]} to ${((p["messages"] as unknown[]) ?? []).length} messages`); break;
@@ -1340,6 +1400,14 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       renderTabs();
     }
     if (settingsRequested) { settingsRequested = false; openSettings(settingsLastTab); }
+  } else if (msg.reply === "submit") {
+    /* A refused submit (duplicate, or a turn already running) never produces a
+       done event, so release the composer here or the tab stays "working". */
+    if (!msg.ok) {
+      setBusy(ctx, false);
+      hideThinking(ctx);
+      if (ctx === activeCtx) setActivity("that message was already sent");
+    }
   } else if (msg.reply === "set_active" || msg.reply === "delete_provider" || msg.reply === "save_provider") {
     if (msg.ok) {
       if (msg.reply === "save_provider" && msg.data && typeof msg.data === "object") {
@@ -1884,16 +1952,32 @@ document.querySelectorAll<HTMLButtonElement>(".empty-chips .chip").forEach((chip
 /* ---------------- boot ---------------- */
 renderTabs();
 let booted = false;
+function restoreTabs(root: string): void {
+  /* Bring back the tabs this workspace had, newest last, and drop any that no
+     longer point at a live session. A workspace with no tabs starts on its
+     most recent session, exactly as before. */
+  const stored = prefs.tabsByWs[root] ?? [];
+  const usable = stored.filter((ref) => ref.session_id || ref.dirty);
+  if (!usable.length) { openTab(root, "resume", null); return; }
+  for (const ref of usable) {
+    const ctx = makeCtx(root, baseName(root), ref.session_id ? "session" : "new", ref.session_id);
+    ctx.sessionTitle = ref.title || "New Session";
+    tabs.push(ctx);
+  }
+  activateTab(tabs[tabs.length - 1].id);
+  if (connected) for (const t of tabs) issueOpen(t);
+  else void fetchRecents();
+  persistTabs();
+}
 function boot(source: string): void {
   if (booted) return;
   booted = true;
   const root = bootRoot || "";
   dlog("boot", "complete source=", source, "port=", bootPort, "root=", root, "hasIPC=", Boolean(window.harness?.onConfig));
-  const ctx = makeCtx(root, baseName(root || "Workspace"), "resume", null);
-  tabs = [ctx];
-  activeCtx = ctx;
   autogrow();
   renderActive();
+  if (root) restoreTabs(root);
+  else openTab(root, "resume", null);
   connect();
 }
 window.harness?.onConfig((cfg) => { if (cfg.projectRoot) bootRoot = cfg.projectRoot; if (cfg.port) bootPort = String(cfg.port); boot("ipc"); });
