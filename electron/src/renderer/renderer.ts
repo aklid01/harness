@@ -890,8 +890,22 @@ function closeTab(id: string): void {
 /* Tabs are per-workspace state, so they are stored with the other per-workspace
    prefs. A tab that never got a session and never held a draft is a ghost - the
    kind that used to pile up in the tab bar with no session behind it. */
+const PREFS_BACKUP_KEY = "harness:prefs:v1.bak";
+function backUpPrefsOnce(): void {
+  /* One backup slot for the pre-tabs prefs, so a bad write can be undone by
+     hand. Only written once: updating it on every write would destroy the
+     thing it is meant to protect. */
+  try {
+    if (localStorage.getItem(PREFS_BACKUP_KEY)) return;
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (raw) localStorage.setItem(PREFS_BACKUP_KEY, raw);
+  } catch {
+    /* storage unavailable */
+  }
+}
 function persistTabs(): void {
   if (!activeCtx) return;
+  if (!(activeCtx.root in prefs.tabsByWs)) backUpPrefsOnce();
   const refs: TabRef[] = tabs.map((t) => ({
     session_id: t.sessionId,
     title: t.sessionTitle,
@@ -1285,6 +1299,9 @@ function handleReady(msg: ServerEnvelope): void {
   if (activeCtx) {
     setConn(`connected · ${activeCtx.project || baseName(activeCtx.root)}`, "online");
     if (!activeCtx.hadReady) issueOpen(activeCtx);
+    // Restored tabs share the same boot: bring each one up so none is left
+    // showing a title for a session it never opened.
+    for (const t of tabs) if (!t.hadReady) issueOpen(t);
     primeContext(activeCtx);
   }
 }
