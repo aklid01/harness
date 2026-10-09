@@ -1,4 +1,4 @@
-import type { ClientOp, ContextInfo, OpPayload, ProviderEntry, ProviderGroup, ProviderState, RetryInfo, ServerEnvelope, SessionListItem, TodoItem } from "../shared/protocol";
+import type { ClientOp, ContextInfo, OpPayload, ProviderEntry, ProviderGroup, ProviderState, RetryInfo, RetryProgress, ServerEnvelope, SessionListItem, TodoItem } from "../shared/protocol";
 import type { PreloadHarness, WorkspaceRef } from "../shared/preload-types";
 
 declare global {
@@ -498,7 +498,7 @@ function clearRetryCard(ctx: Ctx): void {
   ctx.retryCard?.remove();
   ctx.retryCard = null;
 }
-function showRetry(ctx: Ctx, p: Record<string, unknown>): void {
+function showRetry(ctx: Ctx, progress: RetryProgress): void {
   if (ctx.retryCard?.parentElement !== ctx.chatBody) {
     clearRetryCard(ctx);
     const card = document.createElement("div");
@@ -508,17 +508,17 @@ function showRetry(ctx: Ctx, p: Record<string, unknown>): void {
   }
   const card = ctx.retryCard;
   if (!card) return;
-  const model = String(p["model"] ?? ctx.failure?.model ?? "the model");
-  const wait = Number(p["wait"] ?? 0);
-  const attempt = Number(p["attempt"] ?? 1);
-  const elapsed = Number(p["elapsed"] ?? 0);
-  const window = Number(p["window"] ?? 30);
-  const reason = String(p["headline"] ?? p["kind"] ?? "the request failed");
+  const model = String(progress.model ?? ctx.failure?.model ?? "the model");
+  const wait = Number(progress.wait ?? 0);
+  const attempt = Number(progress.attempt ?? 1);
+  const elapsed = Number(progress.elapsed ?? 0);
+  const budget = Number(progress.window ?? 30);
+  const reason = String(progress.headline ?? progress.kind ?? "the request failed");
   card.innerHTML =
     `<span class="r-spin"></span>` +
     `<div class="r-body"><div class="r-title">${escapeHtml(model)}</div>` +
     `<div class="r-detail">${escapeHtml(reason)}. Retrying…</div>` +
-    `<div class="r-sub">Retry ${attempt} · waiting ${wait.toFixed(wait < 1 ? 1 : 0)}s · ${elapsed.toFixed(0)}s of ${window.toFixed(0)}s elapsed</div></div>`;
+    `<div class="r-sub">Retry ${attempt} · waiting ${wait.toFixed(wait < 1 ? 1 : 0)}s · ${elapsed.toFixed(0)}s of ${budget.toFixed(0)}s elapsed</div></div>`;
   if (ctx === activeCtx) setActivity(`${model} - ${reason}. Retrying…`);
   scrollBottom(ctx);
 }
@@ -1275,7 +1275,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         break;
       }
       case "note": addNote(ctx, String(p["text"] ?? "")); break;
-      case "retry": showRetry(ctx, p); break;
+      case "retry": showRetry(ctx, p as unknown as RetryProgress); break;
       case "error":
         clearRetryCard(ctx);
         addError(ctx, String(p["text"] ?? ""), p);
