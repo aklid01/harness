@@ -44,7 +44,7 @@ _EFFORT = contextvars.ContextVar("providers_effort", default=None)
 
 MODEL_FIELDS = (
     "name", "model", "reasoning_effort", "temperature", "context_window",
-    "max_output_tokens", "supports_tools", "supports_reasoning",
+    "max_output_tokens", "supports_tools", "supports_reasoning", "supports_text_tools",
     "extra_params", "disabled",
 )
 MODEL_DEFAULTS = {
@@ -56,6 +56,7 @@ MODEL_DEFAULTS = {
     "max_output_tokens": None,
     "supports_tools": True,
     "supports_reasoning": True,
+    "supports_text_tools": False,
     "extra_params": {},
     "disabled": False,
 }
@@ -185,7 +186,7 @@ def _clean_model(payload):
             clean[key] = _as_float(value)
         elif key in ("context_window", "max_output_tokens"):
             clean[key] = _as_int(value)
-        elif key in ("supports_tools", "supports_reasoning"):
+        elif key in ("supports_tools", "supports_reasoning", "supports_text_tools"):
             clean[key] = _as_bool(value)
         elif key == "extra_params":
             clean[key] = _clean_params(value)
@@ -719,6 +720,7 @@ def _flat(group, model):
         "max_output_tokens": model.get("max_output_tokens"),
         "supports_tools": bool(model.get("supports_tools", True)),
         "supports_reasoning": bool(model.get("supports_reasoning", True)),
+        "supports_text_tools": bool(model.get("supports_text_tools", False)),
         "extra_params": dict(model.get("extra_params") or {}),
         "provider_id": group["id"],
         "provider_name": group.get("name") or group["id"],
@@ -776,12 +778,14 @@ def active_model_capabilities():
     """What the active model can do, so callers never assume too much."""
     group, model = active_pair()
     if not (group and model):
-        return {"supports_tools": True, "supports_reasoning": True, "context_window": None,
+        return {"supports_tools": True, "supports_reasoning": True,
+                "supports_text_tools": False, "context_window": None,
                 "max_output_tokens": None, "model": None, "name": None,
                 "provider_id": None, "provider_name": None}
     return {
         "supports_tools": bool(model.get("supports_tools", True)),
         "supports_reasoning": bool(model.get("supports_reasoning", True)),
+        "supports_text_tools": bool(model.get("supports_text_tools", False)),
         "context_window": model.get("context_window"),
         "max_output_tokens": model.get("max_output_tokens"),
         "model": model.get("model"),

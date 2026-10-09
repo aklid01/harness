@@ -1,4 +1,22 @@
+"""Local tools: registry, schemas, permission-checked execution, availability.
+
+Everything a model can ask for lives in TOOLS with a JSON schema in
+TOOL_SCHEMAS. Two things here are worth stating plainly:
+
+* A tool is only advertised when it is actually usable in this session. The
+  checks are cheap and non-destructive (registration, schema shape, whether an
+  executable resolves on PATH, whether the approval channel is connected,
+  whether the workspace is readable). A missing dependency costs that one
+  tool, not all of them.
+* What a model writes is untrusted input. The name may not exist, the
+  arguments may not be JSON and they may not match the schema, so each of
+  those comes back as a result the model can read and retry. None of them
+  ends the session, and none of them is executed.
+"""
+
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -9,6 +27,111 @@ from .permissions import approval_info, check
 from .subagent import TASK_SCHEMA, task
 from .skills import read_skill
 from .todos import TODO_SCHEMA, write_todos
+
+# What each tool needs before it can be offered at all. The question is "can
+# this run", not "will it succeed": a command that fails is a result the model
+# can react to, not a reason to hide the tool from it.
+REQUIRES = {
+    "bash": {"shell": True, "workspace": True, "approval": True},
+    "read_file": {"workspace": True},
+    "write_file": {"workspace": True, "approval": True},
+    "str_replace": {"workspace": True, "approval": True},
+    "read_skill": {"skills": True},
+    "write_todos": {},
+    "task": {"workspace": True},
+}
+
+_AVAILABILITY_CACHE = None
+_AVAILABILITY_KEY = None
+
+
+def approval_channel_ready():
+    """Is there a frontend that can answer an approval request?"""
+    from . import events
+
+    if events._ACTIVE.get() is not None:
+        return True
+    return events._responder is not None
+
+
+def shell_available():
+    """A shell the sandbox could drive. Resolved, never run."""
+    return bool(shutil.which("bash") or shutil.which("sh") or shutil.which("cmd"))
+
+
+def workspace_readable():
+    root = paths.project_root()
+    try:
+        return root.is_dir() and os.access(root, os.R_OK)
+    except OSError:
+        return False
+
+
+def skills_installed():
+    from .skills import SKILLS
+
+    return bool(SKILLS)
+
+
+def _reason_for(name):
+    """(ok, reason) for one tool, from its declared requirements."""
+    from . import permissions
+
+    needs = REQUIRES.get(name, {})
+    if needs.get("shell") and not shell_available():
+        return False, "no shell was found on PATH"
+    if needs.get("workspace") and not workspace_readable():
+        return False, f"the workspace ({paths.project_root()}) is not readable"
+    if needs.get("skills") and not skills_installed():
+        return False, "no skills are installed"
+    if needs.get("approval") and not approval_channel_ready() and permissions.current_mode() not in ("allow-all", "autopilot"):
+        return False, "an approval prompt cannot be shown in this session"
+    return True, ""
+
+
+def _cache_key():
+    from . import permissions
+
+    return (str(paths.project_root()), approval_channel_ready(), shell_available(),
+            skills_installed(), permissions.current_mode())
+
+
+def availability(refresh=False):
+    """{tool name: {"available": bool, "reason": str}} for this session.
+
+    Cached, and recomputed when the workspace, the approval channel, the
+    frontend or the available dependencies change - so switching workspace or
+    settings never serves a stale answer.
+    """
+    global _AVAILABILITY_CACHE, _AVAILABILITY_KEY
+
+    key = _cache_key()
+    if refresh or _AVAILABILITY_CACHE is None or _AVAILABILITY_KEY != key:
+        report = {}
+        for schema in TOOL_SCHEMAS:
+            name = schema["function"]["name"]
+            ok, reason = _reason_for(name)
+            report[name] = {"available": ok, "reason": reason}
+        _AVAILABILITY_CACHE = report
+        _AVAILABILITY_KEY = key
+    return _AVAILABILITY_CACHE
+
+
+def available_tool_names():
+    return [name for name, state in availability().items() if state["available"]]
+
+
+def tool_schemas():
+    """Schemas for the tools this session can actually run."""
+    return [schema for schema in TOOL_SCHEMAS
+            if availability().get(schema["function"]["name"], {}).get("available")]
+
+
+def unavailable_summary():
+    """What the model should be told when it cannot be given any tools."""
+    missing = [f"{name}: {state['reason']}" for name, state in availability().items()
+               if not state["available"]]
+    return "; ".join(missing) if missing else ""
 
 
 def _resolve(path):
@@ -81,7 +204,7 @@ def _tracked_write(name, args):
     return result
 
 
-def execute(tool_call, note=""):
+def execute(tool_call, note="", call_key=None):
     """Run one tool call through the permission layer.
 
     Shared by the main loop and by subagents, so a subagent is fenced in by
@@ -90,12 +213,20 @@ def execute(tool_call, note=""):
     A tool call is text the model wrote, so all of it is untrusted: the name
     may not exist, the arguments may not be JSON, and they may not match the
     signature. Every one of those comes back as a result the model can read
-    and retry. None of them is allowed to end the session.
+    and retry. None of them is allowed to end the session, and none of them
+    is executed.
 
     ``note`` is the model's narration just before this call; it is surfaced in
     the approval dialog as the "why" alongside a validated risk level.
+
+    ``call_key`` identifies one call inside one request. When it is given, a
+    repeat (a retried frame, a re-entered stream, a duplicated event) returns
+    the recorded result instead of running the tool a second time.
     """
     from . import events
+
+    if call_key is not None and call_key in _EXECUTED:
+        return _EXECUTED[call_key]
 
     name = tool_call.function.name
     try:
@@ -118,14 +249,36 @@ def execute(tool_call, note=""):
             if not events.interact(events.APPROVAL, info):
                 return args, "The user denied this tool call."
         if name in ("write_file", "str_replace"):
-            return args, _tracked_write(name, args)
-        return args, TOOLS[name](**args)
+            outcome = args, _tracked_write(name, args)
+        else:
+            outcome = args, TOOLS[name](**args)
     except TypeError as mismatch:
         return args, f"Error: wrong arguments for {name} ({mismatch})."
     except KeyError as missing:
         return args, f"Error: {name} needs an argument you did not send: {missing}."
     except Exception as failure:  # noqa: BLE001 - the model gets to see and retry
         return args, f"Error: {name} failed - {type(failure).__name__}: {failure}"
+
+    if call_key is not None:
+        _remember(call_key, outcome)
+    return outcome
+
+
+# One entry per executed call, keyed by (request, call id). Bounded: only the
+# most recent calls are remembered, which is the window a retry can land in.
+_EXECUTED: dict = {}
+_EXECUTED_LIMIT = 64
+
+
+def _remember(call_key, outcome):
+    _EXECUTED[call_key] = outcome
+    while len(_EXECUTED) > _EXECUTED_LIMIT:
+        _EXECUTED.pop(next(iter(_EXECUTED)))
+
+
+def executed_calls():
+    """The registry, for tests and diagnostics."""
+    return dict(_EXECUTED)
 
 
 TOOL_SCHEMAS = [

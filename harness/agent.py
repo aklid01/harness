@@ -1,13 +1,16 @@
+import itertools
 import json
+from types import SimpleNamespace
 
 from . import commands
 from . import compact
 from . import events
 from . import history
 from . import providers
+from . import texttools
 from . import session
 from .context import reminder
-from .errors import ModelError  # noqa: F401 - kept for callers importing it from here
+from .errors import ModelError
 from . import errors as errors_mod
 from .llm import call_llm, system_prompt
 from .todos import active_form
@@ -31,6 +34,11 @@ BUILD_NOTICE = (
 )
 
 
+# Every Runner gets its own request-id space, so a tool call made by one
+# conversation can never collide with an identical call made by another.
+TURN_KEYS = itertools.count(1)
+
+
 class Runner:
     """One agent conversation. Emits events; never touches the screen."""
 
@@ -42,6 +50,9 @@ class Runner:
         self._announced_mode = None
         self._turn_index = 0
         self._turn_text = ""
+        self._step = 0
+        self._text_retries = 0
+        self._request_prefix = f"r{next(TURN_KEYS)}"
         self.messages = [{"role": "system", "content": system_prompt(mode)}]
         if resume:
             saved = session.all_sessions()
@@ -102,6 +113,46 @@ class Runner:
             payload["retry"] = self._retry_info()
         events.emit(events.ERROR, payload)
 
+    def _text_call(self, message):
+        """A model with no native tool support may write its call out in text.
+
+        Only ever consulted when the model is marked as able to do this, and
+        only for a call that stands on its own. Returns (call, narration) or
+        (None, None) when there is nothing actionable here.
+        """
+        caps = providers.active_model_capabilities()
+        if not caps.get("supports_text_tools"):
+            return None, None
+        content = message.content or ""
+        if not texttools.looks_like_call(content):
+            return None, None
+        from . import tools as tools_module
+
+        call, narration = texttools.parse_with_narration(
+            content, schemas=tools_module.tool_schemas(),
+            available=tools_module.available_tool_names())
+        return call, narration
+
+    def _unrecognised_call(self, text):
+        """Tell the user, plainly, that a call was not run - and why."""
+        events.emit(events.NOTE, {
+            "text": "The response looked like a tool call but was not one we could run, "
+                    "so nothing was executed.",
+            "detail": text,
+            "kind": "unrecognised_tool_call",
+        })
+
+    def _corrective_note(self, call):
+        """What the model is told when its text call could not be used."""
+        available = ", ".join(__import__("harness.tools", fromlist=["x"]).available_tool_names())
+        return (
+            "<system-reminder>\n"
+            f"Your last message contained a tool call that could not be run: {call.error}\n"
+            "Send the call as a real tool call (the tools list), not as text, or answer "
+            f"in plain language. Tools available right now: {available}.\n"
+            "</system-reminder>"
+        )
+
     def _turn(self):
         self._announce_mode()
         # The user message that opened this turn, so a retry resumes from it
@@ -133,6 +184,8 @@ class Runner:
                 events.emit(events.NOTE, {"text": trimmed})
 
             events.emit(events.STATUS, {"active": active_form()})
+            self._step += 1
+            request_id = f"{self._request_prefix}:{self._step}"
             try:
                 on_delta = None
                 if self.stream:
@@ -155,6 +208,36 @@ class Runner:
                 events.emit(events.NOTE, {"text": "stopped"})
                 return
 
+            text_call, narration = (None, None)
+            if not message.tool_calls:
+                text_call, narration = self._text_call(message)
+                if text_call is not None and text_call.ok:
+                    # The narration is real output: show it, keep it in the
+                    # transcript, then run the call exactly like a native one.
+                    if narration:
+                        events.emit(events.MESSAGE, {"role": "assistant", "content": narration})
+                elif text_call is not None:
+                    # Unusable markup. Say so plainly, and give the model one
+                    # bounded chance to redo it as a real call. Never silently.
+                    if narration:
+                        events.emit(events.MESSAGE, {"role": "assistant", "content": narration})
+                    self.messages.append(message.model_dump(exclude_none=True))
+                    session.save(self.messages)
+                    events.emit(events.USAGE, dict(usage))
+                    self._unrecognised_call(text_call.reason())
+                    if self._text_retries < 1:
+                        self._text_retries += 1
+                        self.messages.append({"role": "user",
+                                              "content": self._corrective_note(text_call)})
+                        session.save(self.messages)
+                        continue
+                    break
+
+            if text_call is not None and text_call.ok:
+                message = SimpleNamespace(
+                    content=narration or None,
+                    tool_calls=[text_call.as_tool_call(f"text-{self._turn_index}-{self._step}")])
+
             self.messages.append(message.model_dump(exclude_none=True))
             session.save(self.messages)
             events.emit(events.USAGE, dict(usage))
@@ -168,7 +251,7 @@ class Runner:
             if not message.tool_calls:
                 break
 
-            for tool_call in message.tool_calls:
+            for index, tool_call in enumerate(message.tool_calls):
                 if self.cancelled():
                     events.emit(events.NOTE, {"text": "stopped"})
                     return
@@ -181,7 +264,10 @@ class Runner:
                 if self.mode == "plan" and name in ("write_file", "str_replace"):
                     result = f"Plan mode: read-only, no edits made. Describe the change instead of calling {name}."
                 else:
-                    args, result = execute(tool_call, note=(message.content or ""))
+                    # One call, one request, one execution: a replayed frame or
+                    # a re-entered stream replays the recorded result.
+                    args, result = execute(tool_call, note=(message.content or ""),
+                                           call_key=(request_id, call_id or index))
                 events.emit(events.TOOL_CALL, {"call_id": call_id, "name": name, "args": args, "nested": False})
                 events.emit(events.TOOL_RESULT, {"call_id": call_id, "name": name, "args": args, "result": result, "nested": False})
                 if tool_call.function.name == "write_todos" and isinstance(args.get("todos"), list):

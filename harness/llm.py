@@ -46,9 +46,20 @@ def active_model():
 
 def _params(messages, tools, caps):
     """Request body for the active model - only what it actually supports."""
+    from . import tools as tools_mod
+
     params = {"model": caps["model"], "messages": messages}
-    if caps.get("supports_tools", True) and tools is not None:
-        params["tools"] = tools or TOOL_SCHEMAS
+    if caps.get("supports_tools", True):
+        # Only advertise what this session can actually run, and only from the
+        # set the caller asked for. A tool that would fail on arrival is noise
+        # the model has to pay for; a session where nothing runs sends no tools
+        # at all and says so instead of pretending.
+        wanted = {schema["function"]["name"]: schema
+                  for schema in (tools if tools is not None else TOOL_SCHEMAS)}
+        offered = [schema for schema in tools_mod.tool_schemas()
+                   if schema["function"]["name"] in wanted]
+        if offered:
+            params["tools"] = offered
     params.update(providers.active_model_params())
     return params
 
