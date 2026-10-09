@@ -479,7 +479,8 @@ function addError(ctx: Ctx, text: string, meta?: Record<string, unknown>): void 
   const div = document.createElement("div");
   div.className = "error";
   const actions: string[] = [];
-  if (retry) actions.push(`<button class="btn small primary" data-retry="1">Retry</button>`);
+  // A permanent failure (bad key, unknown model id) is not worth re-sending.
+  if (retry && meta?.["transient"] !== false) actions.push(`<button class="btn small primary" data-retry="1">Retry</button>`);
   if (providerGroups.length) actions.push(`<button class="btn small" data-switch="1">Switch model</button>`);
   div.innerHTML =
     `<b>${escapeHtml((meta?.["headline"] as string) ?? (model ? `${model} failed` : "Error - no response produced"))}</b>` +

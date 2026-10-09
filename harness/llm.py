@@ -12,7 +12,8 @@ from types import SimpleNamespace
 from . import events
 from . import providers
 from . import retry as retry_mod
-from .errors import ModelError, stream_interrupted
+from . import errors as errors_mod
+from .errors import Cancelled, ModelError, stream_interrupted
 from .skills import skills_prompt
 from .tools import TOOL_SCHEMAS
 
@@ -125,6 +126,10 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
             )
             try:
                 for chunk in stream:
+                    # Stop reading as soon as the user cancels or moves to
+                    # another model: closing here is what stops the tokens.
+                    if cancel is not None and cancel.is_set():
+                        raise errors_mod.Cancelled("the stream was abandoned")
                     if chunk.usage is not None:
                         usage = chunk.usage
                     delta = chunk.choices[0].delta if chunk.choices else None
@@ -141,6 +146,8 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
                             slot["name"] += call.function.name or ""
                             slot["arguments"] += call.function.arguments or ""
             except Exception as failure:
+                if isinstance(failure, errors_mod.Cancelled):
+                    raise
                 if streamed:
                     raise stream_interrupted(failure, partial="".join(streamed),
                                              api_key=api_key, model=label,

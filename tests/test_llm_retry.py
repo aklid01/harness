@@ -4,6 +4,8 @@ and never sends a smaller model more than it can hold."""
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -177,6 +179,50 @@ class LlmCase(unittest.TestCase):
         self.assertEqual(seen, ["fine"])
         self.assertEqual(message.content, "fine")
         self.assertEqual(len(completions.calls), 2)
+
+    def test_cancel_stops_a_stream_mid_flight(self):
+        import threading
+        self.use()
+        cancel = threading.Event()
+        release = threading.Event()
+        served = {"chunks": 0}
+
+        class Hanging:
+            def close(self):
+                release.set()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if not served["chunks"]:
+                    served["chunks"] = 1
+                    return SimpleNamespace(usage=None, choices=[SimpleNamespace(
+                        delta=SimpleNamespace(content="first", tool_calls=None))])
+                release.wait(5)
+                raise ConnectionResetError("should have been abandoned")
+
+        completions = FakeCompletions([Hanging()])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        mock.patch.object(llm, "get_client", return_value=client).start()
+        seen = []
+
+        def worker():
+            try:
+                llm.call_llm([{"role": "user", "content": "hi"}], on_delta=seen.append, cancel=cancel)
+            except Exception as failure:  # noqa: BLE001 - recorded for the assertion
+                self.outcome = failure
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        time.sleep(0.1)
+        cancel.set()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(seen, ["first"])
+        self.assertEqual(getattr(self, "outcome", None).kind, "cancelled")
+        self.assertTrue(release.is_set(), "the stream must be closed when abandoned")
+        self.assertEqual(len(completions.calls), 1)
 
     def test_retry_events_reach_the_event_bus(self):
         from harness import events
