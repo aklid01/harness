@@ -843,7 +843,11 @@ def active_config_for(target_id):
 
 def provider_status(target_id):
     """GUI-safe summary: masked key state, never the secret."""
-    group, model = _resolve(_cached(), target_id)
+    data = _cached()
+    # An exact model id wins, so a disabled model still reports its own state.
+    group, model = _find_model(data, target_id)
+    if model is None:
+        group, model = _resolve(data, target_id)
     if not (group and model):
         return None
     flat = _flat(group, model)
