@@ -122,16 +122,10 @@ def _retry_after(exc):
     if not headers:
         return None
     try:
-        raw = headers.get("retry-after") or headers.get("Retry-After")
+        raw = headers.get("retry-after")
     except AttributeError:
         return None
-    if not raw:
-        return None
-    try:
-        seconds = float(str(raw).strip())
-    except (TypeError, ValueError):
-        return None
-    return seconds if 0 <= seconds <= 3600 else None
+    return parse_retry_after(raw) if raw else None
 
 
 def _err_detail(exc, status):
@@ -245,11 +239,10 @@ def _by_text(text):
     return None
 
 
-def no_key(model=None, model_id=None, provider=None):
-    """No credential for the selected model. Permanent: configuration issue."""
-    who = model or "this model"
-    detail = f"add an API key for {provider}" if provider else f"add an API key for {who}"
-    return ModelError("no_key", detail, model=model, model_id=model_id, transient=False)
+def no_key(model=None, provider=None):
+    """No credential for the selected model. Permanent: a configuration issue."""
+    where = " on ".join(x for x in (provider, model) if x) or "the selected model"
+    return ModelError("no_key", f"add an API key for {where}", model=model, transient=False)
 
 
 def stream_interrupted(failure=None, partial="", api_key=None, model=None, model_id=None):
@@ -284,11 +277,3 @@ def parse_retry_after(value):
     except (TypeError, ValueError):
         return None
     return seconds if 0 <= seconds <= 3600 else None
-
-
-def json_failure(exc, api_key=None, model=None, model_id=None):
-    """A 200 response whose body was not the JSON we expected."""
-    detail = scrub(str(exc))
-    if isinstance(exc, json.JSONDecodeError):
-        detail = f"could not parse the response body ({exc.msg} at char {exc.pos})"
-    return ModelError("malformed", detail, model=model, model_id=model_id, transient=True)

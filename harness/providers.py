@@ -802,11 +802,6 @@ def active_model():
     return active_model_capabilities()["model"]
 
 
-def active_model_label():
-    caps = active_model_capabilities()
-    return caps["name"] or caps["model"]
-
-
 def _credential_for(group):
     """(base_url, api_key, source) for a provider. Never returns the key twice."""
     if group is None:

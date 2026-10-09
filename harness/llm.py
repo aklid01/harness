@@ -13,7 +13,7 @@ from . import events
 from . import providers
 from . import retry as retry_mod
 from . import errors as errors_mod
-from .errors import Cancelled, ModelError, stream_interrupted
+from .errors import Cancelled, stream_interrupted
 from .skills import skills_prompt
 from .tools import TOOL_SCHEMAS
 
@@ -29,11 +29,9 @@ def get_client():
     client = _client_cache.get(key)
     if client is None:
         if not api_key:
-            raise ModelError(
-                "no_key",
-                f"add an API key for {providers.active_model_label() or 'this provider'}",
-                model=providers.active_model_label(), transient=False,
-            )
+            caps = providers.active_model_capabilities()
+            raise errors_mod.no_key(model=caps.get("name") or caps.get("model"),
+                                    provider=caps.get("provider_name"))
         from openai import OpenAI
 
         client = OpenAI(base_url=base_url, api_key=api_key,
