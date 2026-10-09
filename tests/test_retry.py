@@ -216,6 +216,42 @@ class RunCase(unittest.TestCase):
         self.assertIs(gate, retry._gate("shared"))
         self.assertIsNot(gate, retry._gate("other"))
 
+    def test_second_retry_waits_for_the_host_gate(self):
+        timings = {}
+
+        def first():
+            started = time.monotonic()
+            retry._pause("gate-host", 0.4, None, limit=5)
+            timings["first"] = time.monotonic() - started
+
+        def second():
+            time.sleep(0.05)
+            started = time.monotonic()
+            retry._pause("gate-host", 0.05, None, limit=5)
+            timings["second"] = time.monotonic() - started
+
+        threads = [threading.Thread(target=fn) for fn in (first, second)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(5)
+        self.assertFalse(any(t.is_alive() for t in threads))
+        self.assertGreaterEqual(timings["first"], 0.4)
+        # it queued behind the first retry's wait instead of firing alongside it
+        self.assertGreaterEqual(timings["second"], 0.35)
+
+    def test_pause_is_cancellable(self):
+        cancel = threading.Event()
+
+        def stopper():
+            time.sleep(0.05)
+            cancel.set()
+
+        threading.Thread(target=stopper, daemon=True).start()
+        started = time.monotonic()
+        self.assertTrue(retry._pause("cancel-host", 2.0, cancel, limit=5))
+        self.assertLess(time.monotonic() - started, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

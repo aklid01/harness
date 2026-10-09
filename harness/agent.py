@@ -197,8 +197,8 @@ class Runner:
         history.sweep()   # the turn is over: bin its temp files
         history.strip(self.messages)  # ...and shrink the tool output it produced
 
-        if compact.needed(usage):
-            self.messages = commands.compact(self.messages)
+        if compact.needed(usage, providers.active_context_window()):
+            self.messages = commands.compact(self.messages, providers.active_context_window())
 
 
 def main():

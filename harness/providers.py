@@ -391,29 +391,25 @@ def _resolve(data, target_id):
 
 
 def _active(data):
-    """(group, model) the engine should use, from the file or the context."""
+    """(group, model) the engine should use, from the file or the context.
+
+    A disabled model is never served: the active provider falls back to its
+    first live model, and if none of those are live the first live model in the
+    registry is used rather than silently dropping to the .env provider.
+    """
     override = _ACTIVE_ID.get()
-    if override:
-        group, model = _resolve(data, override)
-        if model is not None:
-            return group, model
-    group, model = _find_model(data, _text(data.get("active_id")))
-    if model is None and group is not None:
-        models = _live(group)
-        model = models[0] if models else None
-    if model is None:
-        group = _find_group(data, _text(data.get("active_provider_id")))
-        if group is not None:
-            models = _live(group)
-            model = models[0] if models else None
+    group, model = _find_model(data, override or _text(data.get("active_id")))
+    if model is not None and not (model.get("disabled") or group.get("disabled")):
+        return group, model
     if group is None:
+        group = _find_group(data, _text(data.get("active_provider_id")))
+    if group is None or not _live(group):
         for candidate in data["providers"]:
-            if candidate["models"]:
+            if _live(candidate):
                 group = candidate
-                models = _live(group)
-                model = models[0] if models else None
                 break
-    return group, model
+    models = _live(group)
+    return group, (models[0] if models else None)
 
 
 def list_groups():
@@ -800,10 +796,6 @@ def active_config():
         from . import config
 
         return config.BASE_URL, config.API_KEY, config.MODEL, "legacy-env"
-    if group.get("disabled") or model.get("disabled"):
-        from . import config
-
-        return config.BASE_URL, config.API_KEY, config.MODEL, "disabled"
     base_url, api_key, source = _credential_for(group)
     return base_url, api_key, model.get("model", ""), source
 
@@ -813,9 +805,9 @@ def active_config_for(target_id):
     group, model = _resolve(_cached(), target_id)
     if not (group and model):
         return active_config()
-    if group.get("disabled") or model.get("disabled"):
-        return active_config()
     base_url, api_key, source = _credential_for(group)
+    if group.get("disabled") or model.get("disabled"):
+        return base_url, api_key, model.get("model", ""), "disabled"
     return base_url, api_key, model.get("model", ""), source
 
 
@@ -919,6 +911,8 @@ def test_provider(target_id, timeout=20):
     from . import errors as errors_mod
 
     base_url, api_key, model, source = active_config_for(target_id)
+    if source == "disabled":
+        return False, "this model is disabled"
     if not api_key:
         return False, f"no key stored ({source})"
     started = time.monotonic()

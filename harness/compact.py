@@ -52,9 +52,12 @@ work so far, not as something the user told you.
 {summary}
 </summary>"""
 
-def needed(usage):
+def needed(usage, window=None):
     """Has the last request grown past the point where we rebuild?"""
-    return usage["prompt_tokens"] > config.CONTEXT_WINDOW * config.COMPACT_AT
+    from . import config
+
+    size = int(window) if window else config.CONTEXT_WINDOW
+    return usage["prompt_tokens"] > size * config.COMPACT_AT
 
 
 ROLES = {"user": "USER", "assistant": "ASSISTANT", "tool": "TOOL RESULT"}
@@ -112,9 +115,12 @@ def tail_start(messages, budget):
     return safe_boundary(messages, 1)
 
 
-def compact(messages):
+def compact(messages, window=None):
     """system + summary + a recent tail. The caller freezes what comes back."""
-    cut = tail_start(messages, config.CONTEXT_WINDOW * config.COMPACT_TO)
+    from . import config
+
+    size = int(window) if window else config.CONTEXT_WINDOW
+    cut = tail_start(messages, size * config.COMPACT_TO)
     if cut <= 1:
         return messages  # nothing old enough to be worth summarising
 

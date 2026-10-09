@@ -21,6 +21,7 @@ RETRY_WINDOW = 30.0
 BACKOFF_BASE = 0.4
 BACKOFF_CAP = 4.0
 MIN_WAIT = 0.1
+_SLICE = 0.05
 
 CONNECT_TIMEOUT = 6.0
 READ_TIMEOUT = 20.0
@@ -54,22 +55,33 @@ def _sleep(seconds, cancel):
     return bool(cancel.wait(seconds))
 
 
-def _pause(host, seconds, cancel):
+def _pause(host, seconds, cancel, limit=None):
     """Wait before the next attempt, without a stampede of parallel retries.
 
-    One retry slot per endpoint: the first waiter sleeps while holding it, so
-    anything else failing against the same provider waits its turn instead of
-    hammering a host that is already in trouble. Bailing out of the acquire
-    still burns the wait, so no attempt retries sooner than it planned to.
+    One retry slot per endpoint: whoever gets it sleeps while holding it, so
+    anything else failing against the same host waits its turn instead of
+    hammering a provider that is already in trouble. A waiter never blocks
+    past ``limit`` (its remaining retry budget), and the loop checks for
+    cancellation between slices, so Stop stays responsive.
     """
     if seconds <= 0:
         return _stopped(cancel)
     gate = _gate(host)
-    if gate.acquire(timeout=seconds):
-        try:
-            return _sleep(seconds, cancel)
-        finally:
-            gate.release()
+    budget = limit if limit is not None else seconds
+    deadline = time.monotonic() + max(seconds, budget)
+    while True:
+        if _stopped(cancel):
+            return True
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
+        if gate.acquire(timeout=min(_SLICE, left)):
+            try:
+                return _sleep(seconds, cancel)
+            finally:
+                gate.release()
+        if _stopped(cancel):
+            return True
     return _sleep(0.0, cancel)
 
 
@@ -128,5 +140,5 @@ def run(request, *, window=RETRY_WINDOW, cancel=None, on_attempt=None,
                     "elapsed": round(time.monotonic() - (deadline - float(window)), 1),
                     "window": float(window),
                 })
-            if _pause(host, wait, cancel):
+            if _pause(host, wait, cancel, limit=remaining):
                 raise errors_mod.cancelled(model=model, model_id=model_id)

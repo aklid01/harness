@@ -45,11 +45,11 @@ def sessions(messages):
     return redraw(session.open_session(saved[choice]["id"]), "opened")
 
 
-def compact(messages):
+def compact(messages, window=None):
     before = len(messages)
     try:
         events.emit(events.STATUS, {"active": "compacting"})
-        compacted = compaction.compact(messages)
+        compacted = compaction.compact(messages, window)
     except Exception as failure:  # noqa: BLE001
         # Compaction is one more API call, and it fires when the window is
         # nearly full - the worst moment to lose the session over a rate limit.

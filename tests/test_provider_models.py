@@ -235,6 +235,43 @@ class ModelCase(unittest.TestCase):
         self.assertEqual((entry["base_url"], entry["model"]), ("https://x/v1", "m"))
         self.assertEqual(providers.get_active_provider_id(), "p1")
 
+    def test_a_disabled_model_is_never_served(self):
+        providers.save_group(self.group())
+        self.model("mdl-a", "GLM 5.3 Flash", "glm-5.3-flash")
+        self.model("mdl-b", "DeepSeek V4.1 Flash", "deepseek-v4.1-flash")
+        providers.set_active("mdl-a")
+        providers.save_model({"id": "mdl-a", "disabled": True}, "grp-1")
+
+        self.assertEqual(providers.active_config()[2], "deepseek-v4.1-flash")
+        self.assertEqual(providers.active_model_capabilities()["model"], "deepseek-v4.1-flash")
+
+    def test_a_model_without_the_reasoning_knob_never_sends_effort(self):
+        providers.save_group(self.group())
+        self.model("mdl-a", "Plain model", "plain-1", reasoning_effort="high",
+                   supports_reasoning=False)
+        providers.set_active("mdl-a")
+        self.assertNotIn("reasoning_effort", providers.active_model_params())
+
+    def test_deleting_a_model_keeps_the_other_models_settings(self):
+        providers.save_group(self.group())
+        self.model("mdl-a", "GLM 5.3 Flash", "glm-5.3-flash", reasoning_effort="high")
+        self.model("mdl-b", "DeepSeek V4.1 Flash", "deepseek-v4.1-flash",
+                   extra_params={"top_p": 0.9})
+        providers.save_model({"id": "mdl-c", "model": "third"}, "grp-1")
+        providers.delete_model("mdl-b")
+
+        remaining = {m["model"]: m for m in providers.list_models("grp-1")}
+        self.assertEqual(set(remaining), {"glm-5.3-flash", "third"})
+        self.assertEqual(remaining["glm-5.3-flash"]["reasoning_effort"], "high")
+
+    def test_extra_params_are_whitelisted(self):
+        providers.save_group(self.group())
+        providers.save_model({"id": "mdl-a", "model": "m", "extra_params":
+                              {"top_p": 0.5, "extra_body": {"x": 1}, "messages": "nope",
+                               "ok": True}}, "grp-1")
+        model = providers.get_model("mdl-a")
+        self.assertEqual(model["extra_params"], {"top_p": 0.5, "ok": True})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

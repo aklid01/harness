@@ -260,5 +260,67 @@ class ContextCase(unittest.TestCase):
         self.assertLess(len(request), len(messages))
 
 
+class RunnerContextCase(unittest.TestCase):
+    """Switching to a model with a smaller window trims the request only."""
+
+    def setUp(self):
+        from harness import paths
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name) / "proj"
+        root.mkdir(parents=True)
+        paths.init(project_root=root, app_data_dir=Path(self.tmp.name) / "app")
+        self.addCleanup(paths.reset)
+        mock.patch.object(providers, "PROVIDERS_FILE", Path(self.tmp.name) / "app" / "providers.json").start()
+        mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
+        self.addCleanup(mock.patch.stopall)
+        providers.save_group({"id": "grp", "name": "N", "base_url": "https://x/v1"})
+        providers.save_model({"id": "mdl-big", "name": "big", "model": "big",
+                              "context_window": 200_000}, "grp")
+        providers.save_model({"id": "mdl-small", "name": "small", "model": "small",
+                              "context_window": 400}, "grp")
+        providers.set_active("mdl-big")
+
+    def transcript(self):
+        messages = [{"role": "system", "content": "system prompt"}]
+        for index in range(8):
+            messages.append({"role": "user", "content": f"q{index} " + "u" * 200})
+            messages.append({"role": "assistant", "content": f"a{index} " + "v" * 200})
+            messages.append({"role": "tool", "tool_call_id": f"c{index}", "content": "r" * 200})
+        return messages
+
+    def run_turn(self, model_id, text="keep going"):
+        from harness import agent, events
+        from harness import session as session_mod
+
+        seen = []
+        events.subscribe(lambda kind, payload: seen.append((kind, payload)))
+        self.addCleanup(events.reset)
+        session_mod.blank(session_mod.fresh_id())
+        runner = agent.Runner(stream=True, cancel_event=None, mode="build")
+        runner.messages = self.transcript()
+        count = len(runner.messages)
+        providers.set_active(model_id)
+        with mock.patch("harness.llm.call_llm", return_value=(SimpleNamespace(
+                content="ok", tool_calls=[],
+                model_dump=lambda exclude_none=True: {"role": "assistant", "content": "ok"}), {})):
+            runner.handle_input(text)
+        return runner, count, seen
+
+    def test_big_model_sends_the_whole_history(self):
+        runner, count, _ = self.run_turn("mdl-big")
+        self.assertEqual(len(runner.messages), count + 1)
+        self.assertNotIn("left out of this request", json.dumps(runner.messages))
+
+    def test_small_model_gets_a_trimmed_request_and_history_survives(self):
+        runner, count, seen = self.run_turn("mdl-small")
+        notes = [payload["text"] for kind, payload in seen if kind == "note"]
+        self.assertTrue(any("trimmed the request" in n for n in notes), notes)
+        # the stored history keeps every message: only the copy sent shrank
+        self.assertNotIn("left out of this request", json.dumps(runner.messages))
+        self.assertEqual(len(runner.messages), count + 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
