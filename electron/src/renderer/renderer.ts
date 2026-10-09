@@ -704,10 +704,10 @@ function activateTab(id: string): void {
   activeCtx = target;
   renderActive();
 }
-function newSessionTab(): void {
-  const root = activeCtx?.root ?? bootRoot;
-  if (!root) return;
-  openTab(root, "new", null);
+function newSessionTab(root?: string): void {
+  const target = root ?? activeCtx?.root ?? bootRoot;
+  if (!target) return;
+  openTab(target, "new", null);
 }
 function issueOpen(ctx: Ctx): void {
   if (ctx.hadReady) return;
@@ -810,11 +810,11 @@ function sessionRow(s: SessionListItem, root: string): HTMLElement {
   row.oncontextmenu = (e) => { e.preventDefault(); lastMenuX = e.clientX; lastMenuY = e.clientY; showSessionMenu(root, s); };
   return row;
 }
-function newTreeSessionRow(): HTMLElement {
+function newTreeSessionRow(root: string): HTMLElement {
   const row = document.createElement("div");
   row.className = "tree-new";
   row.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span>New session</span>`;
-  row.onclick = () => newSessionTab();
+  row.onclick = () => newSessionTab(root);
   return row;
 }
 function branchMetaHtml(ctx: Ctx): string {
@@ -847,7 +847,7 @@ function renderTree(): void {
     const kids = document.createElement("div");
     kids.className = "ws-kids" + (open ? "" : " hidden");
     for (const s of list) kids.appendChild(sessionRow(s, ws.root));
-    kids.appendChild(newTreeSessionRow());
+    kids.appendChild(newTreeSessionRow(ws.root));
     treeBox.appendChild(kids);
   }
 }
