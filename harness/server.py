@@ -74,8 +74,22 @@ class EngineService:
         else:
             self.runner.mode = mode
 
-    def submit(self, text, mode="build"):
+    def _seen_submission(self, submission_id):
+        """Exactly-once guard, keyed by submission id and never by text."""
+        if not submission_id:
+            return False
+        if submission_id in self._submissions:
+            return True
+        self._submissions[submission_id] = True
+        if len(self._submissions) > 32:
+            self._submissions.pop(next(iter(self._submissions)))
+        return False
+
+    def submit(self, text, mode="build", submission_id=None):
         with self._lock:
+            if self._seen_submission(submission_id):
+                self._send({"event": events.NOTE, "payload": {"text": "that submission was already sent"}})
+                return False
             if self.running:
                 self._send({"event": events.NOTE, "payload": {"text": "already running - press Stop first"}})
                 return False
@@ -438,6 +452,7 @@ class Session:
         self.pending: dict = {}
         self._seq = 0
         self._submissions: dict = {}
+        self._workers: list = []
         self.mode = "build"
         self.effort = "default"
         self.active_provider: str | None = None
@@ -509,6 +524,23 @@ class Session:
 
     def _thread(self, target, *args):
         threading.Thread(target=target, args=args, daemon=True).start()
+
+    def track(self, thread):
+        """Remember a background worker so ``join_background`` can wait."""
+        with self.lock:
+            self._workers.append(thread)
+
+    def join_background(self, timeout=10):
+        """Wait for this session's background workers (titles) to finish.
+
+        The server keeps no other loose threads per session, so this is what a
+        shutdown or a test teardown needs before touching the files under it.
+        """
+        with self.lock:
+            workers = list(self._workers)
+            self._workers.clear()
+        for worker in workers:
+            worker.join(timeout=timeout)
 
     # ---- actions ----
     def stop(self):
@@ -701,7 +733,9 @@ class Session:
                         self.on_event("sessions_updated", {})
             except Exception:  # noqa: BLE001 - titles are best effort
                 pass
-        self._thread(work)
+        worker = threading.Thread(target=work, daemon=True)
+        self.track(worker)
+        worker.start()
 
 
 class Harness:

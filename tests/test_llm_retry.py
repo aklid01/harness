@@ -318,6 +318,8 @@ class RunnerContextCase(unittest.TestCase):
         root.mkdir(parents=True)
         paths.init(project_root=root, app_data_dir=Path(self.tmp.name) / "app")
         self.addCleanup(paths.reset)
+        os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
+        self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
         mock.patch.object(providers, "PROVIDERS_FILE", Path(self.tmp.name) / "app" / "providers.json").start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)

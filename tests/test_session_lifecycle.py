@@ -49,11 +49,17 @@ class SessionCase(unittest.TestCase):
         self.sent = []
         self.seen = {}
         self.backend.attach(self.sent.append)
+        self.addCleanup(self.quiesce)
         self.calls = []
         patch = mock.patch("harness.agent.call_llm")
         self.llm = patch.start()
         self.addCleanup(patch.stop)
         self.llm.side_effect = self.answer
+
+    def quiesce(self):
+        """Wait out background title workers before the temp dir is removed."""
+        for session in list(self.backend.sessions.values()):
+            session.join_background(timeout=10)
 
     def answer(self, messages, tools=None, on_delta=None, cancel=None):
         self.calls.append([m for m in messages if m.get("role") == "user"])

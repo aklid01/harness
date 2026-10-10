@@ -162,6 +162,7 @@ def save(messages):
 
 
 _ID_LOCK = threading.Lock()
+_ID_ATTEMPTS = 10
 
 
 def fresh_id():
@@ -172,10 +173,15 @@ def fresh_id():
     same id. They used to be: each checked for a file that neither had created
     yet, then both wrote into one session file and the first turn was
     duplicated.
+
+    An id that cannot be reserved (a read-only sessions dir, a full disk)
+    fails after a handful of attempts instead of spinning one second at a
+    time into the far future: the caller reports the failure, and nothing is
+    half-created.
     """
     base = datetime.now()
     with _ID_LOCK:
-        while True:
+        for _ in range(_ID_ATTEMPTS):
             sid = base.strftime("%Y%m%d-%H%M%S")
             path = path_for(sid)
             if not path.exists():
@@ -184,8 +190,10 @@ def fresh_id():
                     path.touch()
                     return sid
                 except OSError:
-                    pass
+                    base += timedelta(seconds=1)
+                    continue
             base += timedelta(seconds=1)
+    raise OSError(f"could not reserve a session id under {path.parent}")
 
 
 def blank(session_id):

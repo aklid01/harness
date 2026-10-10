@@ -54,6 +54,8 @@ class SwitchCase(unittest.TestCase):
         root.mkdir(parents=True, exist_ok=True)
         server.paths_mod.init(project_root=root, app_data_dir=appdata)
         self.addCleanup(server.paths_mod.reset)
+        os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
+        self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
         mock.patch.object(providers, "PROVIDERS_FILE", appdata / "providers.json").start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
