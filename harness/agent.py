@@ -8,6 +8,8 @@ from . import events
 from . import history
 from . import providers
 from . import agents
+from . import oversight
+from . import permissions
 from . import texttools
 from . import session
 from .context import reminder
@@ -75,6 +77,11 @@ class Runner:
         self._text_retries = 0
         self._text_calls: set = set()
         self._role_instructions = ""
+        self._oversight = None          # oversight config dict, or None when off
+        self._checker_model_id = None
+        self._plan_text = None          # plan handed to the build phase, if any
+        self._review_log: dict = {}     # decision fingerprint -> prior verdicts
+        self._stop_turn = False         # set when oversight escalates: stop safely
         self._request_prefix = f"r{next(TURN_KEYS)}"
         self.messages = [{"role": "system", "content": system_prompt(mode)}]
         if resume:
@@ -111,10 +118,20 @@ class Runner:
         build_cfg = config["build"]
         self._role_instructions = (build_cfg.get("instructions") or "") if build_cfg.get("enabled") else ""
 
+        # Decision oversight: live only when enabled AND its reviewer model
+        # still resolves. An enabled role whose model was deleted is inert
+        # rather than silently reviewed by some other model.
+        ov = config["oversight"]
+        checker_id = ov.get("model_id") if ov.get("enabled") else None
+        self._checker_model_id = checker_id or None
+        self._oversight = ov if (checker_id and providers.get_model(checker_id)) else None
+        self._plan_text = None
+
         plan_id = agents.resolve_model(config["plan"], default_model)
         if plan_id is not None and self.mode != "plan" and not self.cancelled():
             plan_text = self._plan_phase(
                 user_text, plan_id, config["plan"].get("instructions") or "")
+            self._plan_text = plan_text
             if plan_text and not self.cancelled():
                 self.messages.append(
                     {"role": "user", "content": PLAN_HANDOFF.format(plan=plan_text)})
@@ -204,6 +221,126 @@ class Runner:
             return None
         events.emit(events.PLAN, {"status": "ready", "plan": report, "model": label})
         return report
+
+    # --- decision oversight -------------------------------------------------
+
+    def _needs_review(self, name, args):
+        if not self._oversight or self.mode == "plan":
+            return False
+        return oversight.wants_review(name, args, self._oversight.get("intensity", "medium"))
+
+    def _held(self, headline, body):
+        """A tool result that says an action was reviewed and NOT run."""
+        return (
+            "<system-reminder>\n"
+            f"{headline}\n"
+            f"{body}\n"
+            "This action was reviewed by the decision agent and NOT executed. Do "
+            "not call it again unchanged. Either act on the guidance above, or - if "
+            "you believe it is wrong - say why, with evidence, before proposing it "
+            "again.\n"
+            "</system-reminder>"
+        )
+
+    def _review_gate(self, name, args, message):
+        """Review a significant action before it runs.
+
+        Returns None to proceed (the call still goes through the normal
+        permission layer), or (held_feedback, marker) to hold this call and let
+        the coding agent re-decide on the reviewer's guidance. Bounded: the same
+        decision gets at most max_rounds reviews before it escalates; different
+        decisions are tracked separately.
+        """
+        if not self._needs_review(name, args) or self.cancelled():
+            return None
+
+        fp = oversight.fingerprint(name, args)
+        history = self._review_log.get(fp, [])
+        try:
+            max_rounds = max(1, int(self._oversight.get("max_rounds") or 1))
+        except (TypeError, ValueError):
+            max_rounds = 1
+
+        if len(history) >= max_rounds:
+            events.emit(events.DECISION, {"status": "escalated", "tool": name, "round": len(history),
+                                          "reasoning": f"unresolved after {len(history)} review round(s)"})
+            events.emit(events.NOTE, {
+                "text": "Decision Oversight escalated: the coding agent and the "
+                        "reviewer did not agree within the review limit. The action "
+                        "was stopped for you to decide.",
+                "kind": "oversight_escalated"})
+            self._stop_turn = True
+            return (
+                self._held(
+                    "DECISION ESCALATED to the user.",
+                    "The action below reached the review limit without agreement. Do "
+                    "NOT run it again. Tell the user what you were about to do, what "
+                    "the reviewer objected to across the rounds, and what you believe "
+                    "instead, so they can decide. Do not proceed on your own."),
+                "escalated",
+            )
+
+        events.emit(events.DECISION, {"status": "reviewing", "tool": name, "round": len(history) + 1})
+        events.emit(events.STATUS, {"active": "reviewing a decision"})
+        verdict, usage = oversight.review(
+            self._checker_model_id, self._oversight.get("instructions", ""),
+            task=self._turn_text, plan=self._plan_text, name=name, args=args,
+            note=(message.content or ""), history=history, cancel=self.cancel_event)
+        events.emit(events.STATUS, {"active": None})
+        events.emit(events.USAGE, dict(usage))
+        history = history + [{"verdict": verdict.verdict, "correction": verdict.correction}]
+        if fp not in self._review_log and len(self._review_log) >= 64:
+            self._review_log.pop(next(iter(self._review_log)))
+        self._review_log[fp] = history
+
+        payload = {"tool": name, "verdict": verdict.verdict, "round": len(history),
+                   "reasoning": verdict.reasoning, "risks": verdict.risks}
+
+        if verdict.verdict == "error":
+            # The reviewer failed. A low/medium action proceeds under the normal
+            # permission layer (still fully in force); a destructive/config shell
+            # action is held rather than run unseen.
+            if oversight.block_on_error(name, args):
+                events.emit(events.DECISION, {**payload, "status": "error"})
+                events.emit(events.NOTE, {"text": "Decision Oversight failed on a "
+                                          f"high-risk action ({verdict.error}); it was held, not run.",
+                                          "kind": "oversight_failed"})
+                return (
+                    self._held("DECISION REVIEW COULD NOT RUN.",
+                               f"The reviewer failed ({verdict.error}). This is a "
+                               "high-risk action, so it was NOT executed. Retry once "
+                               "the reviewer is reachable, or ask the user before "
+                               "running it."),
+                    "error",
+                )
+            events.emit(events.DECISION, {**payload, "status": "skipped"})
+            events.emit(events.NOTE, {"text": "Decision Oversight review failed and was "
+                                       f"skipped for a lower-risk action ({verdict.error}); "
+                                       "the tool permission layer still applies.",
+                                       "kind": "oversight_failed"})
+            return None
+
+        if verdict.verdict == "approve":
+            events.emit(events.DECISION, {**payload, "status": "approved"})
+            return None
+
+        # revise / clarify / escalate -> hold and hand back the reviewer's guidance
+        risks = ", ".join(verdict.risks) or "none stated"
+        if verdict.verdict == "revise":
+            body = (f"The reviewer says: {verdict.reasoning or '(no reason given)'}\n"
+                    f"Risks: {risks}\n"
+                    f"Required correction: {verdict.correction or '(none given)'}")
+            events.emit(events.DECISION, {**payload, "status": "revised", "correction": verdict.correction})
+            return self._held("DECISION REVIEW - revise before proceeding.", body), "revised"
+        if verdict.verdict == "clarify":
+            body = (f"The reviewer needs more evidence: {verdict.question or verdict.reasoning}\n"
+                    f"Risks: {risks}")
+            events.emit(events.DECISION, {**payload, "status": "clarify", "question": verdict.question})
+            return self._held("DECISION REVIEW - clarify before proceeding.", body), "clarify"
+        body = (f"The reviewer escalated: {verdict.reasoning}\nRisks: {risks}")
+        events.emit(events.DECISION, {**payload, "status": "escalated"})
+        self._stop_turn = True
+        return self._held("DECISION REVIEW - escalate to the user.", body), "escalated"
 
     def _announce_mode(self):
         """Put mode switches in the transcript, where the model will see them.
@@ -326,6 +463,8 @@ class Runner:
         self._turn_index = len(self.messages) - 1
         self._text_retries = 0
         self._text_calls = set()
+        self._review_log = {}
+        self._stop_turn = False
         for message in reversed(self.messages[:self._turn_index + 1]):
             if message.get("role") == "user" and not str(message.get("content") or "").startswith("<"):
                 self._turn_text = str(message.get("content") or "")
@@ -334,6 +473,15 @@ class Runner:
             if self.cancelled():
                 events.emit(events.NOTE, {"text": "stopped"})
                 return
+            if self._stop_turn:
+                # Oversight escalated and already told the coding agent to hand
+                # the decision to the user. Stop the turn safely rather than
+                # letting it grind through the same disagreement.
+                events.emit(events.NOTE, {
+                    "text": "the turn was stopped by Decision Oversight; the "
+                            "disagreement is above for you to resolve",
+                    "kind": "oversight_stopped"})
+                break
             injection = reminder()
             if self.mode == "plan":
                 injection["content"] += (
@@ -472,15 +620,26 @@ class Runner:
                     args = json.loads(tool_call.function.arguments)
                 except ValueError:
                     args = {}
+                review_marker = None
                 if self.mode == "plan" and name in ("write_file", "str_replace"):
                     result = f"Plan mode: read-only, no edits made. Describe the change instead of calling {name}."
                 else:
-                    # One call, one request, one execution: a replayed frame or
-                    # a re-entered stream replays the recorded result.
-                    args, result = execute(tool_call, note=(message.content or ""),
-                                           call_key=(request_id, call_id or index))
-                events.emit(events.TOOL_CALL, {"call_id": call_id, "name": name, "args": args, "nested": False})
-                events.emit(events.TOOL_RESULT, {"call_id": call_id, "name": name, "args": args, "result": result, "nested": False})
+                    # Decision oversight runs before, never after: it can hold a
+                    # significant action and hand the coding agent the reviewer's
+                    # guidance, but it never runs the tool itself and never
+                    # bypasses the permission layer an approved call still passes
+                    # through below.
+                    hold = self._review_gate(name, args, message)
+                    if hold is not None:
+                        result, review_marker = hold
+                    else:
+                        # One call, one request, one execution: a replayed frame or
+                        # a re-entered stream replays the recorded result.
+                        args, result = execute(tool_call, note=(message.content or ""),
+                                               call_key=(request_id, call_id or index))
+                extra = {"reviewed": review_marker} if review_marker else {}
+                events.emit(events.TOOL_CALL, {"call_id": call_id, "name": name, "args": args, "nested": False, **extra})
+                events.emit(events.TOOL_RESULT, {"call_id": call_id, "name": name, "args": args, "result": result, "nested": False, **extra})
                 if tool_call.function.name == "write_todos" and isinstance(args.get("todos"), list):
                     events.emit(events.TODOS, {"todos": args["todos"]})
 
@@ -490,6 +649,10 @@ class Runner:
                     "content": result,
                 })
                 session.save(self.messages)
+                if self._stop_turn:
+                    # A escalation in this message stops the rest of the batch and
+                    # the turn; the remaining calls were never run.
+                    break
 
         history.sweep()   # the turn is over: bin its temp files
         history.strip(self.messages)  # ...and shrink the tool output it produced
