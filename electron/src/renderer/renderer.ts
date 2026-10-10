@@ -225,6 +225,8 @@ let providerMigration: string[] = [];
 const providerById = new Map<string, ProviderEntry>();
 let settingsRequested = false;
 let settingsLastTab = "models";
+/* Set by the model form while it is open, so a rejected save can re-enable it. */
+let providerFormFailure: ((message: string) => void) | null = null;
 let activeApproval: { ctx: Ctx; id: string } | null = null;
 let pendingRewindCount: number | null = null;
 let popHideTimer: number | null = null;
@@ -1105,7 +1107,20 @@ function clearWorkspaceUI(ctx: Ctx): void {
 }
 
 /* ---------------- modal ---------------- */
-function showModal(html: string): void {
+/* What a backdrop click should do for the dialog currently showing.
+   "close" drops the dialog, "back-to-settings" returns to Settings (a nested
+   confirm or form over it), "keep" never closes (approvals answer with their
+   own buttons). A pick dialog also carries a cancel callback, because the
+   engine is waiting for an answer and closing without one hangs the turn. */
+type BackdropBehavior = "close" | "back-to-settings" | "keep";
+let modalBackdropBehavior: BackdropBehavior = "close";
+let modalBackdropCancel: (() => void) | null = null;
+/* A dialog with unsaved input registers a guard here: a backdrop click then
+   confirms before discarding, and "Keep editing" reopens it as it was. */
+interface ModalGuard { isDirty: () => boolean; restore: () => void; }
+let modalGuard: ModalGuard | null = null;
+
+function showModal(html: string, backdrop: BackdropBehavior = "close", onCancel?: () => void): void {
   modalBox.classList.remove("wide");
   modalBox.classList.remove("settings-modal");
   modalBox.style.width = "";
@@ -1113,16 +1128,66 @@ function showModal(html: string): void {
   modalBox.style.maxHeight = "";
   modalBox.style.height = "";
   modalBox.innerHTML = html;
+  modalBackdropBehavior = backdrop;
+  modalBackdropCancel = onCancel ?? null;
+  modalGuard = null;
+  providerFormFailure = null;
   modal.classList.remove("hidden");
 }
 function hideModal(): void {
   activeApproval = null;
   modal.classList.add("hidden");
   modalBox.innerHTML = "";
+  modalBackdropBehavior = "close";
+  modalBackdropCancel = null;
+  modalGuard = null;
 }
-function openRename(ctx: Ctx, item: SessionListItem): void {
+/* Run the action a backdrop click asked for, now that any dirty check passed. */
+function dismissModal(): void {
+  if (modalBackdropBehavior === "back-to-settings") { openSettings("models"); return; }
+  if (modalBackdropCancel) { const cancel = modalBackdropCancel; modalBackdropCancel = null; cancel(); return; }
+  hideModal();
+}
+/* Close on a backdrop click only when the press AND the release both land on
+   the backdrop: a drag that ends outside the dialog (text selection, a missed
+   button) must not throw the dialog away. Clicks inside the card never reach
+   this handler; the popovers and menus live outside the modal element. */
+function wireBackdrop(): void {
+  const backdrop = document.getElementById("modalBackdrop") as HTMLElement | null;
+  if (!backdrop) return;
+  let pressOnBackdrop = false;
+  backdrop.addEventListener("mousedown", (e) => { pressOnBackdrop = e.target === backdrop; });
+  backdrop.addEventListener("mouseup", (e) => {
+    if (!pressOnBackdrop || e.target !== backdrop) { pressOnBackdrop = false; return; }
+    pressOnBackdrop = false;
+    if (activeApproval) return;           // approvals answer with their own buttons
+    if (modalBackdropBehavior === "keep") return;
+    const guard = modalGuard;
+    if (guard?.isDirty()) { confirmDiscard(guard); return; }
+    dismissModal();
+  });
+}
+/* The smallest safeguard for a form with unsaved input: ask once, and only
+   when it is actually dirty. "Keep editing" puts the form back exactly as the
+   user left it; "Discard" runs the click that started this. */
+function confirmDiscard(guard: ModalGuard): void {
+  const behavior = modalBackdropBehavior;
+  const cancel = modalBackdropCancel;
   showModal(
-    `<h3>Rename session</h3><div class="field"><label>Title</label><input id="renameInput" maxlength="60" value="${escapeHtml(item.title)}" /></div>` +
+    `<h3>Discard changes?</h3><p>This form has unsaved changes.</p>` +
+      `<div class="modal-actions"><button class="btn" id="dKeep">Keep editing</button><button class="btn danger" id="dDiscard">Discard</button></div>`,
+    "keep",
+  );
+  el<HTMLButtonElement>("dKeep").onclick = () => guard.restore();
+  el<HTMLButtonElement>("dDiscard").onclick = () => {
+    modalBackdropBehavior = behavior;
+    modalBackdropCancel = cancel;
+    dismissModal();
+  };
+}
+function openRename(ctx: Ctx, item: SessionListItem, prefill?: string): void {
+  showModal(
+    `<h3>Rename session</h3><div class="field"><label>Title</label><input id="renameInput" maxlength="60" value="${escapeHtml(prefill ?? item.title)}" /></div>` +
       `<div class="modal-actions"><button class="btn" id="renameCancel">Cancel</button><button class="btn primary" id="renameSave">Save</button></div>`,
   );
   const input = el<HTMLInputElement>("renameInput");
@@ -1131,6 +1196,10 @@ function openRename(ctx: Ctx, item: SessionListItem): void {
   el<HTMLButtonElement>("renameSave").onclick = save;
   el<HTMLButtonElement>("renameCancel").onclick = hideModal;
   input.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") save(); };
+  modalGuard = {
+    isDirty: () => input.value.trim() !== item.title.trim(),
+    restore: () => openRename(ctx, item, input.value),
+  };
 }
 function openDelete(ctx: Ctx, item: SessionListItem): void {
   showModal(
@@ -1142,13 +1211,18 @@ function openDelete(ctx: Ctx, item: SessionListItem): void {
 }
 function askPick(ctx: Ctx, title: string, rows: string[], id: string): void {
   if (!rows.length) { send(ctx, { op: "pick_reply", id, index: null }); return; }
+  // The engine blocks until this is answered, so a backdrop click cancels the
+  // pick instead of dropping the dialog and leaving the turn waiting.
+  const cancel = (): void => { send(ctx, { op: "pick_reply", id, index: null }); hideModal(); };
   showModal(
     `<h3>${escapeHtml(title || "Choose one")}</h3>` +
       `<div class="pick-list">${rows.map((r, i) => `<button class="pick-item" data-i="${i}">${escapeHtml(r)}</button>`).join("")}</div>` +
       `<div class="modal-actions"><button class="btn" id="mCancel">Cancel</button></div>`,
+    "close",
+    cancel,
   );
   modalBox.querySelectorAll<HTMLButtonElement>(".pick-item").forEach((btn) => { btn.onclick = () => { send(ctx, { op: "pick_reply", id, index: Number(btn.dataset["i"]) }); hideModal(); }; });
-  el<HTMLButtonElement>("mCancel").onclick = () => { send(ctx, { op: "pick_reply", id, index: null }); hideModal(); };
+  el<HTMLButtonElement>("mCancel").onclick = cancel;
 }
 
 /* ---------------- approval (keyboard-first) ---------------- */
@@ -1164,6 +1238,7 @@ function askApproval(ctx: Ctx, id: string, reason: string, tool = "", command = 
     `<h3>Permission required</h3>${rows.join("")}` +
       `<div class="perm-hint">Enter to allow · Esc to deny</div>` +
       `<div class="modal-actions"><button class="btn danger" id="mDeny">Deny</button><button class="btn primary" id="mAllow">Allow</button></div>`,
+    "keep",
   );
   const allow = el<HTMLButtonElement>("mAllow");
   allow.onclick = () => resolveApproval(ctx, id, true);
@@ -1208,13 +1283,16 @@ function openRewindConfirm(count: number, changes: Array<{ path: string; action:
 function askBranchConfirm(ctx: Ctx, text: string): void {
   ctx.pendingText = text;
   const def = ctx.gitInfo.default_branch || "main";
+  const cancel = (): void => { ctx.pendingText = null; hideModal(); setActivity("cancelled - not on a safe branch"); };
   showModal(
     `<h3>Direct edit on ${escapeHtml(ctx.gitInfo.branch)}?</h3><p>You are on <b>${escapeHtml(ctx.gitInfo.branch)}</b>, the default branch${def !== ctx.gitInfo.branch ? ` (<b>${escapeHtml(def)}</b>)` : ""}. Edits here go straight onto it.</p>` +
       `<div class="modal-actions"><button class="btn" id="bCancel">Cancel</button><button class="btn" id="bBranch">New branch…</button><button class="btn primary" id="bDirect">Edit directly</button></div>`,
+    "close",
+    cancel,
   );
   el<HTMLButtonElement>("bDirect").onclick = () => { ctx.branchAck = ctx.gitInfo.branch; const t = ctx.pendingText; ctx.pendingText = null; hideModal(); if (t !== null) doSubmit(ctx, t); };
   el<HTMLButtonElement>("bBranch").onclick = () => askBranchName(ctx);
-  el<HTMLButtonElement>("bCancel").onclick = () => { ctx.pendingText = null; hideModal(); setActivity("cancelled - not on a safe branch"); };
+  el<HTMLButtonElement>("bCancel").onclick = cancel;
 }
 function askBranchName(ctx: Ctx): void {
   const suggestion = `harness/${new Date().toISOString().slice(0, 10)}`;
@@ -1435,6 +1513,14 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         syncEffortFromModel(ctx);
       }
       send(ctx, { op: "list_providers" });
+    } else if (msg.reply === "save_provider") {
+      // The form stays open and usable: show why the save was refused rather
+      // than leaving a dead Save button and a Settings dialog on top of it.
+      settingsRequested = false;
+      const showFailure = providerFormFailure;
+      providerFormFailure = null;
+      if (showFailure) showFailure(String(msg.error ?? "the model could not be saved"));
+      else if (ctx === activeCtx) setActivity(`save failed: ${String(msg.error ?? "unknown")}`);
     } else if (ctx === activeCtx) setActivity(`provider change failed: ${String(msg.error ?? "unknown")}`);
   } else if (msg.reply === "retry") {
     if (msg.ok) { setBusy(ctx, true); showThinking(ctx); }
@@ -1621,13 +1707,39 @@ function modelTags(entry: ProviderEntry, active: boolean): string {
   tags.push(active ? `<span class="tag active">active</span>` : "");
   if (entry.reasoning_effort) tags.push(`<span class="tag">effort ${escapeHtml(String(entry.reasoning_effort))}</span>`);
   if (entry.context_window) tags.push(`<span class="tag">${Math.round(Number(entry.context_window) / 1000)}k ctx</span>`);
-  if (entry.supports_tools === false) tags.push(`<span class="tag">no tools</span>`);
+  // Tool capability is a per-model fact, so it is always shown - not just when
+  // something is off - because "no chip" is indistinguishable from "unknown".
+  if (entry.supports_tools === false) {
+    tags.push(`<span class="tag" title="This model rejects the tools parameter">no tools</span>`);
+  } else {
+    tags.push(`<span class="tag" title="Native tool calling is enabled for this model">tools</span>`);
+  }
+  if (entry.supports_text_tools) {
+    tags.push(`<span class="tag" title="XML text tool calls are parsed and validated">text calls</span>`);
+  }
   if (entry.disabled) tags.push(`<span class="tag disabled">disabled</span>`);
   return tags.filter(Boolean).join(" ");
 }
 /* The provider + model editor. One provider may hold many models, so adding
-   a model to an existing provider is the default path. */
-function providerForm(existing?: ProviderEntry, groupId?: string): void {
+   a model to an existing provider is the default path. Required fields are
+   marked with an asterisk and validated inline on submit; the key is never
+   required (a local endpoint needs none). */
+interface ProviderFormSnapshot {
+  values: Record<string, string>;
+  tools: boolean;
+  reasoning: boolean;
+}
+const PROVIDER_FORM_FIELDS = ["fProvider", "fProviderName", "fBase", "fName", "fModel", "fKey", "fEffort", "fTemp", "fCtx", "fMax", "fExtra"];
+function snapshotProviderForm(): ProviderFormSnapshot {
+  const values: Record<string, string> = {};
+  for (const id of PROVIDER_FORM_FIELDS) {
+    const node = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+    if (node) values[id] = node.value;
+  }
+  const on = (id: string): boolean => document.getElementById(id)?.classList.contains("on") ?? false;
+  return { values, tools: on("swTools"), reasoning: on("swReason") };
+}
+function providerForm(existing?: ProviderEntry, groupId?: string, restore?: ProviderFormSnapshot): void {
   const e: Partial<ProviderEntry> = existing ?? {};
   const opts = ["default", "low", "medium", "high", "xhigh"];
   const group = groupId ? providerGroups.find((g) => g.id === groupId) : null;
@@ -1638,25 +1750,28 @@ function providerForm(existing?: ProviderEntry, groupId?: string): void {
   const showNewProvider = isNewModel && !group;
   const keyLabel = existing
     ? (providerStatuses[existing.id]?.key === "keyring" ? "saved key - leave blank to keep" : "no key stored - paste one")
-    : "paste API key";
+    : "paste API key (optional)";
   showModal(
     `<h3>${existing ? "Edit model" : "Add model"}</h3>` +
       `<div class="field"><label>Provider</label><select id="fProvider">${providerOptionsHtml}</select></div>` +
       `<div id="fNewProviderBlock"${showNewProvider ? "" : ' class="hidden"'}>` +
       `<div class="field"><label>Provider name</label><input id="fProviderName" value="${escapeHtml(group?.name ?? "")}" placeholder="NVIDIA, OpenRouter, …" /></div>` +
-      `<div class="field"><label>Base URL</label><input id="fBase" value="${escapeHtml(group?.base_url ?? "https://")}" placeholder="https://api.example.com/v1" /></div>` +
+      `<div class="field"><label>Base URL <span class="req">*</span></label><input id="fBase" value="${escapeHtml(group?.base_url ?? "https://")}" placeholder="https://api.example.com/v1" aria-describedby="fBaseErr" /><div class="field-err" id="fBaseErr" role="alert" hidden></div></div>` +
       `</div>` +
       `<div class="field"><label>Display name</label><input id="fName" value="${escapeHtml(String(e["name"] ?? ""))}" placeholder="GLM 5.3 Flash" /></div>` +
-      `<div class="field"><label>Model id</label><input id="fModel" value="${escapeHtml(String(e["model"] ?? ""))}" placeholder="glm-5.3-flash" /></div>` +
+      `<div class="field"><label>Model id <span class="req">*</span></label><input id="fModel" value="${escapeHtml(String(e["model"] ?? ""))}" placeholder="glm-5.3-flash" aria-describedby="fModelErr" /><div class="field-err" id="fModelErr" role="alert" hidden></div></div>` +
       `<div class="field"><label>API key</label><input id="fKey" type="password" value="" placeholder="${keyLabel}" /></div>` +
       `<div class="form-grid"><div class="field"><label>Reasoning effort</label><select id="fEffort">${opts.map((x) => `<option${String(e["reasoning_effort"] ?? "default") === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>` +
-      `<div class="field"><label>Temperature</label><input id="fTemp" value="${e["temperature"] === null || e["temperature"] === undefined ? "" : escapeHtml(String(e["temperature"]))}" placeholder="default" /></div></div>` +
-      `<div class="form-grid"><div class="field"><label>Context window (tokens)</label><input id="fCtx" value="${e["context_window"] ? escapeHtml(String(e["context_window"])) : ""}" placeholder="provider default" /></div>` +
-      `<div class="field"><label>Max output tokens</label><input id="fMax" value="${e["max_output_tokens"] ? escapeHtml(String(e["max_output_tokens"])) : ""}" placeholder="no limit" /></div></div>` +
+      `<div class="field"><label>Temperature</label><input id="fTemp" value="${e["temperature"] === null || e["temperature"] === undefined ? "" : escapeHtml(String(e["temperature"]))}" placeholder="default" aria-describedby="fTempErr" /><div class="field-err" id="fTempErr" role="alert" hidden></div></div></div>` +
+      `<div class="form-grid"><div class="field"><label>Context window (tokens)</label><input id="fCtx" value="${e["context_window"] ? escapeHtml(String(e["context_window"])) : ""}" placeholder="provider default" aria-describedby="fCtxErr" /><div class="field-err" id="fCtxErr" role="alert" hidden></div></div>` +
+      `<div class="field"><label>Max output tokens</label><input id="fMax" value="${e["max_output_tokens"] ? escapeHtml(String(e["max_output_tokens"])) : ""}" placeholder="no limit" aria-describedby="fMaxErr" /><div class="field-err" id="fMaxErr" role="alert" hidden></div></div></div>` +
       `<div class="set-row"><div class="set-info"><div class="set-label">Tool calling</div><div class="set-desc">Turn off for models that reject the tools parameter.</div></div><div class="set-ctl"><span id="swTools"></span><span class="set-desc" id="toolsState"></span></div></div>` +
       `<div class="set-row"><div class="set-info"><div class="set-label">Reasoning effort parameter</div><div class="set-desc">Turn off for models without a reasoning knob.</div></div><div class="set-ctl"><span id="swReason"></span></div></div>` +
-      `<div class="field"><label>Extra parameters (JSON)</label><input id="fExtra" value="${escapeHtml(Object.keys(e["extra_params"] ?? {}).length ? JSON.stringify(e["extra_params"]) : "")}" placeholder='{"top_p":0.9}' /></div>` +
+      `<div class="field"><label>Extra parameters (JSON)</label><input id="fExtra" value="${escapeHtml(Object.keys(e["extra_params"] ?? {}).length ? JSON.stringify(e["extra_params"]) : "")}" placeholder='{"top_p":0.9}' aria-describedby="fExtraErr" /><div class="field-err" id="fExtraErr" role="alert" hidden></div></div>` +
+      `<div class="field-note"><span class="req">*</span> required</div>` +
+      `<div class="field-err" id="fFormErr" role="alert" hidden></div>` +
       `<div class="modal-actions"><button class="btn" id="fBack">Back</button><button class="btn primary" id="fSave">Save model</button></div>`,
+    "back-to-settings",
   );
   const providerSelect = el<HTMLSelectElement>("fProvider");
   const newBlock = el<HTMLDivElement>("fNewProviderBlock");
@@ -1671,47 +1786,143 @@ function providerForm(existing?: ProviderEntry, groupId?: string): void {
   wireSwitch(modalBox, "swReason", reasoning, () => { /* no label needed */ });
   describeTools(tools);
   el<HTMLButtonElement>("fBack").onclick = () => { settingsRequested = true; settingsLastTab = "models"; send(ensureAppCtx(), { op: "list_providers" }); };
-  el<HTMLButtonElement>("fSave").onclick = () => {
-    const name = el<HTMLInputElement>("fName").value.trim();
-    const model = el<HTMLInputElement>("fModel").value.trim();
-    if (!model) { setActivity("a model id is required"); return; }
-    const picked = providerSelect.value;
-    let entry: Record<string, unknown>;
-    if (picked) {
-      const target = providerGroups.find((g) => g.id === picked);
-      entry = { id: existing?.id ?? "", provider_id: picked, provider_name: target?.name ?? "", name, model };
-    } else {
-      const base = el<HTMLInputElement>("fBase").value.trim();
-      if (!base) { setActivity("a base URL is required for a new provider"); return; }
-      const pname = el<HTMLInputElement>("fProviderName").value.trim() || base;
-      entry = { id: existing?.id ?? "", provider_id: base, provider_name: pname, name, model, base_url: base };
+
+  /* "Keep editing" reopens the form as the user left it, switches included. */
+  if (restore) {
+    for (const [id, value] of Object.entries(restore.values)) {
+      const node = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+      if (node) node.value = value;
     }
-    const effort = el<HTMLSelectElement>("fEffort").value;
+    toggleNewBlock();
+    const toolsSwitch = el<HTMLElement>("swTools");
+    toolsSwitch.classList.toggle("on", restore.tools);
+    toolsSwitch.setAttribute("aria-checked", String(restore.tools));
+    describeTools(restore.tools);
+    const reasonSwitch = el<HTMLElement>("swReason");
+    reasonSwitch.classList.toggle("on", restore.reasoning);
+    reasonSwitch.setAttribute("aria-checked", String(restore.reasoning));
+  }
+  const initialForm = snapshotProviderForm();
+
+  /* --- validation: one path for Enter and the button --- */
+  const showErr = (input: HTMLInputElement, errId: string, message: string): void => {
+    input.setAttribute("aria-invalid", "true");
+    input.classList.add("invalid");
+    const box = document.getElementById(errId);
+    if (box) { box.textContent = message; box.hidden = false; }
+  };
+  const clearErr = (input: HTMLInputElement, errId: string): void => {
+    input.removeAttribute("aria-invalid");
+    input.classList.remove("invalid");
+    const box = document.getElementById(errId);
+    if (box) { box.textContent = ""; box.hidden = true; }
+  };
+  const clearFormErr = (): void => {
+    const box = document.getElementById("fFormErr");
+    if (box) { box.textContent = ""; box.hidden = true; }
+  };
+  for (const [inputId, errId] of [["fBase", "fBaseErr"], ["fModel", "fModelErr"], ["fTemp", "fTempErr"], ["fCtx", "fCtxErr"], ["fMax", "fMaxErr"], ["fExtra", "fExtraErr"]] as const) {
+    const input = el<HTMLInputElement>(inputId);
+    input.addEventListener("input", () => { clearErr(input, errId); clearFormErr(); });
+  }
+  let submitting = false;
+
+  const save = (): void => {
+    if (submitting) return;
+    const modelInput = el<HTMLInputElement>("fModel");
+    const name = el<HTMLInputElement>("fName").value.trim();
+    const model = modelInput.value.trim();
+    const picked = providerSelect.value;
+    const wantsNewProvider = !picked;
+    const baseInput = el<HTMLInputElement>("fBase");
+    const base = baseInput.value.trim();
+
+    const problems: Array<[HTMLInputElement, string, string]> = [];
+    if (!model) problems.push([modelInput, "fModelErr", "Model id is required."]);
+    if (wantsNewProvider) {
+      if (!base) problems.push([baseInput, "fBaseErr", "API endpoint is required for a new provider."]);
+      else if (!/^https?:\/\/\S+$/i.test(base)) problems.push([baseInput, "fBaseErr", "API endpoint must be a http(s) URL."]);
+    }
+    // A model id has to be unique inside its provider: two identical rows are
+    // indistinguishable in the picker and in the request path.
+    const targetGroupId = picked || base;
+    if (model && targetGroupId) {
+      const twin = providerModels.find((m) => m.provider_id === targetGroupId && m.model === model && m.id !== (existing?.id ?? ""));
+      if (twin) problems.push([modelInput, "fModelErr", `A model with id "${model}" already exists in this provider.`]);
+    }
     const temp = el<HTMLInputElement>("fTemp").value.trim();
+    const tempInput = el<HTMLInputElement>("fTemp");
+    if (temp && (Number.isNaN(Number(temp)) || Number(temp) < 0 || Number(temp) > 2)) problems.push([tempInput, "fTempErr", "Temperature must be a number between 0 and 2."]);
     const ctxWindow = el<HTMLInputElement>("fCtx").value.trim();
+    const ctxInput = el<HTMLInputElement>("fCtx");
+    if (ctxWindow && (Number.isNaN(Number(ctxWindow)) || Number(ctxWindow) <= 0)) problems.push([ctxInput, "fCtxErr", "Context window must be a positive number of tokens."]);
     const maxOut = el<HTMLInputElement>("fMax").value.trim();
+    const maxInput = el<HTMLInputElement>("fMax");
+    if (maxOut && (Number.isNaN(Number(maxOut)) || Number(maxOut) <= 0)) problems.push([maxInput, "fMaxErr", "Max output tokens must be a positive number."]);
     const extra = el<HTMLInputElement>("fExtra").value.trim();
+    const extraInput = el<HTMLInputElement>("fExtra");
     let extraParams: Record<string, string | number | boolean | null> = {};
     if (extra) {
       try {
         const parsed = JSON.parse(extra) as unknown;
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) extraParams = parsed as Record<string, string | number | boolean | null>;
-        else { setActivity("extra parameters must be a JSON object"); return; }
-      } catch { setActivity("extra parameters are not valid JSON"); return; }
+        else problems.push([extraInput, "fExtraErr", "Extra parameters must be a JSON object."]);
+      } catch { problems.push([extraInput, "fExtraErr", "Extra parameters are not valid JSON."]); }
+    }
+    if (problems.length) {
+      for (const [input, errId, message] of problems) showErr(input, errId, message);
+      problems[0][0].focus();
+      return;
+    }
+    let entry: Record<string, unknown>;
+    if (picked) {
+      const target = providerGroups.find((g) => g.id === picked);
+      entry = { id: existing?.id ?? "", provider_id: picked, provider_name: target?.name ?? "", name, model };
+    } else {
+      const pname = el<HTMLInputElement>("fProviderName").value.trim() || base;
+      entry = { id: existing?.id ?? "", provider_id: base, provider_name: pname, name, model, base_url: base };
     }
     Object.assign(entry, {
-      reasoning_effort: effort === "default" ? null : effort,
+      reasoning_effort: el<HTMLSelectElement>("fEffort").value === "default" ? null : el<HTMLSelectElement>("fEffort").value,
       temperature: temp || null,
       context_window: ctxWindow || null,
       max_output_tokens: maxOut || null,
-      supports_tools: tools,
-      supports_reasoning: reasoning,
+      // Read the switches now, not at render time, or a toggle would be lost.
+      supports_tools: el<HTMLElement>("swTools").classList.contains("on"),
+      supports_reasoning: el<HTMLElement>("swReason").classList.contains("on"),
       extra_params: extraParams,
     });
     const key = el<HTMLInputElement>("fKey").value.trim();
+    clearFormErr();
+    submitting = true;
+    const saveBtn = el<HTMLButtonElement>("fSave");
+    saveBtn.disabled = true;
     settingsRequested = true;
     settingsLastTab = "models";
     send(ensureAppCtx(), { op: "save_provider", entry: entry as unknown as ProviderEntry, key: key || undefined });
+  };
+  /* A rejected save (a duplicate the backend caught) comes back here instead of
+     leaving the form disabled forever. */
+  providerFormFailure = (message: string) => {
+    submitting = false;
+    const saveBtn = el<HTMLButtonElement>("fSave");
+    if (saveBtn) saveBtn.disabled = false;
+    const box = document.getElementById("fFormErr");
+    if (box) { box.textContent = message; box.hidden = false; }
+    const input = el<HTMLInputElement>("fModel");
+    if (input) input.focus();
+  };
+  el<HTMLButtonElement>("fSave").onclick = save;
+  modalBox.querySelectorAll<HTMLInputElement>("#fModel, #fBase, #fProviderName, #fKey, #fTemp, #fCtx, #fMax, #fExtra").forEach((input) => {
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" || ev.shiftKey || ev.isComposing) return;
+      ev.preventDefault();
+      save();
+    });
+  });
+  modalGuard = {
+    isDirty: () => JSON.stringify(snapshotProviderForm()) !== JSON.stringify(initialForm),
+    restore: () => providerForm(existing, groupId, snapshotProviderForm()),
   };
 }
 const SETTINGS_TABS = [
@@ -1723,17 +1934,14 @@ const SETTINGS_TABS = [
 ];
 function openSettings(tab = settingsLastTab): void {
   settingsLastTab = tab;
-  modalBox.classList.add("settings-modal");
-  // Force a compact, fixed dialog size inline so no other rule can stretch it.
-  modalBox.style.width = "700px";
-  modalBox.style.maxWidth = "92vw";
-  modalBox.style.maxHeight = "72vh";
-  modalBox.style.height = "auto";
-  modalBox.innerHTML =
+  // showModal resets the size and the backdrop behaviour, so a stale setting
+  // from a dialog that was just closed cannot leak into Settings.
+  showModal(
     `<div class="modal-head"><h3>Settings</h3><button class="icon-btn small" id="setClose" aria-label="Close">${ICONS.close}</button></div>` +
-    `<div class="settings"><nav class="settings-nav">${SETTINGS_TABS.map((t) => `<button class="sn-item ${t.id === tab ? "active" : ""}" data-nav="${t.id}">${t.icon}<span>${t.label}</span></button>`).join("")}</nav>` +
-    `<div class="settings-body" id="settingsBody"><div class="settings-panel"></div></div></div>`;
-  modal.classList.remove("hidden");
+      `<div class="settings"><nav class="settings-nav">${SETTINGS_TABS.map((t) => `<button class="sn-item ${t.id === tab ? "active" : ""}" data-nav="${t.id}">${t.icon}<span>${t.label}</span></button>`).join("")}</nav>` +
+      `<div class="settings-body" id="settingsBody"><div class="settings-panel"></div></div></div>`,
+  );
+  modalBox.classList.add("settings-modal");   // width/height come from the CSS class
   el<HTMLButtonElement>("setClose").onclick = hideModal;
   modalBox.querySelectorAll<HTMLElement>("[data-nav]").forEach((b) => { b.onclick = () => openSettings(b.dataset["nav"] ?? "models"); });
   const [html, wire] = settingsPanel(tab);
@@ -1771,8 +1979,9 @@ function settingsModels(): [string, () => void] {
       const entry = providerById.get(model.id);
       if (!entry) return "";
       const active = entry.id === providerActiveModelId;
-      return `<tr><td class="p-name">${escapeHtml(entry.name || entry.model)}</td>` +
-        `<td class="p-model">${escapeHtml(entry.model || "")}</td>` +
+      const displayName = entry.name || entry.model;
+      return `<tr><td class="p-name" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</td>` +
+        `<td class="p-model" title="${escapeHtml(entry.model || "")}">${escapeHtml(entry.model || "")}</td>` +
         `<td>${modelTags(entry, active)}</td>` +
         `<td><div class="prov-actions"><button class="btn small ${active ? "" : "primary"}" data-act="${escapeHtml(entry.id)}">Use</button> ` +
         `<button class="btn small" data-test="${escapeHtml(entry.id)}">Test</button> ` +
@@ -1786,7 +1995,7 @@ function settingsModels(): [string, () => void] {
       `<span class="prov-actions"><button class="btn small" data-addmodel="${escapeHtml(group.id)}">Add model</button>` +
       `<button class="btn small" data-test="${escapeHtml(group.id)}">Test</button>` +
       `<button class="btn small danger" data-delgroup="${escapeHtml(group.id)}">Delete provider</button></span></div>` +
-      (rows ? `<table class="prov-table"><colgroup><col style="width:26%"><col style="width:31%"><col style="width:22%"><col style="width:21%"></colgroup><thead><tr><th>Model</th><th>Model id</th><th>Settings</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="panel-empty">No models in this provider yet.</div>`) +
+      (rows ? `<table class="prov-table"><colgroup><col style="width:18%"><col style="width:28%"><col style="width:28%"><col style="width:26%"></colgroup><thead><tr><th>Model</th><th>Model id</th><th>Settings</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="panel-empty">No models in this provider yet.</div>`) +
       `</div>`;
   }).join("");
   const html =
@@ -1814,7 +2023,7 @@ function settingsModels(): [string, () => void] {
       (b as HTMLButtonElement).onclick = () => {
         const id = (b as HTMLElement).dataset["del"] ?? "";
         const model = providerById.get(id);
-        showModal(`<h3>Delete model</h3><p>Delete <b>${escapeHtml(model?.name ?? id)}</b>? The provider and its other models stay.</p><div class="modal-actions"><button class="btn" id="pdCancel">Cancel</button><button class="btn danger" id="pdOk">Delete</button></div>`);
+        showModal(`<h3>Delete model</h3><p>Delete <b>${escapeHtml(model?.name ?? id)}</b>? The provider and its other models stay.</p><div class="modal-actions"><button class="btn" id="pdCancel">Cancel</button><button class="btn danger" id="pdOk">Delete</button></div>`, "back-to-settings");
         el<HTMLButtonElement>("pdOk").onclick = () => { settingsRequested = true; send(ensureAppCtx(), { op: "delete_provider", id, scope: "model" }); };
         el<HTMLButtonElement>("pdCancel").onclick = () => openSettings("models");
       };
@@ -1823,7 +2032,7 @@ function settingsModels(): [string, () => void] {
       (b as HTMLButtonElement).onclick = () => {
         const id = (b as HTMLElement).dataset["delgroup"] ?? "";
         const group = providerGroups.find((g) => g.id === id);
-        showModal(`<h3>Delete provider</h3><p>Delete <b>${escapeHtml(group?.name ?? id)}</b> and its ${group?.models.length ?? 0} model(s)? Stored keys are removed too.</p><div class="modal-actions"><button class="btn" id="pgCancel">Cancel</button><button class="btn danger" id="pgOk">Delete</button></div>`);
+        showModal(`<h3>Delete provider</h3><p>Delete <b>${escapeHtml(group?.name ?? id)}</b> and its ${group?.models.length ?? 0} model(s)? Stored keys are removed too.</p><div class="modal-actions"><button class="btn" id="pgCancel">Cancel</button><button class="btn danger" id="pgOk">Delete</button></div>`, "back-to-settings");
         el<HTMLButtonElement>("pgOk").onclick = () => { settingsRequested = true; send(ensureAppCtx(), { op: "delete_provider", id, scope: "provider" }); };
         el<HTMLButtonElement>("pgCancel").onclick = () => openSettings("models");
       };
@@ -1930,6 +2139,7 @@ providerBtn.onclick = (e) => {
 };
 
 document.addEventListener("click", (e) => { closeAllMenus(); const t = e.target as HTMLElement; if (contextMenu && !contextMenu.contains(t)) hideContextMenu(); });
+wireBackdrop();
 document.addEventListener("keydown", (e) => {
   if (activeApproval) {
     if (e.key === "Enter") { e.preventDefault(); resolveApproval(activeApproval.ctx, activeApproval.id, true); }

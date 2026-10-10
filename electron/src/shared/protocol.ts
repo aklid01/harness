@@ -22,6 +22,7 @@ export interface ModelEntry {
   max_output_tokens?: number | null;
   supports_tools?: boolean;
   supports_reasoning?: boolean;
+  supports_text_tools?: boolean;
   extra_params?: Record<string, string | number | boolean | null>;
   disabled?: boolean;
 }
