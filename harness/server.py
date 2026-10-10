@@ -894,7 +894,12 @@ class Harness:
             }}
         if op == "save_provider":
             entry = obj.get("entry", {})
-            stored = providers_mod.save_provider(entry)
+            try:
+                stored = providers_mod.save_provider(entry)
+            except ValueError as conflict:
+                # A duplicate model id is a user mistake, not a crash: report it
+                # so the form can point at the field instead of dying.
+                return {"reply": op, "ok": False, "error": str(conflict)}
             if obj.get("key"):
                 providers_mod.set_key(stored["id"], obj["key"])
             if not providers_mod.get_active_id():

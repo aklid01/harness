@@ -291,6 +291,32 @@ class ToolFlowCase(unittest.TestCase):
         for expected in ("bash", "read_file", "write_file", "str_replace", "task"):
             self.assertIn(expected, names)
 
+    def test_no_tools_at_all_is_told_to_the_model_and_the_user(self):
+        """The one case where 'no tools are available' is true: say it plainly."""
+        self.use("plain")
+        with mock.patch("harness.tools.available_tool_names", return_value=[]), \
+                mock.patch("harness.tools.tool_schemas", return_value=[]), \
+                mock.patch("harness.tools.unavailable_summary",
+                           return_value="bash: no shell was found on PATH"):
+            self.run_turn()
+        payloads = self.requests()
+        self.assertNotIn("tools", payloads[0], "nothing to advertise")
+        last = payloads[0]["messages"][-1]["content"]
+        self.assertIn("No tools are available", last)
+        self.assertIn("no shell was found on PATH", last)
+        notes = [p for t, p in self.seen
+                 if t == events.NOTE and p.get("kind") == "tools_unavailable"]
+        self.assertTrue(notes, "the user must be told why, not left guessing")
+
+    def test_tools_available_means_no_honesty_note(self):
+        self.use("plain")
+        self.run_turn()
+        payloads = self.requests()
+        self.assertIn("tools", payloads[0])
+        notes = [p for t, p in self.seen
+                 if t == events.NOTE and p.get("kind") == "tools_unavailable"]
+        self.assertEqual(notes, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

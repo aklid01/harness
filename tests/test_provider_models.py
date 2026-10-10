@@ -228,6 +228,60 @@ class ModelCase(unittest.TestCase):
         self.assertTrue(report)
         self.assertIn("providers.json.bak", report[0])
 
+    def test_migration_report_counts_the_migration_not_the_live_registry(self):
+        self.write(LEGACY)
+        providers.list_providers()
+        providers.set_active(providers.list_providers()[1]["id"])   # writes the backup
+        first = providers.migration_report()[0]
+        self.assertIn("moved 2 legacy entries into 2 model(s) under 2 provider(s)", first)
+
+    def test_migration_report_is_shown_once(self):
+        self.write(LEGACY)
+        providers.list_providers()
+        providers.set_active(providers.list_providers()[1]["id"])
+        self.assertTrue(providers.migration_report(), "the first read shows the note")
+        self.assertEqual(providers.migration_report(), [], "it must not reappear on every launch")
+
+    def test_adding_models_after_migration_does_not_inflate_the_report(self):
+        self.write(LEGACY)
+        providers.list_providers()
+        providers.set_active(providers.list_providers()[1]["id"])
+        group = providers.list_groups()[0]["id"]
+        providers.save_model({"id": "mdl-new", "name": "New", "model": "new-model"}, group)
+        providers.save_model({"id": "mdl-new2", "name": "New 2", "model": "new-model-2"}, group)
+        report = providers.migration_report()[0]
+        self.assertIn("moved 2 legacy entries into 2 model(s) under 2 provider(s)", report)
+
+    def test_a_duplicate_model_id_in_one_provider_is_refused(self):
+        providers.save_group(self.group())
+        self.model("mdl-a", "GLM 5.3 Flash", "glm-5.3-flash")
+        with self.assertRaises(ValueError) as caught:
+            self.model("mdl-b", "GLM again", "glm-5.3-flash")
+        self.assertIn("glm-5.3-flash", str(caught.exception))
+        # the refusal must not have created the second model
+        self.assertEqual(len(providers.list_models("grp-1")), 1)
+
+    def test_the_same_model_id_under_two_providers_is_allowed(self):
+        providers.save_group(self.group("grp-1", "A", "https://a/v1"))
+        providers.save_group(self.group("grp-2", "B", "https://b/v1"))
+        self.model("mdl-a", "Flash", "same-id", "grp-1")
+        self.model("mdl-b", "Flash", "same-id", "grp-2")
+        self.assertEqual(len(providers.list_models()), 2)
+
+    def test_editing_a_model_onto_a_sibling_id_is_refused(self):
+        providers.save_group(self.group())
+        self.model("mdl-a", "One", "model-one")
+        self.model("mdl-b", "Two", "model-two")
+        with self.assertRaises(ValueError):
+            providers.save_model({"id": "mdl-b", "name": "Two", "model": "model-one"}, "grp-1")
+        self.assertEqual(providers.get_model("mdl-b")["model"], "model-two")
+
+    def test_editing_a_model_keeping_its_own_id_is_fine(self):
+        providers.save_group(self.group())
+        self.model("mdl-a", "One", "model-one")
+        providers.save_model({"id": "mdl-a", "name": "One renamed", "model": "model-one"}, "grp-1")
+        self.assertEqual(providers.get_model("mdl-a")["name"], "One renamed")
+
     def test_flat_save_still_works_like_the_old_format(self):
         providers.save_provider({"id": "p1", "name": "P1", "base_url": "https://x/v1", "model": "m"})
         self.assertEqual(providers.get_active_id(), "p1")

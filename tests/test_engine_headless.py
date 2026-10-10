@@ -222,5 +222,29 @@ class EngineCase(unittest.TestCase):
         self.assertLess(bodies.index(PLAN_NOTICE), bodies.index(BUILD_NOTICE))
 
 
+class ContextHonestyCase(unittest.TestCase):
+    """The env block tells the truth about git, in both kinds of workspace."""
+
+    def tearDown(self):
+        todos.TODOS[:] = []
+
+    def test_a_plain_folder_is_reported_as_not_a_repo(self):
+        from harness import context
+
+        with mock.patch.object(context, "is_git_worktree", return_value=False):
+            body = context.reminder()["content"]
+        self.assertIn("not a git repository", body)
+        self.assertNotIn("git branch:", body)
+
+    def test_a_repo_reports_its_branch(self):
+        from harness import context
+
+        with mock.patch.object(context, "is_git_worktree", return_value=True), \
+                mock.patch.object(context, "git", return_value="feature/x\n"), \
+                mock.patch.object(context, "changes_note", return_value=""):
+            body = context.reminder()["content"]
+        self.assertIn("git branch: feature/x", body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

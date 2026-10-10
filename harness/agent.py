@@ -163,6 +163,31 @@ class Runner:
             "</system-reminder>"
         )
 
+    def _tools_honesty(self, injection):
+        """When this session can run no tools at all, say so - both ways.
+
+        The model must not be told tools exist when they do not, and the user
+        must hear why. Only fires when the list is genuinely empty, so a
+        single missing dependency never produces this note.
+        """
+        from . import tools as tools_module
+
+        if not providers.active_model_capabilities().get("supports_tools", True):
+            return
+        if tools_module.available_tool_names():
+            return
+        why = tools_module.unavailable_summary() or "none of the tools could start"
+        injection["content"] += (
+            "\n<system-reminder>\n"
+            "No tools are available in this session. Do not attempt tool calls; "
+            f"answer in plain text. Reasons: {why}\n"
+            "</system-reminder>"
+        )
+        events.emit(events.NOTE, {
+            "text": f"no tools are available in this session: {why}",
+            "kind": "tools_unavailable",
+        })
+
     def _turn(self):
         self._announce_mode()
         # The user message that opened this turn, so a retry resumes from it
@@ -185,6 +210,7 @@ class Runner:
                     "propose concrete changes, but do NOT call write_file or "
                     "str_replace - they are blocked and this turn will be wasted.\n</mode>"
                 )
+            self._tools_honesty(injection)
             events.emit(events.INJECTION, {"content": injection["content"]})
 
             # Assemble the request separately from the stored history, so a

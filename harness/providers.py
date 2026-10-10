@@ -522,6 +522,18 @@ def save_model(model, group_id=None):
             target_group = _find_group(data, target_group["id"])
         target = None
 
+    # Two models with the same model id inside one provider are the same
+    # configuration twice: the second would be indistinguishable in the
+    # picker and in the request path. Refuse it instead of creating it.
+    wanted_model = _text(model.get("model"))
+    if wanted_model:
+        self_id = target["id"] if target is not None else model_id
+        clash = next((m for m in target_group["models"]
+                      if m.get("model") == wanted_model and m["id"] != self_id), None)
+        if clash is not None:
+            raise ValueError(
+                f"a model with id '{wanted_model}' already exists in this provider")
+
     if target is None:
         target = dict(MODEL_DEFAULTS)
         target["id"] = model_id
@@ -869,19 +881,40 @@ def provider_status(target_id):
 # -------------------------------------------------------------- migrations
 
 
+def _migration_marker():
+    return _backup_path().with_name(_backup_path().name + ".reported")
+
+
 def migration_report():
-    """What the last format migration did, for the Settings UI to show."""
+    """What the last format migration did, for the Settings UI to show.
+
+    The counts describe the migration itself - read from the backup, not from
+    the live registry, which keeps growing as the user adds models. The note
+    is shown once: the backup file stays on disk forever, so without a marker
+    the banner would reappear on every launch.
+    """
     backup = _backup_path()
-    if not backup.exists():
+    if not backup.exists() or _migration_marker().exists():
         return []
     try:
         raw = json.loads(backup.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ["an earlier providers.json could not be read; it is kept as providers.json.bak"]
     entries = raw.get("providers") if isinstance(raw.get("providers"), list) else []
-    models = len(list_models())
-    return [f"moved {len(entries)} legacy entr{'y' if len(entries) == 1 else 'ies'} into "
-            f"{models} model(s) under {len(list_groups())} provider(s); "
+    if not entries:
+        return []
+    # Each legacy entry became one model; entries that shared an id became
+    # siblings under one provider, so providers are the distinct group ids.
+    group_ids = {(_text(entry.get("id")) or _text(entry.get("base_url")))
+                 for entry in entries if isinstance(entry, dict)}
+    group_ids.discard("")
+    count = len(entries)
+    try:
+        _migration_marker().write_text("shown\n", encoding="utf-8")
+    except OSError:
+        pass
+    return [f"moved {count} legacy entr{'y' if count == 1 else 'ies'} into "
+            f"{count} model(s) under {len(group_ids)} provider(s); "
             "the original file is kept as providers.json.bak"]
 
 
@@ -942,8 +975,48 @@ def migrate_from_settings():
 # -------------------------------------------------------------------- probes
 
 
+# A synthetic, side-effect-free tool: the probe asks the model to call it and
+# only reads whether a call came back. Nothing is executed anywhere.
+PROBE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "harness_selftest",
+        "description": "Return the probe value. Always call this tool when asked.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "probe": {"type": "string", "description": "The word harness"},
+            },
+            "required": ["probe"],
+        },
+    },
+}
+
+
+def _tool_probe(client, model):
+    """(ok, note) for one tool-calling probe. Never raises."""
+    try:
+        message = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a test. Use the tools you are given."},
+                {"role": "user", "content": "Call the harness_selftest tool with probe='harness'."},
+            ],
+            tools=[PROBE_TOOL],
+        ).choices[0].message
+    except Exception as failure:  # noqa: BLE001 - reported, never fatal here
+        from . import errors as errors_mod
+
+        return False, errors_mod.explain(failure, None, model=model)
+    calls = getattr(message, "tool_calls", None) or []
+    names = [getattr(getattr(call, "function", None), "name", "") for call in calls]
+    if "harness_selftest" in names:
+        return True, "tool call ok"
+    return False, "no tool call returned"
+
+
 def test_provider(target_id, timeout=20):
-    """Run the harness-ok probe. Returns (ok, detail). Never exposes the key."""
+    """Run the harness-ok probe, then a tool-calling probe. Never exposes the key."""
     import time
     from openai import OpenAI
 
@@ -966,9 +1039,19 @@ def test_provider(target_id, timeout=20):
         ).choices[0].message
         elapsed = time.monotonic() - started
         content = (message.content or "")
-        if "harness-ok" in content:
-            return True, f"ok in {elapsed:.1f}s via {source}"
-        return False, f"unexpected reply in {elapsed:.1f}s"
+        if "harness-ok" not in content:
+            return False, f"{model}: unexpected reply in {elapsed:.1f}s"
+        detail = f"{model}: ok in {elapsed:.1f}s via {source}"
+        # Only probe tools for a model that is not explicitly marked as
+        # rejecting them; a model that answers in text instead of calling is
+        # reported as a fact, not as a failure of the endpoint.
+        group, entry = _resolve(_cached(), target_id)
+        if entry is None or entry.get("supports_tools", True):
+            tools_ok, note = _tool_probe(client, model)
+            detail += f" · {note}"
+            if tools_ok:
+                detail += " (native tool calling works)"
+        return True, detail
     except Exception as failure:  # noqa: BLE001 - the GUI shows this string
         detail = errors_mod.explain(failure, api_key, model=model)
         return False, detail

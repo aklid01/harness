@@ -23,6 +23,23 @@ def git(command):
     return result.stdout
 
 
+def is_git_worktree():
+    """True only when the workspace is a git repository git can actually serve.
+
+    A plain folder is not an error: it just means git commands will fail, and
+    the model deserves to be told that plainly instead of being handed an
+    empty branch name that reads like a detached HEAD.
+    """
+    try:
+        probe = subprocess.run(
+            "git rev-parse --is-inside-work-tree", shell=True, capture_output=True,
+            text=True, cwd=str(paths.project_root()), timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0 and probe.stdout.strip() == "true"
+
+
 def file_hash(path):
     file = Path(path)
     return hashlib.md5(file.read_bytes()).hexdigest() if file.is_file() else None
@@ -70,12 +87,18 @@ def todos_note():
 
 def reminder():
     """The block we append to the messages on every turn."""
+    if is_git_worktree():
+        where = f"git branch: {git('branch --show-current').strip() or '(detached)'}"
+        changes = changes_note()
+    else:
+        where = "git: this workspace is not a git repository; git commands will fail"
+        changes = ""
     return {
         "role": "user",
         "content": (
             "<env>\n"
             f"time: {datetime.now():%Y-%m-%d %H:%M}\n"
-            f"git branch: {git('branch --show-current').strip() or '(detached)'}\n"
-            "</env>" + todos_note() + changes_note()
+            f"{where}\n"
+            "</env>" + todos_note() + changes
         ),
     }
