@@ -93,15 +93,18 @@ attempts inside one shared window that is sized to span all of them. The
 window is only a backstop: a first attempt that burns its whole read timeout
 still leaves a whole retry behind it, because a 30s window that could not
 hold two 20s timeouts meant a slow provider killed conversations instead of
-getting the second chance it needed. Backoff is exponential with jitter,
-`Retry-After` is respected when it fits the budget, one retry slot per
-endpoint so a failing host is not hammered, and every wait is cancellable
-(Stop, or switching model). A bad key or an unknown model id fails straight
-away; a stream that breaks after text has already arrived is reported rather
-than silently re-sent, since sending it again would duplicate the answer.
+getting the second chance it needed. The read timeout itself is 45s - long
+enough for a reasoning model's first token at high effort, short enough that
+a provider that has gone quiet is cut off and retried instead of costing a
+stall per attempt. Backoff is exponential with jitter, `Retry-After` is
+respected when it fits the budget, one retry slot per endpoint so a failing
+host is not hammered, and every wait is cancellable (Stop, or switching
+model). A bad key or an unknown model id fails straight away; a stream that
+breaks after text has already arrived is reported rather than silently
+re-sent, since sending it again would duplicate the answer.
 
-The composer shows one status area that updates as retries progress
-(`Retry 2 · waiting 3s · 5s of 30s elapsed`) and a final error card with
+The composer shows one status area that ticks as retries progress
+(`Retry 2 · waiting 3s · 5s of 150s elapsed`) and a final error card with
 **Retry** and **Switch model**. Retrying rewinds the conversation to the
 message that failed - the message is never duplicated - and leaves project
 files alone. Switching model keeps the workspace, session, history, unsaved
@@ -160,6 +163,13 @@ uv run python tests/test_sessions.py          # storage, migration, LLM titles
 uv run python tests/test_permissions.py       # policy modes, deny-list supremacy
 uv run python tests/test_llm_params.py        # effort/temperature forwarding
 ```
+
+The renderer has no unit harness, so its rules are checked end to end:
+`node electron/scripts/renderer-check.mjs` launches the app against a
+provider whose endpoint is dead, drives the composer and the sidebar over
+the DevTools Protocol, and writes a pass/fail report to
+`tests/renderer-check.txt` - the retry card ticking, the error card
+surviving the post-turn reconcile, and a deleted session closing its tab.
 
 ## Notes
 

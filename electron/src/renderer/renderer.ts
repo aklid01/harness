@@ -188,7 +188,7 @@ interface Ctx {
   pendingProviderId: string | null;
   pendingOpenSessionId: string | null;
   pendingResume: boolean;
-  failure: { retry: RetryInfo | null; headline: string; model: string | null } | null;
+  failure: { retry: RetryInfo | null; headline: string; model: string | null; text: string; transient: boolean } | null;
   retryCard: HTMLDivElement | null;
   retryTick: RetryTick | null;
   retryTimer: number | null;
@@ -477,6 +477,24 @@ function addNote(ctx: Ctx, text: string): void {
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
 }
+/* The failure card is per-turn state, not part of the transcript: after the
+   turn ends the done handler reconciles by re-rendering the transcript, so
+   the card has to be put back or it flashes for one frame and is gone. */
+function failureCard(ctx: Ctx, failure: NonNullable<Ctx["failure"]>): HTMLDivElement {
+  const div = document.createElement("div");
+  div.className = "error";
+  const actions: string[] = [];
+  // A permanent failure (bad key, unknown model id) is not worth re-sending.
+  if (failure.retry && failure.transient) actions.push(`<button class="btn small primary" data-retry="1">Retry</button>`);
+  if (providerGroups.length) actions.push(`<button class="btn small" data-switch="1">Switch model</button>`);
+  div.innerHTML =
+    `<b>${escapeHtml(failure.headline)}</b>` +
+    `<div>${escapeHtml(failure.text)}</div>` +
+    (actions.length ? `<div class="msg-actions" style="opacity:1;pointer-events:auto;margin-top:8px">${actions.join("")}</div>` : "");
+  div.querySelectorAll<HTMLButtonElement>("[data-retry]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); retryFailedRequest(ctx); }; });
+  div.querySelectorAll<HTMLButtonElement>("[data-switch]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); openModelPicker(ctx); }; });
+  return div;
+}
 function addError(ctx: Ctx, text: string, meta?: Record<string, unknown>): void {
   hideThinking(ctx);
   // A stream that broke halfway has already delivered its answer: keep it
@@ -491,22 +509,12 @@ function addError(ctx: Ctx, text: string, meta?: Record<string, unknown>): void 
   if (ctx === activeCtx) setStatusState("error");
   const retry = (meta?.["retry"] as RetryInfo | undefined) ?? null;
   const model = String(meta?.["model"] ?? "") || (retry?.model ?? "");
-  ctx.failure = { retry, headline: text, model: model || null };
-  const div = document.createElement("div");
-  div.className = "error";
-  const actions: string[] = [];
-  // A permanent failure (bad key, unknown model id) is not worth re-sending.
-  if (retry && meta?.["transient"] !== false) actions.push(`<button class="btn small primary" data-retry="1">Retry</button>`);
-  if (providerGroups.length) actions.push(`<button class="btn small" data-switch="1">Switch model</button>`);
-  div.innerHTML =
-    `<b>${escapeHtml((meta?.["headline"] as string) ?? (model ? `${model} failed` : "Error - no response produced"))}</b>` +
-    `<div>${escapeHtml(text)}</div>` +
-    (actions.length ? `<div class="msg-actions" style="opacity:1;pointer-events:auto;margin-top:8px">${actions.join("")}</div>` : "");
-  ctx.chatBody.appendChild(div);
+  const headline = String(meta?.["headline"] ?? "") || (model ? `${model} failed` : "Error - no response produced");
+  ctx.failure = { retry, headline, model: model || null, text,
+                  transient: meta?.["transient"] !== false };
+  ctx.chatBody.appendChild(failureCard(ctx, ctx.failure));
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
-  div.querySelectorAll<HTMLButtonElement>("[data-retry]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); retryFailedRequest(ctx); }; });
-  div.querySelectorAll<HTMLButtonElement>("[data-switch]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); openModelPicker(ctx); }; });
 }
 /* One persistent status area for the whole retry process, so a failing
    provider does not spam a card per attempt. */
@@ -710,6 +718,9 @@ function renderTranscript(ctx: Ctx, messages: Array<Record<string, unknown>>): v
       }
     }
   });
+  // The failure belongs to the turn that just ended, not to the transcript, so
+  // a reconcile that rebuilds the body has to put it back.
+  if (ctx.failure) ctx.chatBody.appendChild(failureCard(ctx, ctx.failure));
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
 }
@@ -1238,8 +1249,17 @@ function openDelete(ctx: Ctx, item: SessionListItem): void {
     `<h3>Delete session</h3><p>Delete <b>${escapeHtml(item.title)}</b>? This cannot be undone.</p>` +
       `<div class="modal-actions"><button class="btn" id="delCancel">Cancel</button><button class="btn danger" id="delOk">Delete</button></div>`,
   );
-  el<HTMLButtonElement>("delOk").onclick = () => { send(ctx, { op: "delete_session", id: item.id }); hideModal(); };
+  el<HTMLButtonElement>("delOk").onclick = () => { dropSessionTabs(item.id); send(ctx, { op: "delete_session", id: item.id }); hideModal(); };
   el<HTMLButtonElement>("delCancel").onclick = hideModal;
+}
+/* A deleted session must not stay open in a tab: the tab either moves to the
+   next available one or, when it was the last, back to the default screen. */
+function dropSessionTabs(sid: string): void {
+  if (!sid) return;
+  for (const tab of tabs.filter((t) => t.sessionId === sid)) {
+    if (tab.busy) send(tab, { op: "stop" });
+    closeTab(tab.id);
+  }
 }
 function askPick(ctx: Ctx, title: string, rows: string[], id: string): void {
   if (!rows.length) { send(ctx, { op: "pick_reply", id, index: null }); return; }
@@ -1473,6 +1493,10 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         // in memory.
         if (first) persistTabs();
         ctx.sessionTitle = "New Session";
+        // A new turn, a rewind or a different session supersedes the failure:
+        // it must not be re-applied by the transcript render that follows.
+        clearRetryCard(ctx);
+        ctx.failure = null;
         renderTranscript(ctx, (p["messages"] as Array<Record<string, unknown>>) ?? []);
         primeContext(ctx);
         if (ctx === activeCtx) setActivity(String(p["label"] ?? ""));
@@ -1485,7 +1509,15 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       }
       case "compacted": renderTranscript(ctx, (p["messages"] as Array<Record<string, unknown>>) ?? []); addNote(ctx, `compacted ${p["before"]} to ${((p["messages"] as unknown[]) ?? []).length} messages`); break;
       case "subagent": if (ctx === activeCtx) setActivity("subagent exploring…"); addNote(ctx, "subagent: " + String(p["description"] ?? "")); break;
-      case "done": setBusy(ctx, false); if (ctx === activeCtx) setActivity("ready"); send(ctx, { op: "list_sessions" }); send(ctx, { op: "get_context" }); if (ctx.sessionId) { const sid = ctx.sessionId; send(ctx, { op: "get_transcript", id: sid }); } break;
+      case "done":
+        setBusy(ctx, false);
+        if (ctx === activeCtx) setActivity("ready");
+        send(ctx, { op: "list_sessions" });
+        send(ctx, { op: "get_context" });
+        // A failed turn is already fully on screen and its error is not part
+        // of the transcript: re-fetching would rebuild the body and drop it.
+        if (ctx.sessionId && !ctx.failure) { const sid = ctx.sessionId; send(ctx, { op: "get_transcript", id: sid }); }
+        break;
       case "sessions_updated": send(ctx, { op: "list_sessions" }); break;
     }
     return;

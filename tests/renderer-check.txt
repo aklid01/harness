@@ -1,0 +1,13 @@
+backend: connected on port 8901
+submitted 'hi' against the dead endpoint
+retry card progress: ["Retry 2 · in flight · 3s of 150s elapsed","Retry 3 · in flight · 4s of 150s elapsed","Retry 3 · in flight · 5s of 150s elapsed"]
+VERDICT retry-card-ticks: true
+error card: could not reach the providercould not reach the provider (Dead Local): Connection error. - still failing after repeated attemptsRetrySwitch model
+VERDICT error-card-survives-the-reconcile: true
+tabs before delete: [{"title":"hi","active":true}]
+after deleting the tab's own session: [{"title":"New Session","active":true}]
+VERDICT deleted-session-closes-its-tab: true
+VERDICT another-tab-or-landing-is-active: true
+after deleting the last tab's own session: tabs=[] landing=true
+VERDICT last-tab-returns-to-default-screen: true
+RESULT: PASS

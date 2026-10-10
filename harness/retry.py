@@ -1,14 +1,15 @@
 """Bounded retries for model requests.
 
 The budget is an attempt count plus one monotonic deadline shared by every
-attempt, and that deadline is only a backstop. The invariant that matters: it
-has to span more than one attempt, because the old 30s window was smaller
-than two 20s read timeouts - one slow provider burned the entire budget
-before the retry had even started, so a conversation that only needed a
-second chance died instead. Only failures that are plausibly transient are
-retried; everything else (a bad key, an unknown model id, parameters the
-provider will not accept) fails straight away with an explanation of what to
-fix.
+attempt, and that deadline is only a backstop. Two invariants matter: it has
+to span more than one attempt, because the old 30s window was smaller than
+two 20s read timeouts - one slow provider burned the entire budget before
+the retry had even started, so a conversation that only needed a second
+chance died instead; and the attempts it spans have to be cheap to lose,
+because three 90s hangs cost a silent four minutes while the user waits.
+Only failures that are plausibly transient are retried; everything else (a
+bad key, an unknown model id, parameters the provider will not accept) fails
+straight away with an explanation of what to fix.
 
 Retries are cancellable: every wait and the loop itself watch the caller's
 cancel event, and a request abandoned that way leaves nothing running behind it.
@@ -21,7 +22,7 @@ import time
 from . import errors as errors_mod
 
 MAX_ATTEMPTS = 3
-RETRY_WINDOW = 270.0
+RETRY_WINDOW = 150.0
 BACKOFF_BASE = 0.4
 BACKOFF_CAP = 4.0
 MIN_WAIT = 0.1
@@ -29,9 +30,12 @@ _SLICE = 0.05
 
 CONNECT_TIMEOUT = 6.0
 # What one attempt waits for the provider to say something: on a stream that
-# is the first token, and a reasoning model at high effort legitimately
-# thinks for longer than 20s before its first word.
-READ_TIMEOUT = 90.0
+# is the first token, and a reasoning model at high effort legitimately thinks
+# for longer than the old 20s before its first word. It is also the cost of
+# one hung provider, so it is kept well under a minute: a stall longer than
+# this is cut off and retried, because in practice the retry of a stalled
+# request comes back in seconds.
+READ_TIMEOUT = 45.0
 POOL_TIMEOUT = 5.0
 
 _GATES = {}
