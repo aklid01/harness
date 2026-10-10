@@ -15,6 +15,7 @@ const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const TMP = path.join(os.tmpdir(), "harness-renderer-check");
 const WS_ROOT = process.env.WS_ROOT ?? path.join(TMP, "workspace");
 const APP_DATA = process.env.APP_DATA ?? path.join(TMP, "app");
+const USER_DATA = process.env.USER_DATA ?? path.join(TMP, "userdata");
 const CDP_PORT = Number(process.env.CDP_PORT ?? 9333);
 const APP_PORT = Number(process.env.APP_PORT ?? 8901);
 const REPORT = process.env.REPORT ?? path.join(ROOT, "tests", "renderer-check.txt");
@@ -94,7 +95,7 @@ async function pageTarget() {
 prepareFixtures();
 cleanupMine();
 const child = spawn(path.join(ROOT, "electron", "node_modules", "electron", "dist", "electron.exe"),
-  [path.join(ROOT, "electron"), `--remote-debugging-port=${CDP_PORT}`], {
+  [path.join(ROOT, "electron"), `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${USER_DATA}`], {
     cwd: path.join(ROOT, "electron"),
     env: (() => {
       const env = { ...process.env };
@@ -103,6 +104,7 @@ const child = spawn(path.join(ROOT, "electron", "node_modules", "electron", "dis
       env.HARNESS_PORT = String(APP_PORT);
       env.HARNESS_PROJECT_ROOT = WS_ROOT;
       env.HARNESS_APP_DATA = APP_DATA;
+      env.HARNESS_SESSIONS_ROOT = path.join(TMP, "sessions");
       return env;
     })(),
     stdio: ["ignore", "ignore", "ignore"],
@@ -173,46 +175,115 @@ try {
   verdict("error-card-shown", final.errors.length > 0, (final.errors[0] ?? "").slice(0, 90));
   verdict("error-suggests-next-step", final.hints.some((h) => h.length > 5), JSON.stringify(final.hints));
 
-  /* Item 5: the deleted session leaves the list immediately. */
-  await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
-  await sleep(600);
-  const beforeSecond = await sessionRows(ws);
-  await submit(ws, "second turn");
-  await sleep(9000);
-  const withTwo = await sessionRows(ws);
-  const victim = beforeSecond[0];
-  await evaluate(ws, `(() => {
+  /* Shared helpers: the sidebar rows, the tab labels, a new session in a new
+     tab, and a right-click row that can be renamed or deleted. */
+  const tabLabels = () => evaluate(ws, `[...document.querySelectorAll("#tabs .tab .tab-title")].map((t) => t.textContent ?? "")`);
+  const newSession = async (label) => {
+    await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
+    await sleep(500);
+    await submit(ws, label);
+    await sleep(9000);
+  };
+  const renameRow = (title) => evaluate(ws, `(() => {
     const row = [...document.querySelectorAll(".session-item")]
-      .find((r) => (r.querySelector(".s-title")?.textContent ?? "").includes(${JSON.stringify(victim?.slice(0, 18) ?? "first")}));
-    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
-    return Boolean(row);
+      .find((r) => (r.querySelector(".s-title")?.textContent ?? "").includes(${JSON.stringify(title)}));
+    if (!row) return false;
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+    return true;
   })()`);
-  await sleep(200);
-  await evaluate(ws, `document.querySelector("#contextMenu [data-act='delete']")?.click()`);
-  await sleep(200);
-  await evaluate(ws, `document.getElementById("delOk")?.click()`);
-  await sleep(1500);
-  const afterDelete = await sessionRows(ws);
-  const goneImmediately = !afterDelete.includes(victim);
-  verdict("deleted-session-leaves-the-list", goneImmediately,
-    `before=${JSON.stringify(withTwo)} after=${JSON.stringify(afterDelete)}`);
+  const menuAction = (action) => evaluate(ws, `(() => {
+    const btn = document.querySelector("#contextMenu [data-act='${action}']");
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`);
+  const doRename = (newTitle) => evaluate(ws, `(() => {
+    const input = document.getElementById("renameInput");
+    if (!input) return false;
+    input.value = ${JSON.stringify(newTitle)};
+    document.getElementById("renameSave").click();
+    return true;
+  })()`);
 
-  /* Item 2: the failure survives switching sessions. */
-  await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
-  await sleep(600);
-  await submit(ws, "third turn");
-  await sleep(9000);
+  await newSession("second turn");
+
+  /* Item 2: the failure outlives switching sessions. Switch to the other tab
+     and back to the one that failed. */
+  const firstLabel = (await tabLabels())[0] ?? "";
+  const secondLabel = (await tabLabels()).find((l) => l !== firstLabel) ?? "";
   await evaluate(ws, `(() => {
-    const rows = [...document.querySelectorAll(".session-item")];
-    const other = rows.find((r) => !r.classList.contains("active"));
-    other?.click();
-    return Boolean(other);
+    const tab = [...document.querySelectorAll("#tabs .tab")]
+      .find((t) => (t.querySelector(".tab-title")?.textContent ?? "").includes(${JSON.stringify(secondLabel)}));
+    tab?.click();
+    return Boolean(tab);
   })()`);
-  await sleep(1500);
+  await sleep(1200);
+  const awayFrom = await snapshot(ws);
+  await evaluate(ws, `(() => {
+    const tab = [...document.querySelectorAll("#tabs .tab")]
+      .find((t) => (t.querySelector(".tab-title")?.textContent ?? "").includes(${JSON.stringify(firstLabel)}));
+    tab?.click();
+    return Boolean(tab);
+  })()`);
+  await sleep(1200);
   const afterSwitch = await snapshot(ws);
   verdict("error-card-survives-session-switch", afterSwitch.errors.length > 0,
-    (afterSwitch.errors[0] ?? "").slice(0, 80));
+    `other=${awayFrom.errors.length} back=${afterSwitch.errors.length}`);
 
+  /* A renamed session takes the new name on its tab at once - the one you
+     renamed from, and any other tab that has it open. */
+  const labelsBefore = await tabLabels();
+  const activeRow = await evaluate(ws, `document.querySelector(".session-item.active .s-title")?.textContent ?? ""`);
+  await renameRow(activeRow);
+  await sleep(200);
+  await menuAction("rename");
+  await doRename("renamed active");
+  await sleep(1200);
+  const labelsAfterActive = await tabLabels();
+  verdict("rename-updates-the-tab-it-was-renamed-from", labelsAfterActive.includes("renamed active"),
+    JSON.stringify({ before: labelsBefore, after: labelsAfterActive }));
+
+  const otherLabel = labelsBefore.find((l) => l !== activeRow);
+  if (otherLabel) {
+    await renameRow(otherLabel);
+    await sleep(200);
+    await menuAction("rename");
+    await doRename("renamed other");
+    await sleep(1200);
+    const labelsAfterOther = await tabLabels();
+    verdict("rename-updates-any-open-tab", labelsAfterOther.includes("renamed other"),
+      JSON.stringify(labelsAfterOther));
+  } else {
+    verdict("rename-updates-any-open-tab", false, "no second tab to rename");
+  }
+
+  /* Item 5: the deleted session leaves the list immediately. It runs after the
+     rename checks because deleting a session closes its tab. */
+  const rowsBefore = await sessionRows(ws);
+  if (rowsBefore.length >= 2) {
+    await renameRow(rowsBefore[rowsBefore.length - 1]);
+    await sleep(200);
+    await menuAction("rename");
+    await doRename("removable session");
+    await sleep(1200);
+    const marked = await sessionRows(ws);
+    if (marked.includes("removable session")) {
+      await renameRow("removable session");
+      await sleep(200);
+      await menuAction("delete");
+      await sleep(200);
+      await evaluate(ws, `document.getElementById("delOk")?.click()`);
+      await sleep(1500);
+      const afterDelete = await sessionRows(ws);
+      verdict("deleted-session-leaves-the-list",
+        !afterDelete.includes("removable session") && afterDelete.length === marked.length - 1,
+        `before=${marked.length} after=${afterDelete.length}`);
+    } else {
+      verdict("deleted-session-leaves-the-list", false, "could not mark a session for deletion");
+    }
+  } else {
+    verdict("deleted-session-leaves-the-list", false, "no session rows to delete");
+  }
   /* Items 1 + 4: with every tab closed, sessions are still deletable, and the
      workspace itself can be removed from the list. */
   for (let i = 0; i < 5; i++) {

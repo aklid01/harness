@@ -1140,15 +1140,21 @@ let lastMenuY = 0;
 function hideContextMenu(): void { contextMenu.classList.add("hidden"); }
 
 /* ---------------- session lifecycle helpers ---------------- */
-function refreshSessionsCache(ctx: Ctx, list: SessionListItem[]): void {
-  sessionsByRoot[ctx.root] = list;
+/* A session list arrived for a root: cache it and take any new titles - a
+   rename has to reach the tab holding that session, not just the sidebar row
+   you renamed it from. */
+function applySessionList(root: string, list: SessionListItem[]): void {
+  sessionsByRoot[root] = list;
   for (const t of tabs) {
-    if (t.root !== ctx.root || !t.sessionId) continue;
+    if (t.root !== root || !t.sessionId) continue;
     const match = list.find((s) => s.id === t.sessionId);
-    if (match && match.title) t.sessionTitle = match.title;
+    if (match?.title) t.sessionTitle = match.title;
   }
   renderTree();
   renderTabs();
+}
+function refreshSessionsCache(ctx: Ctx, list: SessionListItem[]): void {
+  applySessionList(ctx.root, list);
 }
 function resumeIfNeeded(ctx: Ctx, list: SessionListItem[]): void {
   if (ctx.busy) return;
@@ -1601,7 +1607,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
     resumeIfNeeded(ctx, list);
   } else if (msg.reply === "ws_sessions" && msg.data && typeof msg.data === "object") {
     const d = msg.data as { root: string; sessions: SessionListItem[] };
-    if (d.root) { sessionsByRoot[d.root] = d.sessions ?? []; renderTree(); }
+    if (d.root) applySessionList(d.root, d.sessions ?? []);
   } else if (msg.reply === "list_providers" && msg.data && typeof msg.data === "object") {
     const data = msg.data as ProviderState;
     providerGroups = data.groups ?? [];
