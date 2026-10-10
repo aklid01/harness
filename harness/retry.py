@@ -1,11 +1,14 @@
 """Bounded retries for model requests.
 
-One monotonic deadline owns the whole retry process - it is never restarted
-per attempt - so a request that keeps failing is abandoned after at most
-RETRY_WINDOW seconds of trying instead of grinding on forever. Only failures
-that are plausibly transient are retried; everything else (a bad key, an
-unknown model id, parameters the provider will not accept) fails straight away
-with an explanation of what to fix.
+The budget is an attempt count plus one monotonic deadline shared by every
+attempt, and that deadline is only a backstop. The invariant that matters: it
+has to span more than one attempt, because the old 30s window was smaller
+than two 20s read timeouts - one slow provider burned the entire budget
+before the retry had even started, so a conversation that only needed a
+second chance died instead. Only failures that are plausibly transient are
+retried; everything else (a bad key, an unknown model id, parameters the
+provider will not accept) fails straight away with an explanation of what to
+fix.
 
 Retries are cancellable: every wait and the loop itself watch the caller's
 cancel event, and a request abandoned that way leaves nothing running behind it.
@@ -17,14 +20,18 @@ import time
 
 from . import errors as errors_mod
 
-RETRY_WINDOW = 30.0
+MAX_ATTEMPTS = 3
+RETRY_WINDOW = 270.0
 BACKOFF_BASE = 0.4
 BACKOFF_CAP = 4.0
 MIN_WAIT = 0.1
 _SLICE = 0.05
 
 CONNECT_TIMEOUT = 6.0
-READ_TIMEOUT = 20.0
+# What one attempt waits for the provider to say something: on a stream that
+# is the first token, and a reasoning model at high effort legitimately
+# thinks for longer than 20s before its first word.
+READ_TIMEOUT = 90.0
 POOL_TIMEOUT = 5.0
 
 _GATES = {}
@@ -102,13 +109,17 @@ def _next_wait(attempt, err, remaining):
 
 
 def run(request, *, window=RETRY_WINDOW, cancel=None, on_attempt=None,
-        model=None, model_id=None, api_key=None, host=""):
-    """Run request() until it succeeds, gives up, or runs out of window.
+        model=None, model_id=None, api_key=None, host="", attempts=MAX_ATTEMPTS):
+    """Run request() until it succeeds, gives up, or runs out of budget.
 
-    request() takes no arguments. on_attempt() receives a progress dict before
-    each retry wait: {"attempt", "wait", "error", "model", "elapsed", "window"}.
+    The budget is the attempt count first and the shared window second: one
+    attempt that burns its whole read timeout must leave a whole retry behind
+    it, which is why window is sized to span every attempt. on_attempt()
+    receives a progress dict before each retry wait: {"attempt", "wait",
+    "error", "model", "elapsed", "window"}.
     """
     deadline = time.monotonic() + float(window)
+    limit = max(1, int(attempts))
     attempt = 0
     while True:
         if _stopped(cancel):
@@ -124,7 +135,9 @@ def run(request, *, window=RETRY_WINDOW, cancel=None, on_attempt=None,
             if not err.transient:
                 raise err
             remaining = deadline - time.monotonic()
-            if remaining <= MIN_WAIT:
+            if attempt >= limit or remaining <= MIN_WAIT:
+                # Out of tries or out of window - either way the turn is over,
+                # and the caller says so with "still failing after attempts".
                 err.exhausted = True
                 raise err
             wait = _next_wait(attempt, err, remaining)

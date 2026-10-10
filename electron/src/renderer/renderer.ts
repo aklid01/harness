@@ -190,6 +190,8 @@ interface Ctx {
   pendingResume: boolean;
   failure: { retry: RetryInfo | null; headline: string; model: string | null } | null;
   retryCard: HTMLDivElement | null;
+  retryTick: RetryTick | null;
+  retryTimer: number | null;
   streamPre: HTMLDivElement | null;
   streamWrap: HTMLElement | null;
   streamText: string[];
@@ -255,7 +257,7 @@ function makeCtx(root: string, project: string, intent: Ctx["openIntent"], openI
     providerId: null, effortVal: prefs.effortGlobal, permsVal: "default",
     gitInfo: { has_git: false, branch: "", default_branch: "", is_protected: false }, lastBranch: "", branchAck: "",
     pendingText: null, pendingRewind: null, pendingEffort: null, pendingProviderId: null, pendingOpenSessionId: null, pendingResume: false,
-    failure: null, retryCard: null,
+    failure: null, retryCard: null, retryTick: null, retryTimer: null,
     streamPre: null, streamWrap: null, streamText: [], thinking: null, toolCards: new Map(),
     chatBody: document.createElement("div"), entryDraft: "",
   };
@@ -509,8 +511,37 @@ function addError(ctx: Ctx, text: string, meta?: Record<string, unknown>): void 
 /* One persistent status area for the whole retry process, so a failing
    provider does not spam a card per attempt. */
 function clearRetryCard(ctx: Ctx): void {
+  if (ctx.retryTimer !== null) {
+    clearInterval(ctx.retryTimer);
+    ctx.retryTimer = null;
+  }
   ctx.retryCard?.remove();
   ctx.retryCard = null;
+}
+interface RetryTick {
+  model: string;
+  reason: string;
+  attempt: number;
+  wait: number;
+  elapsed: number;
+  window: number;
+  shownAt: number;
+}
+/* The attempt in flight has no events of its own, so the numbers the card
+   promised (the wait, the elapsed time) tick locally until the next retry
+   event, an error or a new turn replaces the card. */
+function paintRetryCard(ctx: Ctx): void {
+  const card = ctx.retryCard;
+  const tick: RetryTick | null = ctx.retryTick;
+  if (!card || !tick) return;
+  const waited = (Date.now() - tick.shownAt) / 1000;
+  const left = Math.max(0, tick.wait - waited);
+  const phase = left > 0 ? `waiting ${left.toFixed(left < 1 ? 1 : 0)}s` : "in flight";
+  card.innerHTML =
+    `<span class="r-spin"></span>` +
+    `<div class="r-body"><div class="r-title">${escapeHtml(tick.model)}</div>` +
+    `<div class="r-detail">${escapeHtml(tick.reason)}. Retrying…</div>` +
+    `<div class="r-sub">Retry ${tick.attempt} · ${phase} · ${(tick.elapsed + waited).toFixed(0)}s of ${tick.window.toFixed(0)}s elapsed</div></div>`;
 }
 function showRetry(ctx: Ctx, progress: RetryProgress): void {
   if (ctx.retryCard?.parentElement !== ctx.chatBody) {
@@ -528,13 +559,12 @@ function showRetry(ctx: Ctx, progress: RetryProgress): void {
   const elapsed = Number(progress.elapsed ?? 0);
   const budget = Number(progress.window ?? 30);
   const reason = String(progress.headline ?? progress.kind ?? "the request failed");
-  card.innerHTML =
-    `<span class="r-spin"></span>` +
-    `<div class="r-body"><div class="r-title">${escapeHtml(model)}</div>` +
-    `<div class="r-detail">${escapeHtml(reason)}. Retrying…</div>` +
-    `<div class="r-sub">Retry ${attempt} · waiting ${wait.toFixed(wait < 1 ? 1 : 0)}s · ${elapsed.toFixed(0)}s of ${budget.toFixed(0)}s elapsed</div></div>`;
+  ctx.retryTick = { model, reason, attempt, wait, elapsed, window: budget, shownAt: Date.now() };
+  paintRetryCard(ctx);
   if (ctx === activeCtx) setActivity(`${model} - ${reason}. Retrying…`);
   scrollBottom(ctx);
+  if (ctx.retryTimer !== null) clearInterval(ctx.retryTimer);
+  ctx.retryTimer = setInterval(() => paintRetryCard(ctx), 250) as unknown as number;
 }
 function retryFailedRequest(ctx: Ctx): void {
   const info = ctx.failure?.retry;
@@ -647,6 +677,7 @@ function msgActions(ctx: Ctx, idx: number, kind: "user" | "assistant", text: str
   return bar;
 }
 function renderTranscript(ctx: Ctx, messages: Array<Record<string, unknown>>): void {
+  clearRetryCard(ctx);
   ctx.chatBody.replaceChildren();
   ctx.toolCards.clear();
   ctx.streamPre = null; ctx.streamWrap = null;
@@ -881,6 +912,7 @@ function closeTab(id: string): void {
   if (idx < 0) return;
   const ctx = tabs[idx];
   if (activeCtx === ctx) activeCtx.entryDraft = entry.value;
+  clearRetryCard(ctx);
   ctxById.delete(id);
   tabs.splice(idx, 1);
   if (tabs.length === 0) { activeCtx = null; renderTabs(); renderLanding(); }

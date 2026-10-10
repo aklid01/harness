@@ -88,13 +88,17 @@ instead of a confusing 401. `settings.json`, `.env`, `providers.json`,
 A failed model request never ends the session. `harness/errors.py` classifies
 the failure - connection, DNS, timeout, 408/429/5xx, auth, unknown model id,
 unsupported parameter, malformed body, interrupted stream - and
-`harness/retry.py` retries only the transient ones inside a single monotonic
-30-second window, with exponential backoff and jitter, `Retry-After` respected
-when it fits the deadline, one retry slot per endpoint so a failing host is
-not hammered, and every wait cancellable (Stop, or switching model). A bad
-key or an unknown model id fails straight away; a stream that breaks after
-text has already arrived is reported rather than silently re-sent, since
-sending it again would duplicate the answer.
+`harness/retry.py` retries only the transient ones, up to `MAX_ATTEMPTS`
+attempts inside one shared window that is sized to span all of them. The
+window is only a backstop: a first attempt that burns its whole read timeout
+still leaves a whole retry behind it, because a 30s window that could not
+hold two 20s timeouts meant a slow provider killed conversations instead of
+getting the second chance it needed. Backoff is exponential with jitter,
+`Retry-After` is respected when it fits the budget, one retry slot per
+endpoint so a failing host is not hammered, and every wait is cancellable
+(Stop, or switching model). A bad key or an unknown model id fails straight
+away; a stream that breaks after text has already arrived is reported rather
+than silently re-sent, since sending it again would duplicate the answer.
 
 The composer shows one status area that updates as retries progress
 (`Retry 2 · waiting 3s · 5s of 30s elapsed`) and a final error card with

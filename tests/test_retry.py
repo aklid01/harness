@@ -1,5 +1,5 @@
-"""Retries: bounded by one monotonic deadline, transient only, cancellable,
-and never leaking the key."""
+"""Retries: bounded by an attempt count and one shared deadline, transient
+only, cancellable, and never leaking the key."""
 
 import os
 import threading
@@ -148,12 +148,43 @@ class RunCase(unittest.TestCase):
 
         started = time.monotonic()
         with self.assertRaises(errors.ModelError) as raised:
-            retry.run(call, window=2.0, host="h")
+            retry.run(call, window=2.0, attempts=10, host="h")
         elapsed = time.monotonic() - started
         self.assertLessEqual(elapsed, 3.0)
         self.assertTrue(raised.exception.exhausted)
         self.assertTrue(raised.exception.kind == "timeout")
         self.assertGreater(len(self.calls), 2, "the window should allow several attempts")
+
+    def test_attempt_count_caps_the_retries(self):
+        def call():
+            self.calls.append(time.monotonic())
+            raise http(503, "overloaded")
+
+        with self.assertRaises(errors.ModelError) as raised:
+            retry.run(call, window=60, host="h")
+        self.assertEqual(len(self.calls), retry.MAX_ATTEMPTS)
+        self.assertTrue(raised.exception.exhausted)
+
+    def test_the_budget_outlasts_a_single_attempt_timeout(self):
+        """The regression pin: one attempt burning its whole read timeout must
+        leave a whole retry behind it, not eat the budget."""
+        self.assertGreaterEqual(retry.RETRY_WINDOW, 2 * retry.READ_TIMEOUT)
+        self.assertGreaterEqual(retry.MAX_ATTEMPTS, 3)
+
+    def test_a_slow_first_attempt_still_gets_its_retry(self):
+        """A provider that stalls for longer than the old read timeout, then
+        answers, must survive as one retry rather than kill the turn."""
+        stalls = {"left": 2}
+
+        def call():
+            self.calls.append(time.monotonic())
+            if stalls["left"] > 0:
+                stalls["left"] -= 1
+                raise openai.APITimeoutError(request=mock.Mock(url="https://x/v1"))
+            return "answer"
+
+        self.assertEqual(retry.run(call, attempts=3, host="h"), "answer")
+        self.assertEqual(len(self.calls), 3)
 
     def test_retry_after_is_respected(self):
         def call():
@@ -186,19 +217,15 @@ class RunCase(unittest.TestCase):
 
         def call():
             self.calls.append(time.monotonic())
+            if len(self.calls) >= 2:
+                cancel.set()
             raise http(503, "overloaded")
 
-        def stop_soon():
-            time.sleep(0.3)
-            cancel.set()
-
-        threading.Thread(target=stop_soon, daemon=True).start()
         with self.assertRaises(errors.ModelError) as raised:
             retry.run(call, window=30, cancel=cancel, host="h")
         self.assertEqual(raised.exception.kind, "cancelled")
-        time.sleep(0.4)
         attempts = len(self.calls)
-        time.sleep(0.6)
+        time.sleep(0.8)
         self.assertEqual(len(self.calls), attempts, "no attempt runs after a cancel")
 
     def test_progress_events_report_wait_and_model(self):

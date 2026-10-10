@@ -109,9 +109,10 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
     so the turn logic cannot tell the difference. Tool calls still arrive as
     complete calls - only text streams.
 
-    Failures are retried inside one bounded window (retry.RETRY_WINDOW). A
-    stream that breaks after it has already delivered text is not retried: the
-    text is on screen and sending it again would duplicate it.
+    Failures are retried up to retry.MAX_ATTEMPTS times inside one bounded
+    window (retry.RETRY_WINDOW). A stream that breaks after it has already
+    delivered text is not retried: the text is on screen and sending it again
+    would duplicate it.
     """
     client = get_client()
     caps = providers.active_model_capabilities()
@@ -219,7 +220,7 @@ whose path is given at the cut. Page through it with head, tail, sed -n or
 grep rather than asking for it again. That file only exists for the current
 turn, so read it now or re-run the command later.
 
-Your current working directory is: {os.getcwd()}
+Your current working directory is: {cwd}
 
 You have skills available. Each one is a set of instructions for a task.
 If a skill matches what the user wants, call read_skill first and follow it.
@@ -255,7 +256,7 @@ whose path is given at the cut. Page through it with head, tail, sed -n or
 grep rather than asking for it again. That file only exists for the current
 turn, so read it now or re-run the command later.
 
-Your current working directory is: {os.getcwd()}
+Your current working directory is: {cwd}
 
 You are in plan mode. If asked which mode you are in, say plan mode.
 
