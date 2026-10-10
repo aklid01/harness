@@ -279,11 +279,23 @@ def ensure_title(messages):
 
 
 def all_sessions():
-    """Newest first, with LLM titles where present."""
+    """Newest first, with LLM titles where present.
+
+    A file with no messages is not a session: it is the residue of a session
+    that was reserved and then never used. Listing it would put an unusable
+    "New Session" row in the sidebar that survives restarts, so it is left out
+    here. Nothing is deleted - a file that gains messages appears immediately.
+    """
     target = _dir()
     if not target.exists():
         return []
     files = sorted(
         target.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
     )
-    return [{"id": p.stem, "title": title(load(p.stem), p.stem)} for p in files]
+    sessions = []
+    for path in files:
+        messages = load(path.stem)
+        if not messages:
+            continue
+        sessions.append({"id": path.stem, "title": title(messages, path.stem)})
+    return sessions

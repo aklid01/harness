@@ -629,11 +629,14 @@ class Session:
                 self.runner.mode = mode
                 label = "opened"
             else:
-                new_id = session_mod.fresh_id()
-                session_mod.blank(new_id)
-                session_mod._set_current(new_id)
-                session_mod._set_written(0)
-                self.session_id = new_id
+                # Nothing to open: no id at all (a workspace with no sessions
+                # yet), or an id whose file is gone (a session deleted while a
+                # tab still remembered it). Stay a draft and write nothing - a
+                # session file belongs to the first prompt. This branch used to
+                # materialise an empty session, which is how unused "New
+                # Session" rows appeared in the sidebar and came back on every
+                # restart.
+                self.session_id = None
                 self.written = 0
                 self.runner = self._new_runner(mode=mode or "build")
                 label = "new"

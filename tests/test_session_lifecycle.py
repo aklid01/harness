@@ -129,6 +129,25 @@ class SessionCase(unittest.TestCase):
 
     # ---- new session, first prompt -------------------------------------
 
+    def test_opening_a_workspace_with_no_sessions_writes_nothing(self):
+        """A tab opened before any prompt is a draft, not an empty session."""
+        self.dispatch(op="open", session="t1", root=str(self.root))
+        self.assertTrue(self.done("t1", kind="session"))
+        self.assertEqual(self.files(), [], "opening a tab must not create a session file")
+        self.assertEqual(session_mod.all_sessions(), [])
+
+    def test_opening_a_stale_session_id_writes_nothing(self):
+        """A remembered session that was deleted must not come back empty."""
+        self.dispatch(op="open", session="t1", id="20200101-000000", root=str(self.root))
+        self.assertTrue(self.done("t1", kind="session"))
+        self.assertEqual(self.files(), [])
+
+    def test_a_message_less_session_file_is_never_listed(self):
+        target = paths.session_dir()
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "20200101-000000.jsonl").write_text("", encoding="utf-8")
+        self.assertEqual(session_mod.all_sessions(), [], "an unused file is not a session")
+
     def test_first_prompt_makes_one_session_one_turn_one_request(self):
         self.dispatch(op="open", session="t1", root=str(self.root))
         self.assertTrue(self.done("t1", kind="session"))
