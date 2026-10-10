@@ -9,7 +9,6 @@ from . import history
 from . import providers
 from . import agents
 from . import oversight
-from . import permissions
 from . import texttools
 from . import session
 from .context import reminder
