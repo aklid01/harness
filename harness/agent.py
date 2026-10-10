@@ -356,12 +356,3 @@ class Runner:
 
         if compact.needed(usage, providers.active_context_window()):
             self.messages = commands.compact(self.messages, providers.active_context_window())
-
-
-def main():
-    from .gui.app import main as gui_main
-    gui_main()
-
-
-if __name__ == "__main__":
-    main()

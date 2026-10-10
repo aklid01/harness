@@ -1,8 +1,8 @@
 """Headless sidecar: Python engine plus WebSocket transport for Electron.
 
-Dev-mode only. Electron spawns `uv run python -m harness.server` and talks
-to it over localhost. The engine itself is unchanged - this file only moves
-the Qt bridge in harness/gui/bridge.py onto a socket.
+Electron spawns `uv run python -m harness.server` and talks to it over
+localhost. The engine itself is unchanged - this file puts the event bus
+(harness/events.py) on a socket, one session per client connection.
 """
 
 import argparse

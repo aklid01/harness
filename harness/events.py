@@ -1,14 +1,14 @@
 """Engine event bus and frontend interaction point.
 
 The agent engine emits events instead of drawing to a screen. Any frontend
-(PySide6 GUI, TUI, the Electron sidecar, future API) subscribes to render them
+(the Electron sidecar, tests, a future API client) subscribes to render them
 and registers a responder to answer blocking interaction requests.
 
 Two modes coexist:
 
 * Global: the classic single-owner model. Subscribers get every event and a
-  single responder answers approvals/picks. Used by the legacy PySide6 GUI and
-  the tests.
+  single responder answers approvals/picks. Used by the tests and any
+  single-client frontend.
 
 * Scoped (per session): while a ``Session`` is attached to the current thread
   (see ``attached``), ``emit``/``interact`` route to that session only. The

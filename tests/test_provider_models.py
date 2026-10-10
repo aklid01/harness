@@ -219,6 +219,19 @@ class ModelCase(unittest.TestCase):
         self.write(LEGACY)
         self.assertEqual(providers.get_active_id(), providers.get_provider("https://a.example/v1")["id"])
 
+    def test_migration_never_stamps_settings_the_entry_never_had(self):
+        """Identical chips in the UI must be stored values, not invented ones."""
+        self.write(LEGACY)
+        models = providers.list_providers()
+        plain = next(m for m in models if m["model"] == "flash-2")
+        self.assertIsNone(plain["reasoning_effort"])
+        self.assertIsNone(plain["context_window"])
+        self.assertIsNone(plain["temperature"])
+        self.assertIsNone(plain["max_output_tokens"])
+        self.assertEqual(plain["extra_params"], {})
+        kept = next(m for m in models if m["model"] == "flash-1")
+        self.assertEqual(kept["reasoning_effort"], "high")
+
     def test_migration_is_reported(self):
         self.write(LEGACY)
         providers.list_providers()

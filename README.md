@@ -1,29 +1,41 @@
 # Harness
 
 A minimal desktop coding agent (personal educational build).
-PySide6 GUI + Python agent engine, one process, no browser, no JavaScript stack.
+Electron shell + Python agent engine: the UI is TypeScript/HTML, the engine
+stays Python, and the two talk over a local WebSocket.
 Inspired by the [Neural Code walkthrough](https://youtu.be/Lu1UWqVTbQg) - renamed to `harness` for personal use.
 
 ## Run
 
 ```powershell
 uv sync
-uv run harness
+cd electron
+npm install
+npm start
 ```
 
-The window opens with the last active provider. Type a message, Enter sends it
+Electron spawns the Python sidecar itself (`uv run python -m harness.server`),
+picks a free localhost port and loads the renderer against it. The window opens
+with the last active workspace and provider. Type a message, Enter sends it
 (Shift+Enter for a newline). The round send/stop button shows an arrow when
 idle and an animated spinner while the agent works; clicking it stops the turn
 between steps (the in-flight model call finishes first).
 
-## GUI tour
+The engine can also be run on its own, with no UI at all:
+
+```powershell
+uv run harness --port 8765 --project-root . --app-data-dir ~/.agents
+```
+
+## UI tour
 
 - Composer: message box plus Build/Plan mode, provider/model picker, reasoning
   effort picker, permission level (Default, Strict, Allow All, Autopilot),
-  send/stop button, Settings. Project and git branch shown underneath.
-- Left: sessions with LLM-generated titles (rename/delete via right-click,
-  current session in bold). The Sessions and Plan panels collapse via the top
-  bar toggles so the chat takes the width.
+  send/stop button, Settings. Workspace and git branch shown in the context
+  panel.
+- Left: workspaces, each listing its sessions with LLM-generated titles
+  (rename/delete via right-click, current session highlighted). New session
+  opens as a tab; tabs, sidebar and the backend stay on one session id.
 - Center: chat with markdown answers, compact one-line tool entries (output
   collapsed until opened, denied/blocked/skipped calls badged), a live
   activity line narrating each step, thinking indicator, red error cards.
@@ -58,11 +70,12 @@ The one-model-per-provider file the early builds wrote migrates on first use;
 the original is kept as `providers.json.bak` and the Settings panel reports
 what moved.
 
-The GUI never displays full secrets, only masked (`sk-...xyz`) and key status.
+The UI never displays full secrets, only masked (`sk-...xyz`) and key status.
 Settings offers Add model, Add model to an existing provider, Edit, Test
-(runs the `harness-ok` probe and reports latency), Delete model, Delete
-provider, Set active, and one-time Migrate (imports `settings.json`/`.env`
-keys into the keyring).
+(runs the `harness-ok` probe, then a side-effect-free tool-calling probe, and
+reports latency plus the model it tested), Delete model, Delete provider, Set
+active, and one-time Migrate (imports `settings.json`/`.env` keys into the
+keyring).
 
 Fallback: if a provider has no keyring entry, `./.env` (then `~/.agents/env`)
 is used and flagged as plaintext in Settings - but only when that key points
@@ -104,9 +117,13 @@ into place on startup.
 ## Architecture
 
 ```text
-PySide6 GUI  <-- events / interact -->  agent engine (Runner)
+Electron renderer  <-- WebSocket -->  harness/server.py  <-- events -->  agent engine (Runner)
 ```
 
+- `electron/`: main process (spawns the sidecar, picks the port, window and
+  workspace plumbing) and the renderer (tabs, chat, composer, Settings).
+- `harness/server.py`: the sidecar. One WebSocket, one `Session` per client
+  key, so many tabs and workspaces share one engine process.
 - `harness/events.py`: bus (`message`, `message_delta`, `tool_call/result`,
   `todos`, `usage`, `status`, `note`, `session`, `compacted`, `error`, `retry`,
   ...) and blocking `interact()` for approvals and picks. No UI imports.
@@ -115,8 +132,6 @@ PySide6 GUI  <-- events / interact -->  agent engine (Runner)
 - `harness/permissions.py`: allow/ask/deny policy with modes (default, strict,
   allow-all, autopilot). The deny list wins in every mode; autopilot only ever
   auto-allows what the policy would otherwise ask about.
-- `harness/gui/`: `bridge.py` runs the Runner on a worker thread (Qt signals
-  cross the boundary), plus main window, chat view, dialogs, settings.
 - `harness/providers.py`: registry + keyring + migration + connection test.
 - `harness/llm.py`: lazy per-provider client, optional token streaming, the
   request body for the active model.
@@ -134,7 +149,9 @@ uv run python tests/test_provider_models.py   # several models per provider, mig
 uv run python tests/test_retry.py             # classification, deadline, cancel
 uv run python tests/test_llm_retry.py         # call_llm retries, stream breaks
 uv run python tests/test_model_switch.py      # retry after switching models
-uv run python tests/test_gui_smoke.py         # offscreen drive of the real window
+uv run python tests/test_session_lifecycle.py # one session, one tab, one request per turn
+uv run python tests/test_tool_flow.py         # tool calls end to end against a mock endpoint
+uv run python tests/test_text_tools.py        # XML text tool calls: parse, validate, refuse
 uv run python tests/test_sessions.py          # storage, migration, LLM titles
 uv run python tests/test_permissions.py       # policy modes, deny-list supremacy
 uv run python tests/test_llm_params.py        # effort/temperature forwarding
