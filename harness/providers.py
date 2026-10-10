@@ -86,6 +86,32 @@ def scoped(active_id=None, effort=None):
             pass
 
 
+@contextlib.contextmanager
+def use(target_id):
+    """Route model calls to ``target_id`` for this context, effort untouched.
+
+    This is how role routing works without duplicating credentials: call_llm
+    reads everything - base_url, key, model id, capabilities, params, context
+    window - from the active context, so overriding just the active id points a
+    bounded sub-loop (the plan agent, the decision checker) at a different
+    configured model while it keeps the session's effort override. An empty or
+    unknown id changes nothing, so a misconfiguration can never reach the
+    wire as a model the registry does not hold.
+    """
+    resolved = target_id or _ACTIVE_ID.get()
+    if not resolved or _find_model(_cached(), resolved)[1] is None:
+        yield
+        return
+    token = _ACTIVE_ID.set(resolved)
+    try:
+        yield
+    finally:
+        try:
+            _ACTIVE_ID.reset(token)
+        except ValueError:
+            pass
+
+
 # ------------------------------------------------------------- small helpers
 
 

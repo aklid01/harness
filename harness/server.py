@@ -796,6 +796,9 @@ class Harness:
                 data = {"root": str(workspace_root), "sessions": session_mod.all_sessions()}
             return R({"reply": op, "ok": True, "data": data})
 
+        if op in ("get_agents", "set_agents"):
+            return R(self._agents_op(op, obj))
+
         if not key:
             return R({"reply": op, "ok": False, "error": "missing session"})
         s = self.session(key)
@@ -881,9 +884,24 @@ class Harness:
             return R({"reply": "retry", "ok": bool(ok)})
         return R({"reply": op, "ok": False, "error": f"unknown op: {op}"})
 
+    def _agents_op(self, op, obj):
+        from . import agents as agents_mod
+
+        if op == "get_agents":
+            return {"reply": op, "ok": True, "data": agents_mod.get()}
+        if op == "set_agents":
+            try:
+                stored = agents_mod.save(obj.get("config") or {})
+            except Exception as failure:  # noqa: BLE001 - report, never crash the UI
+                return {"reply": op, "ok": False, "error": f"{type(failure).__name__}: {failure}"}
+            # Saved config is ambient: every session reads it fresh at its next
+            # turn, so nothing needs to be pushed here. A running turn is left
+            # alone - switching an agent mid-response would desync its plan.
+            return {"reply": op, "ok": True, "data": stored}
+        return {"reply": op, "ok": False, "error": "unknown op"}
+
     def _provider_op(self, op, obj):
         from . import providers as providers_mod
-
         if op == "list_providers":
             models = providers_mod.list_models()
             statuses = {m["id"]: providers_mod.provider_status(m["id"]) for m in models}

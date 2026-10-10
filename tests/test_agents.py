@@ -1,0 +1,281 @@
+"""Optional plan/build agents: role routing around the existing agent.
+
+Everything here runs with the real backend but a mocked call_llm, so what is
+asserted is which *configured model* each phase used and what context the build
+phase received - not the wording a live model returns. The spine is the same
+one test_model_switch uses: providers for two models, and the recorded
+provider.active_config()[2] of each call proves the routing.
+
+The load-bearing guarantee: with the feature disabled, one submit is still one
+model request against the session's own model, with no planning handoff in the
+transcript - the existing agent, unchanged.
+"""
+
+import json
+import os
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
+os.environ.setdefault("API_KEY", "test-key")
+os.environ.setdefault("MODEL", "test-model")
+
+from harness import agents, events, paths as paths_mod, providers, server  # noqa: E402
+from harness import session as session_mod  # noqa: E402
+
+
+def reply(content, calls=()):
+    tool_calls = [
+        SimpleNamespace(id=f"c{i}", function=SimpleNamespace(name=n, arguments=json.dumps(a)))
+        for i, (n, a) in enumerate(calls)
+    ]
+    dumped = {"role": "assistant", "content": content}
+    if tool_calls:
+        dumped["tool_calls"] = [
+            {"id": c.id, "function": {"name": c.function.name, "arguments": c.function.arguments}}
+            for c in tool_calls
+        ]
+    return SimpleNamespace(content=content, tool_calls=tool_calls,
+                           model_dump=lambda exclude_none=True: dict(dumped))
+
+
+USAGE = {"prompt_tokens": 1, "completion_tokens": 1, "reasoning_tokens": None, "cached_tokens": None}
+
+
+class ConfigCase(unittest.TestCase):
+    """The config file itself: defaults, normalisation, model resolution."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "proj"
+        self.root.mkdir(parents=True)
+        appdata = Path(self.tmp.name) / "appdata"
+        appdata.mkdir(parents=True)
+        paths_mod.init(project_root=self.root, app_data_dir=appdata)
+        self.addCleanup(paths_mod.reset)
+        self.addCleanup(agents.reset_cache)
+
+    def test_no_file_means_everything_off(self):
+        config = agents.get()
+        self.assertFalse(config["plan"]["enabled"])
+        self.assertFalse(config["build"]["enabled"])
+        self.assertFalse(config["oversight"]["enabled"])
+        self.assertEqual(config["oversight"]["intensity"], "medium")
+        self.assertEqual(config["oversight"]["max_rounds"], 2)
+
+    def test_round_trip_and_normalisation(self):
+        stored = agents.save({
+            "plan": {"enabled": True, "model_id": "mdl-plan", "instructions": "Be brief."},
+            "build": {"enabled": True, "model_id": "mdl-build"},
+            "oversight": {"enabled": True, "model_id": "mdl-rev",
+                          "intensity": "nonsense", "max_rounds": 99},
+        })
+        agents.reset_cache()
+        got = agents.get()
+        self.assertTrue(got["plan"]["enabled"])
+        self.assertEqual(got["plan"]["model_id"], "mdl-plan")
+        self.assertEqual(got["plan"]["instructions"], "Be brief.")
+        self.assertEqual(got["build"]["model_id"], "mdl-build")
+        self.assertEqual(got["oversight"]["intensity"], "medium", "a bad intensity falls back")
+        self.assertLessEqual(got["oversight"]["max_rounds"], agents.MAX_ROUNDS_LIMIT, "clamped")
+
+    def test_resolve_model_uses_own_or_default_or_none(self):
+        self.assertIsNone(agents.resolve_model({"enabled": False, "model_id": "mdl-plan"}, "def"))
+        self.assertEqual(agents.resolve_model({"enabled": True, "model_id": "mdl-plan"}, "def"), "mdl-plan")
+        self.assertEqual(agents.resolve_model({"enabled": True, "model_id": ""}, "def"), "def",
+                         "enabled but unset uses the session default")
+
+    def test_garbage_file_becomes_defaults(self):
+        agents._file().write_text("{not json", encoding="utf-8")
+        agents.reset_cache()
+        self.assertFalse(agents.get()["plan"]["enabled"])
+
+
+class RouteCase(unittest.TestCase):
+    """Plan then build, end to end, with a mocked call_llm."""
+
+    def setUp(self):
+        events.reset()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "proj"
+        self.root.mkdir(parents=True)
+        appdata = Path(self.tmp.name) / "appdata"
+        appdata.mkdir(parents=True)
+        paths_mod.init(project_root=self.root, app_data_dir=appdata)
+        self.addCleanup(paths_mod.reset)
+        self.addCleanup(agents.reset_cache)
+        os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
+        self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
+
+        providers.save_group({"id": "grp-1", "name": "P", "base_url": "https://x.example/v1"})
+        providers.save_model({"id": "mdl-default", "name": "Default", "model": "default-model"}, "grp-1")
+        providers.save_model({"id": "mdl-plan", "name": "Planner", "model": "plan-model"}, "grp-1")
+        providers.save_model({"id": "mdl-build", "name": "Builder", "model": "build-model"}, "grp-1")
+        providers.set_active("mdl-default")
+
+        self.backend = server.Harness()
+        self.sent = []
+        self.backend.attach(self.sent.append)
+        self.addCleanup(self.quiesce)
+        self.seen = {}
+
+        self.calls = []  # (model, has_plan_in_context)
+        self.patch = mock.patch("harness.agent.call_llm")
+        self.llm = self.patch.start()
+        self.addCleanup(self.patch.stop)
+        self.llm.side_effect = self._answer
+
+    def quiesce(self):
+        for s in list(self.backend.sessions.values()):
+            s.join_background(timeout=10)
+
+    def _answer(self, messages, tools=None, on_delta=None, cancel=None):
+        model = providers.active_config()[2]
+        has_plan = any("<plan>" in str(m.get("content") or "") for m in messages)
+        self.calls.append((model, has_plan))
+        # The planner answers with a plan; the builder answers with a summary.
+        if model == "plan-model":
+            return reply("PLAN_BODY: step one, step two."), USAGE
+        return reply("built it"), USAGE
+
+    def dispatch(self, **obj):
+        obj.setdefault("req_id", time.time_ns() % 1000000)
+        self.backend.dispatch(obj)
+
+    def done(self, session, timeout=20, kind="done"):
+        # Count-based so a done from an earlier turn in self.sent can never be
+        # mistaken for this one; each call waits for the NEXT such event.
+        target = self.seen.get((session, kind), 0) + 1
+        limit = time.time() + timeout
+        while time.time() < limit:
+            n = sum(1 for m in self.sent
+                    if m.get("event") == kind and m.get("session") == session)
+            if n >= target:
+                self.seen[(session, kind)] = target
+                return True
+            time.sleep(0.02)
+        return False
+
+    def sid(self):
+        for m in self.sent:
+            if m.get("event") == events.SESSION and m.get("session") == "s" and m["payload"].get("id"):
+                return m["payload"]["id"]
+        return None
+
+    def submit(self, text="fix the bug"):
+        self.dispatch(op="open", session="s", root=str(self.root))
+        self.assertTrue(self.done("s", kind="session"))
+        self.calls.clear()
+        self.dispatch(op="submit", session="s", text=text, mode="build")
+        self.assertTrue(self.done("s"))
+
+    def transcript_users(self):
+        sid = self.sid()
+        path = paths_mod.session_dir() / f"{sid}.jsonl"
+        out = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "rewind_to" in entry:
+                del out[entry["rewind_to"]:]
+            elif "compacted" not in entry:
+                out.append(entry)
+        return [m["content"] for m in out if m.get("role") == "user"]
+
+    # ---- the spine: disabled == today ---------------------------------
+
+    def test_all_disabled_is_one_request_on_the_default_model(self):
+        self.submit()
+        self.assertEqual(self.calls, [("default-model", False)],
+                         "no agents: one request, session model, no plan context")
+
+    def test_disabled_leaves_no_plan_in_the_transcript(self):
+        self.submit()
+        self.assertEqual(self.transcript_users(), ["fix the bug"],
+                         "no plan handoff message is injected when the feature is off")
+
+    # ---- plan + build ---------------------------------------------------
+
+    def test_plan_and_build_use_their_own_models_in_order(self):
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit()
+        self.assertEqual([m for m, _ in self.calls], ["plan-model", "build-model"],
+                         "the plan runs on the plan model, the build on the build model")
+
+    def test_plan_is_handed_to_the_build_as_context(self):
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit()
+        plan_call = next(c for c in self.calls if c[0] == "plan-model")
+        build_call = next(c for c in self.calls if c[0] == "build-model")
+        self.assertFalse(plan_call[1], "the plan call does not carry a plan yet")
+        self.assertTrue(build_call[1], "the build call sees the plan as structured context")
+
+    def test_plan_persists_in_the_transcript_as_inspectable_context(self):
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit()
+        users = self.transcript_users()
+        self.assertEqual(users[0], "fix the bug", "the real request is first")
+        self.assertTrue(any(u.startswith("<plan>") and "step one" in u for u in users),
+                        "the plan is stored, not just shown and dropped")
+
+    def test_plan_event_is_emitted_then_ready(self):
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit()
+        statuses = [m["payload"].get("status") for m in self.sent
+                    if m.get("event") == events.PLAN]
+        self.assertIn("generating", statuses)
+        self.assertIn("ready", statuses)
+
+    # ---- partial enablement falls back to the default -------------------
+
+    def test_build_only_uses_build_model_no_planning(self):
+        agents.save({"build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit()
+        self.assertEqual(self.calls, [("build-model", False)],
+                         "build-only: no planning pass, build model, no plan context")
+
+    def test_plan_only_plans_on_plan_model_then_builds_on_default(self):
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"}})
+        self.submit()
+        self.assertEqual([m for m, _ in self.calls], ["plan-model", "default-model"],
+                         "plan-only: build falls back to the session default model")
+        build_call = next(c for c in self.calls if c[0] == "default-model")
+        self.assertTrue(build_call[1], "the plan still reaches the default build agent")
+
+    def test_enabled_but_unset_model_uses_default_model(self):
+        agents.save({"plan": {"enabled": True}, "build": {"enabled": True}})
+        self.submit()
+        # Planning still runs (a dedicated pass) but on the default model, and
+        # building continues on the default model too.
+        self.assertTrue(all(m == "default-model" for m, _ in self.calls))
+        self.assertEqual(len(self.calls), 2)
+
+    def test_one_request_and_one_plan_phase_across_two_turns_no_dup_user_msg(self):
+        # A second turn re-plans, but the transcript still holds each user
+        # message exactly once and both turn phases run per submit.
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit("first task")
+        self.assertEqual(self.transcript_users()[0], "first task")
+        self.assertEqual(len(self.transcript_users()), 2, "user + one plan handoff")
+        self.dispatch(op="submit", session="s", text="second task", mode="build")
+        self.assertTrue(self.done("s"))
+        users = self.transcript_users()
+        self.assertEqual([u for u in users if not u.startswith("<plan>")],
+                         ["first task", "second task"], "user messages are not duplicated")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

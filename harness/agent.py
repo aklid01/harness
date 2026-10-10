@@ -7,6 +7,7 @@ from . import compact
 from . import events
 from . import history
 from . import providers
+from . import agents
 from . import texttools
 from . import session
 from .context import reminder
@@ -33,6 +34,26 @@ BUILD_NOTICE = (
     "</system-reminder>"
 )
 
+# The handoff that carries a plan into the build phase. It is stored in the
+# transcript (so it is inspectable and survives compaction) and lands as real
+# context for the build agent - it is the plan, not a finished result.
+PLAN_HANDOFF = (
+    "<plan>\n"
+    "A planning agent produced the plan below for the task you were given. Treat "
+    "it as structured task context - the current plan, not completed work. "
+    "Implement it, verifying with the relevant tests as you go. If inspecting the "
+    "code or running tests shows a step is wrong or incomplete, do not force it: "
+    "adapt, and state plainly what you changed and why.\n\n"
+    "{plan}\n"
+    "</plan>"
+)
+
+# The planner is read-only by construction: these tools are simply not offered
+# to it, so it cannot change the workspace. This is stronger than the read-only
+# instruction in its prompt, mirroring how subagent.py fences a guest.
+PLAN_WITHHELD = {"write_file", "str_replace", "write_todos"}
+PLAN_MAX_TURNS = 16  # a runaway planner is worse than a missing plan
+
 
 # Every Runner gets its own request-id space, so a tool call made by one
 # conversation can never collide with an identical call made by another.
@@ -53,6 +74,7 @@ class Runner:
         self._step = 0
         self._text_retries = 0
         self._text_calls: set = set()
+        self._role_instructions = ""
         self._request_prefix = f"r{next(TURN_KEYS)}"
         self.messages = [{"role": "system", "content": system_prompt(mode)}]
         if resume:
@@ -72,7 +94,116 @@ class Runner:
         # Saved before the call, so a failed request never loses what was asked.
         session.save(self.messages)
         events.emit(events.MESSAGE, {"role": "user", "content": user_text})
-        self._turn()
+        self._run_workflow(user_text)
+
+    def _run_workflow(self, user_text):
+        """Plan (optional) then build, in one session and one transcript.
+
+        With no custom agents configured this is a plain build turn, byte for
+        byte as before. A configured plan agent runs a bounded read-only pass
+        first and hands its plan to the build agent as context; a configured
+        build agent routes the implementation pass to its own model. Neither
+        creates a second session, a second copy of the user message, or a
+        competing history: it is all the one Runner on the one transcript.
+        """
+        config = agents.get()
+        default_model = providers.get_active_id()
+        build_cfg = config["build"]
+        self._role_instructions = (build_cfg.get("instructions") or "") if build_cfg.get("enabled") else ""
+
+        plan_id = agents.resolve_model(config["plan"], default_model)
+        if plan_id is not None and self.mode != "plan" and not self.cancelled():
+            plan_text = self._plan_phase(
+                user_text, plan_id, config["plan"].get("instructions") or "")
+            if plan_text and not self.cancelled():
+                self.messages.append(
+                    {"role": "user", "content": PLAN_HANDOFF.format(plan=plan_text)})
+                session.save(self.messages)
+
+        if self.cancelled():
+            events.emit(events.NOTE, {"text": "stopped"})
+            return
+        build_id = agents.resolve_model(build_cfg, default_model)
+        if build_id:
+            with providers.use(build_id):
+                self._turn()
+        else:
+            self._turn()
+
+    def _plan_phase(self, request, plan_model_id, plan_instructions):
+        """A bounded, read-only planning pass on its own model.
+
+        This is the subagent pattern (see subagent.py): a throwaway message list
+        that holds read-only tools, runs the normal call/execute loop, and hands
+        back only its final write-up. Nothing here is written to the session
+        transcript beyond the single handoff message the caller appends, so the
+        exploration cost never lands in the persisted history.
+        """
+        from . import tools as tools_module
+
+        messages = [
+            {"role": "system", "content": system_prompt("plan", plan_instructions)},
+            {"role": "user", "content": request},
+        ]
+        toolset = [s for s in tools_module.TOOL_SCHEMAS
+                   if s["function"]["name"] not in PLAN_WITHHELD]
+        report = None
+        label = plan_model_id
+        events.emit(events.PLAN, {"status": "generating", "request": request[:200]})
+        with providers.use(plan_model_id):
+            caps = providers.active_model_capabilities()
+            label = caps.get("name") or caps.get("model") or plan_model_id
+            window = providers.active_context_window()
+            for _ in range(PLAN_MAX_TURNS):
+                if self.cancelled():
+                    break
+                prepared, trimmed = history.prepare(messages, window)
+                if trimmed:
+                    events.emit(events.NOTE, {"text": trimmed})
+                events.emit(events.STATUS, {"active": "planning"})
+                try:
+                    message, usage = call_llm(prepared, tools=toolset, cancel=self.cancel_event)
+                except Exception as failure:  # noqa: BLE001 - degrade, don't kill the turn
+                    events.emit(events.STATUS, {"active": None})
+                    events.emit(events.PLAN, {"status": "skipped",
+                                              "reason": type(failure).__name__, "model": label})
+                    events.emit(events.NOTE, {
+                        "text": "the planning pass failed - proceeding to build "
+                                f"without a written plan ({type(failure).__name__})."})
+                    return None
+                events.emit(events.STATUS, {"active": None})
+                events.emit(events.USAGE, dict(usage))
+                messages.append(message.model_dump(exclude_none=True))
+                report = message.content or report
+                if not message.tool_calls:
+                    break
+                for tool_call in message.tool_calls:
+                    if self.cancelled():
+                        break
+                    name = tool_call.function.name
+                    call_id = getattr(tool_call, "id", None)
+                    try:
+                        args = json.loads(tool_call.function.arguments)
+                    except ValueError:
+                        args = {}
+                    if name in PLAN_WITHHELD:
+                        result = f"Planning is read-only; {name} is not available here."
+                    else:
+                        args, result = execute(tool_call, note=(message.content or ""))
+                    events.emit(events.TOOL_CALL, {"call_id": call_id, "name": name,
+                                                   "args": args, "nested": True})
+                    events.emit(events.TOOL_RESULT, {"call_id": call_id, "name": name,
+                                                     "args": args, "result": result, "nested": True})
+                    messages.append({"role": "tool", "tool_call_id": tool_call.id,
+                                     "content": result})
+                if self.cancelled():
+                    break
+
+        if not report:
+            events.emit(events.PLAN, {"status": "skipped", "reason": "empty", "model": label})
+            return None
+        events.emit(events.PLAN, {"status": "ready", "plan": report, "model": label})
+        return report
 
     def _announce_mode(self):
         """Put mode switches in the transcript, where the model will see them.
@@ -209,6 +340,15 @@ class Runner:
                     "\n<mode>\nPlan mode: you are read-only. Explore, explain, and "
                     "propose concrete changes, but do NOT call write_file or "
                     "str_replace - they are blocked and this turn will be wasted.\n</mode>"
+                )
+            if self._role_instructions:
+                injection["content"] += (
+                    "\n<task-instructions>\n"
+                    "The user configured these instructions for the build phase. "
+                    "Follow them; where they conflict with the project rules above, "
+                    "ask the user rather than choosing yourself.\n"
+                    f"{self._role_instructions}\n"
+                    "</task-instructions>"
                 )
             self._tools_honesty(injection)
             events.emit(events.INJECTION, {"content": injection["content"]})

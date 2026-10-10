@@ -38,6 +38,8 @@ SESSION = "session"
 SUBAGENT = "subagent"
 ERROR = "error"
 RETRY = "retry"
+PLAN = "plan"
+DECISION = "decision"
 
 APPROVAL = "approval"
 PICK = "pick"

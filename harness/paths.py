@@ -95,6 +95,10 @@ def providers_file() -> Path:
     return app_data_dir() / "providers.json"
 
 
+def agents_file() -> Path:
+    return app_data_dir() / "agents.json"
+
+
 def legacy_providers_files() -> list[Path]:
     seen: list[Path] = []
     for candidate in (Path.cwd() / "providers.json",

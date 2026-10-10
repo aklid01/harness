@@ -282,7 +282,7 @@ above or with your own defaults, the project rules win.
 """
 
 
-def system_prompt(mode="build"):
+def system_prompt(mode="build", role_instructions=""):
     from . import paths
 
     cwd = str(paths.project_root())
@@ -290,6 +290,13 @@ def system_prompt(mode="build"):
     template = PLAN_SYSTEM_PROMPT if mode == "plan" else SYSTEM_PROMPT
     # Instructions last: their own text can contain anything, and replacing
     # placeholders after injecting it would let it rewrite the prompt.
-    return (template.replace("{cwd}", cwd)
-                   .replace("{skills}", skills)
-                   .replace("{instructions}", instructions.load()))
+    prompt = (template.replace("{cwd}", cwd)
+                    .replace("{skills}", skills)
+                    .replace("{instructions}", instructions.load()))
+    # Role instructions come after substitution too, so a custom instruction
+    # can never smuggle a placeholder expansion into the prompt. They are the
+    # user's words for this one role, kept separate from the project's rules.
+    extra = (role_instructions or "").strip()
+    if extra:
+        prompt += f"\n\n## Instructions you were given for this task\n\n{extra}"
+    return prompt
