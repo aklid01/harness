@@ -32,6 +32,7 @@ class MockState:
                 self.script = json.load(handle)
         self.record_path = record_path
         self.requests = []
+        self.count = 0
         self.lock = threading.Lock()
 
     def steps_for(self, model):
@@ -130,8 +131,8 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
         with self.state.lock:
-            Handler.counter += 1
-            index = Handler.counter
+            self.state.count += 1
+            index = self.state.count
         self.state.record(body)
 
         model = body.get("model") or ""
@@ -173,7 +174,7 @@ class MockProvider:
 
     def __enter__(self):
         self.state = MockState(self.script_path, self.record_path)
-        handler = type("BoundHandler", (Handler,), {"state": self.state, "counter": 0})
+        handler = type("BoundHandler", (Handler,), {"state": self.state})
         self.server = ThreadingHTTPServer((HOST, 0), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()

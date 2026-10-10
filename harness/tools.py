@@ -204,6 +204,43 @@ def _tracked_write(name, args):
     return result
 
 
+def _validate_args(name, args):
+    """Schema-check a native call's arguments before anything runs.
+
+    Returns None when they are fine, or a reason string the model can act on.
+    Mirrors the text-call layer, so both paths give the same kind of feedback:
+    missing required arguments, arguments the tool does not accept, and wrong
+    types are refused before the permission layer or the handler runs.
+    """
+    schema = None
+    for candidate in TOOL_SCHEMAS:
+        if candidate["function"]["name"] == name:
+            schema = candidate["function"].get("parameters") or {}
+            break
+    if schema is None:
+        return None
+    properties = schema.get("properties") or {}
+    missing = [key for key in (schema.get("required") or [])
+               if key not in args or args[key] in (None, "")]
+    if missing:
+        return (f"{name} is missing required argument(s): {', '.join(missing)}.")
+    unknown = [key for key in args if key not in properties]
+    if unknown:
+        return f"{name} got argument(s) it does not accept: {', '.join(unknown)}."
+    for key, value in args.items():
+        kind = (properties.get(key) or {}).get("type")
+        expected = {"string": str, "integer": int, "number": (int, float),
+                    "boolean": bool}.get(kind)
+        if not expected or isinstance(value, expected):
+            # bool is an int subclass: a boolean where a number is wanted is
+            # a wrong type, the other way round is fine.
+            if kind in ("integer", "number") and isinstance(value, bool):
+                return f"{name} argument '{key}' should be {kind}."
+            continue
+        return f"{name} argument '{key}' should be {kind}."
+    return None
+
+
 def execute(tool_call, note="", call_key=None):
     """Run one tool call through the permission layer.
 
@@ -236,6 +273,10 @@ def execute(tool_call, note="", call_key=None):
 
     if name not in TOOLS:
         return args, f"Error: no tool named '{name}'. Available: {', '.join(TOOLS)}."
+
+    problem = _validate_args(name, args)
+    if problem is not None:
+        return args, f"Error: {problem}"
 
     if name in ("write_file", "str_replace", "read_file"):
         args["path"] = str(_resolve(args["path"]))

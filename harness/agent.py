@@ -52,6 +52,7 @@ class Runner:
         self._turn_text = ""
         self._step = 0
         self._text_retries = 0
+        self._text_calls: set = set()
         self._request_prefix = f"r{next(TURN_KEYS)}"
         self.messages = [{"role": "system", "content": system_prompt(mode)}]
         if resume:
@@ -114,24 +115,33 @@ class Runner:
         events.emit(events.ERROR, payload)
 
     def _text_call(self, message):
-        """A model with no native tool support may write its call out in text.
+        """A model that cannot do native tool calls may write one out in text.
 
-        Only ever consulted when the model is marked as able to do this, and
-        only for a call that stands on its own. Returns (call, narration) or
-        (None, None) when there is nothing actionable here.
+        Only ever consulted when the message carries call markup. Returns
+        (call, narration):
+
+        * a usable call and its narration, when this model is allowed the
+          text-call format;
+        * a refused call explaining why, when the format is not enabled for
+          this model or the markup is unusable;
+        * (None, None) when there is no call markup at all.
         """
-        caps = providers.active_model_capabilities()
-        if not caps.get("supports_text_tools"):
-            return None, None
         content = message.content or ""
         if not texttools.looks_like_call(content):
             return None, None
+        caps = providers.active_model_capabilities()
         from . import tools as tools_module
 
-        call, narration = texttools.parse_with_narration(
-            content, schemas=tools_module.tool_schemas(),
-            available=tools_module.available_tool_names())
-        return call, narration
+        if not caps.get("supports_text_tools"):
+            model = caps.get("name") or "this model"
+            return (texttools.TextCall(error=(
+                f"{model} does not use native tool calls and the text-call format "
+                "is not enabled for it. Nothing was executed - enable "
+                "'text tool calls' for this model in Settings, or ask it in plain "
+                "words.")), None)
+        available = tools_module.available_tool_names()
+        schemas = tools_module.tool_schemas()
+        return texttools.parse_with_narration(content, schemas=schemas, available=available)
 
     def _unrecognised_call(self, text):
         """Tell the user, plainly, that a call was not run - and why."""
@@ -158,6 +168,8 @@ class Runner:
         # The user message that opened this turn, so a retry resumes from it
         # instead of appending a second copy.
         self._turn_index = len(self.messages) - 1
+        self._text_retries = 0
+        self._text_calls = set()
         for message in reversed(self.messages[:self._turn_index + 1]):
             if message.get("role") == "user" and not str(message.get("content") or "").startswith("<"):
                 self._turn_text = str(message.get("content") or "")
@@ -212,6 +224,29 @@ class Runner:
             if not message.tool_calls:
                 text_call, narration = self._text_call(message)
                 if text_call is not None and text_call.ok:
+                    # The same call text again means the model is looping, not
+                    # working: it already got this exact result. Tell it so and
+                    # stop - never execute the same text call twice.
+                    fingerprint = f"{text_call.name}:{text_call.arguments}"
+                    if fingerprint in self._text_calls:
+                        self.messages.append(message.model_dump(exclude_none=True))
+                        session.save(self.messages)
+                        events.emit(events.NOTE, {
+                            "text": "The model sent the same text tool call again "
+                                    "after receiving its result, so the turn was "
+                                    "stopped instead of running it twice.",
+                            "kind": "repeated_text_call",
+                        })
+                        self.messages.append({"role": "user", "content": (
+                            "<system-reminder>\n"
+                            "You already sent this exact tool call and its result is "
+                            "in the conversation. Do not send it again; use the result "
+                            "you have and answer the user.\n"
+                            "</system-reminder>"
+                        )})
+                        session.save(self.messages)
+                        break
+                    self._text_calls.add(fingerprint)
                     # The narration is real output: show it, keep it in the
                     # transcript, then run the call exactly like a native one.
                     if narration:
@@ -234,9 +269,19 @@ class Runner:
                     break
 
             if text_call is not None and text_call.ok:
-                message = SimpleNamespace(
+                converted = SimpleNamespace(
                     content=narration or None,
                     tool_calls=[text_call.as_tool_call(f"text-{self._turn_index}-{self._step}")])
+                converted.model_dump = lambda exclude_none=True: {
+                    "role": "assistant",
+                    **({"content": narration} if narration else {}),
+                    "tool_calls": [
+                        {"id": call.id, "type": "function",
+                         "function": {"name": call.function.name,
+                                      "arguments": call.function.arguments}}
+                        for call in converted.tool_calls],
+                }
+                message = converted
 
             self.messages.append(message.model_dump(exclude_none=True))
             session.save(self.messages)
