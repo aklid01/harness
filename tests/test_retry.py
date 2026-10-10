@@ -105,6 +105,34 @@ class ClassifyCase(unittest.TestCase):
         error = errors.classify(http(422, "Unsupported parameter: 'reasoning_effort'"), model="m")
         self.assertIn("reasoning_effort", error.text())
 
+    def test_each_status_suggests_its_own_next_step(self):
+        cases = {
+            http(401, "Incorrect API key provided"): "key",
+            http(403, "forbidden"): "permissions",
+            http(404, "model does not exist"): "model",
+            http(429, "slow down"): "Retry",
+            http(422, "bad parameter"): "parameter",
+            http(503, "overloaded"): "Retry",
+        }
+        for failure, needle in cases.items():
+            error = errors.classify(failure, model="m")
+            self.assertIn(needle, error.hint, f"{failure!r}: {error.hint!r}")
+            self.assertTrue(error.hint.endswith((".", "?")))
+
+    def test_hint_reaches_the_payload(self):
+        payload = errors.classify(http(429, "slow down"), model="m").payload()
+        self.assertIn("hint", payload)
+        self.assertIn("Retry", payload["hint"])
+
+    def test_provider_error_body_is_parsed_cleanly(self):
+        body = {"error": {"message": "Unsupported parameter", "code": "unsupported_parameter",
+                          "type": "invalid_request_error", "param": "reasoning_effort"}}
+        error = errors.classify(http(422, "", body=body), model="m")
+        self.assertIn("Unsupported parameter", error.detail)
+        self.assertIn("reasoning_effort", error.detail)
+        self.assertIn("unsupported_parameter", error.detail)
+        self.assertIn("parameter reasoning_effort", error.detail)
+
 
 class RunCase(unittest.TestCase):
     def setUp(self):

@@ -1,13 +1,11 @@
-backend: connected on port 8901
-submitted 'hi' against the dead endpoint
-retry card progress: ["Retry 2 · in flight · 3s of 150s elapsed","Retry 3 · in flight · 4s of 150s elapsed","Retry 3 · in flight · 5s of 150s elapsed"]
-VERDICT retry-card-ticks: true
-error card: could not reach the providercould not reach the provider (Dead Local): Connection error. - still failing after repeated attemptsRetrySwitch model
-VERDICT error-card-survives-the-reconcile: true
-tabs before delete: [{"title":"hi","active":true}]
-after deleting the tab's own session: [{"title":"New Session","active":true}]
-VERDICT deleted-session-closes-its-tab: true
-VERDICT another-tab-or-landing-is-active: true
-after deleting the last tab's own session: tabs=[] landing=true
-VERDICT last-tab-returns-to-default-screen: true
-RESULT: PASS
+VERDICT plan-panel-closed-by-default: true ({"hidden":true,"toggleActive":false})
+VERDICT retry-card-ticks: true (["Retry 3 · in flight · 4s of 150s elapsed","Retry 3 · in flight · 5s of 150s elapsed"])
+VERDICT error-card-shown: true (could not reach the providercould not reach the provider (Dead Local): Connection error. -)
+VERDICT error-suggests-next-step: true (["Check the base URL and your connection, then press Retry."])
+VERDICT deleted-session-leaves-the-list: true (before=["second turn","first turn","second turn","second turn","Summarize project using tools","Say Hello Task","Write Project Summary","Summarize Project Functionality","Report README contents"] after=["second turn","second turn","second turn","Summarize project using tools","Say Hello Task","Write Project Summary","Summarize Project Functionality","Report README contents"])
+VERDICT error-card-survives-session-switch: true (could not reach the providercould not reach the provider (Dead Local): Connectio)
+VERDICT closing-every-tab-lands: true ({"tabs":[],"landingVisible":true})
+VERDICT session-deletable-without-opening: true (before=9 after=8)
+VERDICT workspace-removable: true (rows=6->5)
+VERDICT folder-still-on-disk: true
+RESULT: PASS (10/10)

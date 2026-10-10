@@ -122,8 +122,8 @@ export type OpPayload =
   | { op: "git_create_branch"; name: string }
   | { op: "list_sessions" }
   | { op: "get_transcript"; id: string }
-  | { op: "rename_session"; id: string; title: string }
-  | { op: "delete_session"; id: string }
+  | { op: "rename_session"; root?: string; id: string; title: string }
+  | { op: "delete_session"; root?: string; id: string }
   | { op: "list_providers" }
   | { op: "set_active"; id: string }
   | { op: "set_effort"; id: string; effort: string | null }

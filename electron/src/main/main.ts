@@ -268,6 +268,24 @@ app.whenReady().then(async () => {
   ipcMain.handle("get-recent-workspaces", async () =>
     loadRecentsRoots().filter((r) => isDir(r)).map((r) => ({ root: r, name: path.basename(r) || r })));
 
+  ipcMain.handle("forget-workspace", async (_event, root: string) => {
+    if (typeof root !== "string" || !root) return false;
+    // Forgetting is not deleting: the folder stays on disk, only the app's
+    // memory of it goes. If it was the last folder opened, the remembered
+    // workspace goes with it so the next boot does not resurrect it.
+    const kept = loadRecentsRoots().filter((r) => r !== root);
+    saveRecentsRoots(kept);
+    const last = workspaceFile();
+    try {
+      if (fs.existsSync(last) && JSON.parse(fs.readFileSync(last, "utf-8")).projectRoot === root) {
+        fs.unlinkSync(last);
+      }
+    } catch (err) {
+      log("main", `could not clear last workspace: ${String(err)}`);
+    }
+    return true;
+  });
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow(activePort, activeRoot);
   });

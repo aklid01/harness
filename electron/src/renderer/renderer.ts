@@ -38,6 +38,7 @@ interface Prefs {
   fontScale: "sm" | "base" | "lg";
   density: "comfortable" | "compact";
   reduceMotion: boolean;
+  rightPanel: boolean;
   confirmProtected: boolean;
   defaultMode: "build" | "plan";
   effortGlobal: string;
@@ -48,8 +49,10 @@ interface Prefs {
 }
 const PREFS_KEY = "harness:prefs:v1";
 const DEFAULT_PREFS: Prefs = {
-  theme: "neon", fontScale: "base", density: "comfortable", reduceMotion: false,
-  confirmProtected: true, defaultMode: "build", effortGlobal: "default",
+  theme: "neon", fontScale: "base", density: "comfortable",
+  reduceMotion: false, rightPanel: false,
+  confirmProtected: true, defaultMode: "build",
+  effortGlobal: "default",
   effortByWs: {}, providerByWs: {}, lastSessionByWs: {}, tabsByWs: {},
 };
 function loadPrefs(): Prefs {
@@ -188,7 +191,7 @@ interface Ctx {
   pendingProviderId: string | null;
   pendingOpenSessionId: string | null;
   pendingResume: boolean;
-  failure: { retry: RetryInfo | null; headline: string; model: string | null; text: string; transient: boolean } | null;
+  failure: { retry: RetryInfo | null; headline: string; model: string | null; text: string; transient: boolean; hint: string } | null;
   retryCard: HTMLDivElement | null;
   retryTick: RetryTick | null;
   retryTimer: number | null;
@@ -490,6 +493,7 @@ function failureCard(ctx: Ctx, failure: NonNullable<Ctx["failure"]>): HTMLDivEle
   div.innerHTML =
     `<b>${escapeHtml(failure.headline)}</b>` +
     `<div>${escapeHtml(failure.text)}</div>` +
+    (failure.hint ? `<div class="error-hint">${escapeHtml(failure.hint)}</div>` : "") +
     (actions.length ? `<div class="msg-actions" style="opacity:1;pointer-events:auto;margin-top:8px">${actions.join("")}</div>` : "");
   div.querySelectorAll<HTMLButtonElement>("[data-retry]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); retryFailedRequest(ctx); }; });
   div.querySelectorAll<HTMLButtonElement>("[data-switch]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); openModelPicker(ctx); }; });
@@ -511,7 +515,8 @@ function addError(ctx: Ctx, text: string, meta?: Record<string, unknown>): void 
   const model = String(meta?.["model"] ?? "") || (retry?.model ?? "");
   const headline = String(meta?.["headline"] ?? "") || (model ? `${model} failed` : "Error - no response produced");
   ctx.failure = { retry, headline, model: model || null, text,
-                  transient: meta?.["transient"] !== false };
+                  transient: meta?.["transient"] !== false,
+                  hint: String(meta?.["hint"] ?? "") };
   ctx.chatBody.appendChild(failureCard(ctx, ctx.failure));
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
@@ -525,6 +530,13 @@ function clearRetryCard(ctx: Ctx): void {
   }
   ctx.retryCard?.remove();
   ctx.retryCard = null;
+}
+/* A new turn replaces the failure: forget it and take its card off screen
+   now, so the card of the turn being retried does not linger under the new
+   one for the round trip it takes the engine to rewind. */
+function dropFailureCard(ctx: Ctx): void {
+  ctx.failure = null;
+  ctx.chatBody.querySelectorAll<HTMLElement>(".error").forEach((card) => card.remove());
 }
 interface RetryTick {
   model: string;
@@ -579,7 +591,7 @@ function retryFailedRequest(ctx: Ctx): void {
   if (!info) { setActivity("nothing to retry"); return; }
   if (ctx.busy) { setActivity("still busy - press Stop first"); return; }
   clearRetryCard(ctx);
-  ctx.failure = null;
+  dropFailureCard(ctx);
   setBusy(ctx, true);
   showThinking(ctx);
   if (!send(ctx, { op: "retry", count: info.count, text: info.text, mode: ctx.modeVal })) {
@@ -918,6 +930,11 @@ function openTab(root: string, intent: Ctx["openIntent"], openId: string | null)
   else void fetchRecents();
   persistTabs();
 }
+function refreshAllWorkspaceSessions(): void {
+  if (!connected) return;
+  const ctx = activeCtx ?? ensureAppCtx();
+  for (const ws of recents) send(ctx, { op: "ws_sessions", root: ws.root });
+}
 function closeTab(id: string): void {
   const idx = tabs.findIndex((t) => t.id === id);
   if (idx < 0) return;
@@ -1070,6 +1087,7 @@ function renderTree(): void {
       `<span class="ws-act">${ICONS.arrow}</span>`;
     attachMarquee(row.querySelector<HTMLElement>(".ws-name"));
     row.onclick = () => switchToWorkspace(ws.root);
+    row.oncontextmenu = (e) => { e.preventDefault(); lastMenuX = e.clientX; lastMenuY = e.clientY; showWorkspaceMenu(ws.root, ws); };
     treeBox.appendChild(row);
     const kids = document.createElement("div");
     kids.className = "ws-kids" + (open ? "" : " hidden");
@@ -1077,6 +1095,25 @@ function renderTree(): void {
     kids.appendChild(newTreeSessionRow(ws.root));
     treeBox.appendChild(kids);
   }
+}
+function showWorkspaceMenu(root: string, ws: WorkspaceRef): void {
+  contextMenu.innerHTML =
+    `<button data-act="open">${ICONS.folder}<span>Open sessions</span></button>` +
+    `<div class="ctx-sep"></div>` +
+    `<button data-act="remove" class="danger">${ICONS.trash}<span>Remove from list</span></button>`;
+  contextMenu.classList.remove("hidden");
+  const rect = contextMenu.getBoundingClientRect();
+  const px = (contextMenu.style.left = `${Math.max(8, Math.min(lastMenuX, window.innerWidth - rect.width - 8))}px`);
+  contextMenu.style.top = `${Math.max(8, Math.min(lastMenuY, window.innerHeight - rect.height - 8))}px`;
+  contextMenu.querySelectorAll("button").forEach((b) => {
+    (b as HTMLButtonElement).onclick = () => {
+      const act = (b as HTMLElement).dataset["act"];
+      hideContextMenu();
+      if (act === "open") switchToWorkspace(root);
+      else if (act === "remove") openRemoveWorkspace(ws);
+    };
+  });
+  void px;
 }
 function showSessionMenu(root: string, item: SessionListItem): void {
   const ctx = ctxForRoot(root);
@@ -1092,8 +1129,8 @@ function showSessionMenu(root: string, item: SessionListItem): void {
     (b as HTMLButtonElement).onclick = () => {
       const act = (b as HTMLElement).dataset["act"];
       hideContextMenu();
-      if (act === "rename") { if (ctx) openRename(ctx, item); else setActivity("open this workspace to rename its sessions"); }
-      else if (act === "delete") { if (ctx) openDelete(ctx, item); else setActivity("open this workspace to edit its sessions"); }
+      if (act === "rename") openRename(root, item);
+      else if (act === "delete") openDelete(root, item);
     };
   });
   void px;
@@ -1228,29 +1265,61 @@ function confirmDiscard(guard: ModalGuard): void {
     dismissModal();
   };
 }
-function openRename(ctx: Ctx, item: SessionListItem, prefill?: string): void {
+/* Session ops are scoped by root, not by which tab asks: a session can be
+   renamed or deleted from the library even when its workspace has no tab
+   open, so the op carries the root itself. */
+function openRename(root: string, item: SessionListItem, prefill?: string): void {
   showModal(
     `<h3>Rename session</h3><div class="field"><label>Title</label><input id="renameInput" maxlength="60" value="${escapeHtml(prefill ?? item.title)}" /></div>` +
       `<div class="modal-actions"><button class="btn" id="renameCancel">Cancel</button><button class="btn primary" id="renameSave">Save</button></div>`,
   );
+  const ctx = ctxForRoot(root) ?? ensureAppCtx();
   const input = el<HTMLInputElement>("renameInput");
   input.focus(); input.select();
-  const save = (): void => { const v = input.value.trim(); if (v) { send(ctx, { op: "rename_session", id: item.id, title: v.slice(0, 60) }); if (ctx === activeCtx) setActivity("renamed"); } hideModal(); };
+  const save = (): void => { const v = input.value.trim(); if (v) { send(ctx, { op: "rename_session", root, id: item.id, title: v.slice(0, 60) }); if (ctx === activeCtx) setActivity("renamed"); } hideModal(); };
   el<HTMLButtonElement>("renameSave").onclick = save;
   el<HTMLButtonElement>("renameCancel").onclick = hideModal;
   input.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") save(); };
   modalGuard = {
     isDirty: () => input.value.trim() !== item.title.trim(),
-    restore: () => openRename(ctx, item, input.value),
+    restore: () => openRename(root, item, input.value),
   };
 }
-function openDelete(ctx: Ctx, item: SessionListItem): void {
+function openDelete(root: string, item: SessionListItem): void {
   showModal(
     `<h3>Delete session</h3><p>Delete <b>${escapeHtml(item.title)}</b>? This cannot be undone.</p>` +
       `<div class="modal-actions"><button class="btn" id="delCancel">Cancel</button><button class="btn danger" id="delOk">Delete</button></div>`,
   );
-  el<HTMLButtonElement>("delOk").onclick = () => { dropSessionTabs(item.id); send(ctx, { op: "delete_session", id: item.id }); hideModal(); };
+  const ctx = ctxForRoot(root) ?? ensureAppCtx();
+  el<HTMLButtonElement>("delOk").onclick = () => { dropSessionTabs(item.id); send(ctx, { op: "delete_session", root, id: item.id }); hideModal(); };
   el<HTMLButtonElement>("delCancel").onclick = hideModal;
+}
+/* Removing a workspace forgets it: its tabs close, its sessions leave the
+   sidebar, and the folder on disk is untouched. */
+function openRemoveWorkspace(ws: WorkspaceRef): void {
+  showModal(
+    `<h3>Remove workspace</h3><p>Remove <b>${escapeHtml(ws.name)}</b> from the workspace list?</p>` +
+      `<p class="perm-why">Nothing on disk is deleted - the folder stays exactly where it is.</p>` +
+      `<div class="modal-actions"><button class="btn" id="wsCancel">Cancel</button><button class="btn danger" id="wsRemove">Remove</button></div>`,
+  );
+  el<HTMLButtonElement>("wsRemove").onclick = () => { removeWorkspace(ws); hideModal(); };
+  el<HTMLButtonElement>("wsCancel").onclick = hideModal;
+}
+function removeWorkspace(ws: WorkspaceRef): void {
+  for (const tab of tabs.filter((t) => t.root === ws.root)) {
+    if (tab.busy) send(tab, { op: "stop" });
+    closeTab(tab.id);
+  }
+  recents = recents.filter((r) => r.root !== ws.root);
+  delete sessionsByRoot[ws.root];
+  delete prefs.effortByWs[ws.root];
+  delete prefs.providerByWs[ws.root];
+  delete prefs.lastSessionByWs[ws.root];
+  window.harness?.forgetWorkspace(ws.root);
+  savePrefs();
+  renderTree();
+  if (!tabs.length) renderLanding();
+  setActivity(`removed ${ws.name} from the workspace list`);
 }
 /* A deleted session must not stay open in a tab: the tab either moves to the
    next available one or, when it was the last, back to the default screen. */
@@ -1368,7 +1437,7 @@ function autogrow(): void {
 function doSubmit(ctx: Ctx, text: string): void {
   entry.value = ""; ctx.pendingRewind = null;
   // A new turn supersedes any retry card or failure card from the last one.
-  clearRetryCard(ctx); ctx.failure = null;
+  clearRetryCard(ctx); dropFailureCard(ctx);
   hideEditBar(); autogrow(); updateSendState(); setBusy(ctx, true); showThinking(ctx);
   send(ctx, { op: "submit", text, mode: ctx.modeVal });
 }
@@ -1379,6 +1448,7 @@ function submit(ctx: Ctx, text: string): void {
   if (!connected) { setActivity("not connected - waiting for reconnect…"); return; }
   if (ctx.pendingRewind !== null) {
     const idx = ctx.pendingRewind; ctx.pendingRewind = null; entry.value = ""; autogrow(); hideEditBar();
+    clearRetryCard(ctx); dropFailureCard(ctx);
     if (!send(ctx, { op: "resend", count: idx, text: trimmed, mode: ctx.modeVal })) setActivity("resend failed - engine busy");
     return;
   }
@@ -1419,6 +1489,10 @@ function connect(): void {
 function dispatchFrame(msg: ServerEnvelope): void {
   if (msg.ready) { handleReady(msg); return; }
   const ctx = msg.session ? ctxById.get(msg.session) : null;
+  // The session library is app-wide state, not one tab's: the tab that asked
+  // for a delete may already be closed (deleting a session closes its tab),
+  // and every workspace's list in the sidebar has to catch up.
+  if (msg.event === "sessions_updated") { refreshAllWorkspaceSessions(); return; }
   if (ctx) handleEnvelope(msg, ctx);
 }
 function handleReady(msg: ServerEnvelope): void {
@@ -1493,10 +1567,9 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         // in memory.
         if (first) persistTabs();
         ctx.sessionTitle = "New Session";
-        // A new turn, a rewind or a different session supersedes the failure:
-        // it must not be re-applied by the transcript render that follows.
+        // The failure outlives the session that produced it: it is a message
+        // from the engine, and switching sessions keeps it on screen.
         clearRetryCard(ctx);
-        ctx.failure = null;
         renderTranscript(ctx, (p["messages"] as Array<Record<string, unknown>>) ?? []);
         primeContext(ctx);
         if (ctx === activeCtx) setActivity(String(p["label"] ?? ""));
@@ -1518,7 +1591,6 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         // of the transcript: re-fetching would rebuild the body and drop it.
         if (ctx.sessionId && !ctx.failure) { const sid = ctx.sessionId; send(ctx, { op: "get_transcript", id: sid }); }
         break;
-      case "sessions_updated": send(ctx, { op: "list_sessions" }); break;
     }
     return;
   }
@@ -2225,10 +2297,13 @@ el<HTMLButtonElement>("toggleLog").onclick = (e) => {
 };
 el<HTMLButtonElement>("toggleLeft").onclick = (e) => { shell.classList.toggle("hide-left"); const btn = e.currentTarget as HTMLButtonElement; btn.classList.toggle("active", !shell.classList.contains("hide-left")); };
 el<HTMLButtonElement>("toggleRight").onclick = (e) => {
-  shell.classList.toggle("hide-right"); const hidden = shell.classList.contains("hide-right");
+  shell.classList.toggle("hide-right");
+  const hidden = shell.classList.contains("hide-right");
   (e.currentTarget as HTMLButtonElement).classList.toggle("active", !hidden);
   usageChip.classList.toggle("hidden", !hidden);
   if (!hidden) usagePop.classList.add("hidden");
+  prefs.rightPanel = !hidden;
+  savePrefs();
 };
 usageChip.addEventListener("mouseenter", showUsagePop);
 usageChip.addEventListener("mouseleave", scheduleHidePop);
@@ -2265,6 +2340,13 @@ function boot(source: string): void {
   booted = true;
   const root = bootRoot || "";
   dlog("boot", "complete source=", source, "port=", bootPort, "root=", root, "hasIPC=", Boolean(window.harness?.onConfig));
+  // The plan/context panel starts closed: the transcript is the point of the
+  // window, the panel is something you open on purpose and it stays open.
+  if (prefs.rightPanel) {
+    shell.classList.remove("hide-right");
+    el<HTMLButtonElement>("toggleRight").classList.add("active");
+    usageChip.classList.add("hidden");
+  }
   autogrow();
   renderActive();
   if (root) restoreTabs(root);

@@ -12,4 +12,5 @@ export interface PreloadHarness {
   onConfig: (cb: (cfg: SidecarConfig) => void) => void;
   selectWorkspace: () => Promise<{ projectRoot: string } | null>;
   recentWorkspaces: () => Promise<WorkspaceRef[]>;
+  forgetWorkspace: (root: string) => Promise<boolean>;
 }

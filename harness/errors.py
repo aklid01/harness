@@ -31,6 +31,40 @@ HEADLINES = {
 
 TRANSIENT_KINDS = frozenset({"network", "timeout", "rate_limited", "server", "malformed"})
 
+# What the user can actually do about it. A status the provider named
+# outranks the generic kind, because 401 and 403 reach us the same way and
+# want different actions.
+HINTS = {
+    "network": "Check the base URL and your connection, then press Retry.",
+    "timeout": "The provider is too slow to answer. Press Retry, or switch model.",
+    "rate_limited": "Wait for the Retry-After window to pass, then press Retry - or raise the limit with the provider.",
+    "server": "The provider is failing on its side. Press Retry, or switch model.",
+    "auth": "Check the API key for this model in Settings.",
+    "rejected": "The provider refused the request. The message above names what to fix.",
+    "not_found": "Check the model id in Settings - this provider does not serve it.",
+    "unsupported": "This model does not take one of the parameters we sent. Set that option to default in Settings.",
+    "malformed": "The provider answered with something unreadable. Press Retry, or switch model.",
+    "no_key": "Add an API key for this model in Settings.",
+    "stream_interrupted": "The answer was cut off mid-stream. Resend that message.",
+    "unknown": "The provider's own message is above. If it repeats, switch model.",
+}
+
+STATUS_HINTS = {
+    400: "The provider refused the request. The message above names what to fix.",
+    401: "The API key was rejected. Paste the current key into Settings for this model.",
+    403: "The key is not allowed to use this model. Check its permissions with the provider.",
+    404: "This provider does not serve that model id. Check the model name in Settings.",
+    405: "The provider does not accept this request at that URL. Check the base URL.",
+    408: "The provider dropped the request. Press Retry.",
+    413: "The request is too large for this provider. Start a new session or switch model.",
+    422: "The provider rejected a parameter. The message above names it.",
+    429: "Rate limited. Wait for the Retry-After window, then press Retry.",
+    500: "Provider error. Press Retry in a moment, or switch model.",
+    502: "Provider error (bad gateway). Press Retry in a moment, or switch model.",
+    503: "Provider unavailable. Press Retry in a moment, or switch model.",
+    504: "The provider timed out on its side. Press Retry, or switch model.",
+}
+
 _SECRET_PATTERNS = (
     re.compile(r"(?i)\b(bearer|token|api[-_]?key|authorization)\b[\"'=:\s]+\S+"),
     re.compile(r"\b(sk|thk|atr|pk)-[A-Za-z0-9_\-]{6,}"),
@@ -76,6 +110,13 @@ class ModelError(Exception):
     def headline(self):
         return HEADLINES.get(self.kind, HEADLINES["unknown"])
 
+    @property
+    def hint(self):
+        """What to do about it, decided from the status when there is one."""
+        if self.status in STATUS_HINTS:
+            return STATUS_HINTS[self.status]
+        return HINTS.get(self.kind, "")
+
     def __str__(self):
         body = self.detail or self.headline
         return scrub(f"{self.headline}: {body}" if self.detail else self.headline)
@@ -100,6 +141,7 @@ class ModelError(Exception):
             "kind": self.kind,
             "headline": self.headline,
             "detail": self.detail,
+            "hint": self.hint,
             "status": self.status,
             "retry_after": self.retry_after,
             "transient": self.transient,
@@ -129,16 +171,30 @@ def _retry_after(exc):
 
 
 def _err_detail(exc, status):
+    """The provider's own words, taken from its body as cleanly as possible.
+
+    Providers agree on the shape of an error about as much as they agree on
+    anything else, so every spelling we have seen is read: a bare message, a
+    nested error object, or a code/type/param triple that says exactly which
+    field the provider objected to.
+    """
     body = getattr(exc, "body", None)
     detail = ""
     if isinstance(body, dict):
         error = body.get("error")
         if isinstance(error, dict):
-            detail = str(error.get("message") or error.get("code") or "")
+            detail = str(error.get("message") or error.get("detail") or "")
+            named = [str(error[key]) for key in ("code", "type") if error.get(key)]
+            if error.get("param"):
+                named.append(f"parameter {error['param']}")
+            if named:
+                detail = f"{detail} ({', '.join(named)})" if detail else ", ".join(named)
         elif error:
             detail = str(error)
         if not detail:
-            detail = str(body.get("message") or "")
+            detail = str(body.get("message") or body.get("detail") or "")
+    elif isinstance(body, str) and body.strip():
+        detail = body
     if not detail:
         detail = str(exc)
     return scrub(detail)

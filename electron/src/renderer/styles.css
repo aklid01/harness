@@ -417,6 +417,7 @@ button { font-family: inherit; }
 .error { background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r); padding: 10px 12px; margin: 8px 0; color: var(--text); }
 .error b { color: var(--danger); display: block; margin-bottom: 2px; }
 .error > div { color: var(--text-2); font-size: var(--t-body); word-break: break-word; }
+.error-hint { color: var(--text-3); font-size: var(--t-caption); margin-top: 6px; padding-left: 9px; border-left: 2px solid var(--danger-line); }
 .error .msg-actions button { margin-right: 6px; }
 .retry { display: flex; gap: 10px; align-items: flex-start; background: var(--warn-soft); border: 1px solid var(--warn-soft); border-radius: var(--r); padding: 10px 12px; margin: 8px 0; }
 .retry .r-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--warn); animation: spin 0.7s linear infinite; flex: none; margin-top: 3px; }

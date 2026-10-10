@@ -105,21 +105,28 @@ re-sent, since sending it again would duplicate the answer.
 
 The composer shows one status area that ticks as retries progress
 (`Retry 2 · waiting 3s · 5s of 150s elapsed`) and a final error card with
-**Retry** and **Switch model**. Retrying rewinds the conversation to the
-message that failed - the message is never duplicated - and leaves project
-files alone. Switching model keeps the workspace, session, history, unsaved
-composer text and permission state, and while a request is in flight it
-stops that request first rather than letting two models write into one
+the provider's own message, a suggested next step taken from the HTTP status
+(`401` wants a new key, `404` a different model id, `429` a wait and a
+Retry), and **Retry** / **Switch model**. The card is part of the
+conversation: it survives the transcript reconcile that follows a turn, and
+it stays put when you switch sessions. Retrying rewinds the conversation to
+the message that failed - the message is never duplicated - and leaves
+project files alone. Switching model keeps the workspace, session, history,
+unsaved composer text and permission state, and while a request is in flight
+it stops that request first rather than letting two models write into one
 session. No restart is ever needed to recover from an upstream failure.
 
 ## Sessions
 
 Chats live under `~/.agents/sessions/<project>/` as one JSONL file each, with
 a `titles.json` sidecar. New sessions get an LLM-generated title after the
-first turn; rename or delete any session by right-clicking it (renames only
-touch the sidecar, so the transcript and resume keep working). An early
-Windows build saved sessions next to the code instead; the app moves those
-into place on startup.
+first turn; rename or delete any session by right-clicking it - the workspace
+does not have to be open, the op carries its own root - and it disappears
+from the sidebar at once, closing any tab that had it. Workspaces themselves
+can be removed from the list by right-clicking their row: their tabs close,
+their sessions leave the sidebar, and the folder on disk is untouched. An
+early Windows build saved sessions next to the code instead; the app moves
+those into place on startup.
 
 ## Architecture
 
@@ -168,8 +175,10 @@ The renderer has no unit harness, so its rules are checked end to end:
 `node electron/scripts/renderer-check.mjs` launches the app against a
 provider whose endpoint is dead, drives the composer and the sidebar over
 the DevTools Protocol, and writes a pass/fail report to
-`tests/renderer-check.txt` - the retry card ticking, the error card
-surviving the post-turn reconcile, and a deleted session closing its tab.
+`tests/renderer-check.txt`: the retry card ticking, the error card offering a
+next step and surviving both the post-turn reconcile and a session switch,
+a deleted session leaving the sidebar at once (tab or no tab, workspace open
+or not), the workspace removal, and the plan panel starting closed.
 
 ## Notes
 

@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("harness", {
     ipcRenderer.invoke("select-workspace") as Promise<{ projectRoot: string } | null>,
   recentWorkspaces: (): Promise<WorkspaceRef[]> =>
     ipcRenderer.invoke("get-recent-workspaces") as Promise<WorkspaceRef[]>,
+  forgetWorkspace: (root: string): Promise<boolean> =>
+    ipcRenderer.invoke("forget-workspace", root) as Promise<boolean>,
 });
 
 contextBridge.exposeInMainWorld("harnessInfo", {
