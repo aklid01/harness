@@ -7,8 +7,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.renderer.json && node scripts/copy-assets.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",
-    "dev": "npm run build && electron .",
-    "start": "npm run build && electron ."
+    "dev": "npm run build && node scripts/launch.mjs",
+    "start": "npm run build && node scripts/launch.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
