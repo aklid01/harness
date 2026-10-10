@@ -1,4 +1,4 @@
-import type { ClientOp, ContextInfo, OpPayload, ProviderEntry, ProviderGroup, ProviderState, RetryInfo, RetryProgress, ServerEnvelope, SessionListItem, TabRef, TodoItem } from "../shared/protocol";
+import type { AgentConfig, AgentRole, ClientOp, ContextInfo, DecisionEventPayload, OpPayload, PlanEventPayload, ProviderEntry, ProviderGroup, ProviderState, RetryInfo, RetryProgress, ServerEnvelope, SessionListItem, TabRef, TodoItem } from "../shared/protocol";
 import type { PreloadHarness, WorkspaceRef } from "../shared/preload-types";
 
 declare global {
@@ -228,6 +228,17 @@ let providerActiveModelId: string | null = null;
 let providerActiveGroupId: string | null = null;
 let providerMigration: string[] = [];
 const providerById = new Map<string, ProviderEntry>();
+let agentConfig: AgentConfig | null = null;
+const DEFAULT_AGENT_CONFIG: AgentConfig = {
+  plan: { enabled: false, model_id: "", instructions: "" },
+  build: { enabled: false, model_id: "", instructions: "" },
+  oversight: { enabled: false, model_id: "", instructions: "", intensity: "medium", max_rounds: 2 },
+};
+const OVERSIGHT_INTENSITIES = [
+  { value: "low", label: "Low - only high-risk actions" },
+  { value: "medium", label: "Medium - edits and risky shell" },
+  { value: "high", label: "High - nearly every action" },
+];
 let settingsRequested = false;
 let settingsLastTab = "models";
 /* Set by the model form while it is open, so a rejected save can re-enable it. */
@@ -479,6 +490,38 @@ function addNote(ctx: Ctx, text: string): void {
   ctx.chatBody.appendChild(div);
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
+}
+/* Decision Oversight status. Kept compact so internal review chatter does not
+   flood the transcript: a review in progress is a status update, while a
+   revision, clarification, escalation or failure is surfaced as a note with its
+   reasoning and correction so it stays inspectable. */
+const DECISION_LABEL: Record<string, string> = {
+  revised: "decision - revise",
+  clarify: "decision - clarify",
+  escalated: "decision - escalated",
+};
+function showDecision(ctx: Ctx, d: DecisionEventPayload): void {
+  if (d.status === "reviewing") { if (ctx === activeCtx) setActivity("Reviewing a decision…"); return; }
+  const tool = d.tool ? String(d.tool) : "action";
+  let text: string;
+  if (d.status === "approved") text = `Decision approved: ${tool} is fine to proceed.`;
+  else if (d.status === "skipped") text = `Decision review skipped (${tool}) - the permission layer still applies.`;
+  else if (d.status === "error") text = `Decision review failed and held ${tool}${d.reasoning ? `: ${d.reasoning}` : ""}`;
+  else {
+    const label = DECISION_LABEL[d.status] ?? `decision - ${d.status}`;
+    const risks = (d.risks ?? []).length ? ` Risks: ${(d.risks ?? []).join("; ")}.` : "";
+    const extra = d.correction ? ` Correction: ${d.correction}` : d.question ? ` Needed: ${d.question}` : "";
+    text = `${label} (${tool}): ${d.reasoning ?? ""}${risks}${extra}`;
+    if (ctx === activeCtx) setStatusState(d.status === "escalated" ? "error" : "working");
+  }
+  addNote(ctx, text.trim());
+  if (ctx === activeCtx && (d.status === "revised" || d.status === "clarify" || d.status === "escalated")) setActivity(labelForDecision(d.status));
+}
+function labelForDecision(status: string): string {
+  if (status === "escalated") return "Decision escalated - waiting on you";
+  if (status === "revised") return "Applying a decision correction";
+  if (status === "clarify") return "Clarifying a decision";
+  return "ready";
 }
 /* The failure card is per-turn state, not part of the transcript: after the
    turn ends the done handler reconciles by re-rendering the transcript, so
@@ -1588,6 +1631,18 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       }
       case "compacted": renderTranscript(ctx, (p["messages"] as Array<Record<string, unknown>>) ?? []); addNote(ctx, `compacted ${p["before"]} to ${((p["messages"] as unknown[]) ?? []).length} messages`); break;
       case "subagent": if (ctx === activeCtx) setActivity("subagent exploring…"); addNote(ctx, "subagent: " + String(p["description"] ?? "")); break;
+      case "plan": {
+        const pl = p as unknown as PlanEventPayload;
+        if (pl.status === "generating") { if (ctx === activeCtx) { setActivity("Planning…"); setStatusState("working"); } showThinking(ctx); addNote(ctx, "Plan agent is generating a plan…"); }
+        else if (pl.status === "ready") { if (ctx === activeCtx) setActivity("Plan ready - handing to build"); addNote(ctx, "Plan ready - handed to the build agent."); }
+        else if (ctx === activeCtx) { setActivity("Planning skipped - building without a plan"); addNote(ctx, `Plan pass skipped${pl.reason ? ` (${pl.reason})` : ""} - proceeding to build.`); }
+        break;
+      }
+      case "decision": {
+        const d = p as unknown as DecisionEventPayload;
+        showDecision(ctx, d);
+        break;
+      }
       case "done":
         setBusy(ctx, false);
         if (ctx === activeCtx) setActivity("ready");
@@ -1637,6 +1692,15 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       renderTabs();
     }
     if (settingsRequested) { settingsRequested = false; openSettings(settingsLastTab); }
+  } else if (msg.reply === "get_agents" && msg.data && typeof msg.data === "object") {
+    agentConfig = msg.data as AgentConfig;
+    // If the agents panel is already open (from a settings load that raced the
+    // config), swap in the real values now instead of leaving defaults.
+    if (document.getElementById("agSave")) { const [h, w] = settingsAgents(); el<HTMLDivElement>("settingsBody").innerHTML = `<div class="settings-panel">${h}</div>`; w(); }
+  } else if (msg.reply === "set_agents") {
+    if (msg.ok && msg.data && typeof msg.data === "object") agentConfig = msg.data as AgentConfig;
+    const status = document.getElementById("agStatus");
+    if (status) { status.textContent = msg.ok ? "Saved." : `Could not save: ${String(msg.error ?? "")}`; status.className = msg.ok ? "status-line ok" : "status-line fail"; }
   } else if (msg.reply === "submit") {
     /* A refused submit (duplicate, or a turn already running) never produces a
        done event, so release the composer here or the tab stays "working". */
@@ -2069,6 +2133,7 @@ function providerForm(existing?: ProviderEntry, groupId?: string, restore?: Prov
 }
 const SETTINGS_TABS = [
   { id: "models", label: "Models", icon: ICONS.layers },
+  { id: "agents", label: "Agents", icon: ICONS.branch },
   { id: "themes", label: "Themes", icon: ICONS.palette },
   { id: "general", label: "General", icon: ICONS.sliders },
   { id: "workspace", label: "Workspace", icon: ICONS.folder },
@@ -2089,6 +2154,7 @@ function openSettings(tab = settingsLastTab): void {
   const [html, wire] = settingsPanel(tab);
   el<HTMLDivElement>("settingsBody").innerHTML = `<div class="settings-panel">${html}</div>`;
   wire();
+  if (tab === "agents") send(ensureAppCtx(), { op: "get_agents" });
 }
 function seg(current: string, options: Array<{ value: string; label: string }>, hook: string): string {
   return `<div class="seg" data-seg="${hook}">${options.map((o) => `<button data-v="${o.value}" class="${o.value === current ? "sel" : ""}">${o.label}</button>`).join("")}</div>`;
@@ -2109,6 +2175,7 @@ function settingsPanel(tab: string): [string, () => void] {
   if (tab === "general") return settingsGeneral();
   if (tab === "workspace") return settingsWorkspace();
   if (tab === "interface") return settingsInterface();
+  if (tab === "agents") return settingsAgents();
   return settingsModels();
 }
 function settingsModels(): [string, () => void] {
@@ -2189,6 +2256,53 @@ function settingsModels(): [string, () => void] {
   };
   return [html, wire];
 }
+function settingsAgents(): [string, () => void] {
+  const cfg = agentConfig ?? DEFAULT_AGENT_CONFIG;
+  const modelOpts = (current: string): string =>
+    `<option value="">Keep session default</option>` +
+    providerOptions.map((o) => `<option value="${o.id}"${o.id === current ? " selected" : ""}>${escapeHtml(o.label)} · ${escapeHtml(o.sub)}</option>`).join("");
+  const role = (title: string, desc: string, key: "plan" | "build", r: AgentRole): string =>
+    `<h4 class="card-title" style="margin-top:16px">${title} agent</h4>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Enable the ${title.toLowerCase()} agent</div><div class="set-desc">${desc}</div></div><div class="set-ctl"><span id="sw_${key}"></span></div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Model</div><div class="set-desc">Pick a configured model, or keep the session's own. It keeps that model's key and settings.</div></div><div class="set-ctl"><select class="sel-inline" id="ag_${key}_model">${modelOpts(r.model_id)}</select></div></div>` +
+    `<div class="set-row" style="align-items:flex-start"><div class="set-info"><div class="set-label">Instructions</div><div class="set-desc">Optional guidance for this role, kept separate from the project's AGENTS.md rules.</div></div><div class="set-ctl" style="flex:1"><textarea id="ag_${key}_instr" class="set-text" rows="3" placeholder="Optional instructions for the ${key} agent">${escapeHtml(r.instructions)}</textarea></div></div>`;
+  const ov = cfg.oversight;
+  const html =
+    `<p class="sub">Optionally route planning and building to their own models, and let a stronger model review significant decisions. Everything is off by default - the app behaves exactly as before until you enable a role. Models come from Settings &gt; Models and reuse that model's own key and settings.</p>` +
+    role("Plan", "Runs a read-only pass to produce a plan, then hands it to the build agent as context.", "plan", cfg.plan) +
+    role("Build", "Implements the task (and any plan) with tools, tests, and error correction.", "build", cfg.build) +
+    `<h4 class="card-title" style="margin-top:22px">Decision Oversight</h4>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Enable Decision Oversight</div><div class="set-desc">A reviewer model judges significant decisions before they run and can challenge and correct the coding agent. It holds no tools and never bypasses permissions.</div></div><div class="set-ctl"><span id="sw_oversight"></span></div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Reviewer model</div><div class="set-desc">Usually a stronger model. Required when enabled.</div></div><div class="set-ctl"><select class="sel-inline" id="ag_oversight_model">${modelOpts(ov.model_id)}</select></div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Intensity</div><div class="set-desc">How much is reviewed. Higher reviews more, down to routine shell.</div></div><div class="set-ctl"><select class="sel-inline" id="ag_oversight_intensity">${OVERSIGHT_INTENSITIES.map((i) => `<option value="${i.value}"${i.value === ov.intensity ? " selected" : ""}>${escapeHtml(i.label)}</option>`).join("")}</select></div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Review round limit</div><div class="set-desc">Max back-and-forth on one decision before it escalates to you.</div></div><div class="set-ctl"><input class="sel-inline" id="ag_oversight_rounds" type="number" min="1" max="6" value="${ov.max_rounds}" style="width:80px"></div></div>` +
+    `<div class="set-row" style="align-items:flex-start"><div class="set-info"><div class="set-label">Reviewer instructions</div><div class="set-desc">Optional extra guidance for the reviewer.</div></div><div class="set-ctl" style="flex:1"><textarea id="ag_oversight_instr" class="set-text" rows="3" placeholder="Optional instructions for the decision reviewer">${escapeHtml(ov.instructions)}</textarea></div></div>` +
+    `<div class="modal-actions" style="justify-content:flex-start;margin-top:8px"><button class="btn primary" id="agSave">Save agents</button></div><div id="agStatus" class="status-line"></div>`;
+  const wire = (): void => {
+    const body = el<HTMLDivElement>("settingsBody");
+    wireSwitch(body, "sw_plan", cfg.plan.enabled, () => {});
+    wireSwitch(body, "sw_build", cfg.build.enabled, () => {});
+    wireSwitch(body, "sw_oversight", cfg.oversight.enabled, () => {});
+    const val = (id: string): string => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null)?.value ?? "";
+    const isOn = (id: string): boolean => body.querySelector<HTMLElement>(`#${id}`)?.classList.contains("on") ?? false;
+    el<HTMLButtonElement>("agSave").onclick = () => {
+      const next: AgentConfig = {
+        plan: { enabled: isOn("sw_plan"), model_id: val("ag_plan_model"), instructions: val("ag_plan_instr") },
+        build: { enabled: isOn("sw_build"), model_id: val("ag_build_model"), instructions: val("ag_build_instr") },
+        oversight: {
+          enabled: isOn("sw_oversight"), model_id: val("ag_oversight_model"),
+          instructions: val("ag_oversight_instr"),
+          intensity: val("ag_oversight_intensity") || "medium",
+          max_rounds: Math.max(1, Math.min(6, parseInt(val("ag_oversight_rounds"), 10) || 2)),
+        },
+      };
+      const status = document.getElementById("agStatus");
+      if (status) { status.textContent = "Saving…"; status.className = "status-line"; }
+      send(ensureAppCtx(), { op: "set_agents", config: next });
+    };
+  };
+  return [html, wire];
+}
 function settingsThemes(): [string, () => void] {
   const html = `<p class="sub">Choose the accent identity. Themes apply instantly and are remembered.</p><div class="theme-grid">${THEMES.map((t) => `<button class="theme-card ${t.id === prefs.theme ? "sel" : ""}" data-theme="${t.id}"><span class="tc-check">${ICONS.check}</span><div class="theme-swatch">${t.swatch.map((c) => `<span style="background:${c}"></span>`).join("")}</div><div class="theme-name">${t.name}</div><div class="theme-desc">${t.desc}</div></button>`).join("")}</div>`;
   const wire = (): void => {
@@ -2259,6 +2373,7 @@ el<HTMLButtonElement>("btnSettings").onclick = () => {
   settingsRequested = true;
   settingsLastTab = settingsLastTab || "models";
   if (!send(ensureAppCtx(), { op: "list_providers" })) settingsRequested = false;
+  send(ensureAppCtx(), { op: "get_agents" });
 };
 
 sendstop.onclick = () => { if (!activeCtx) return; if (activeCtx.busy) send(activeCtx, { op: "stop" }); else submit(activeCtx, entry.value); };

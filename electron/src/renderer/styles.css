@@ -701,6 +701,8 @@ button { font-family: inherit; }
 
 /* select in settings */
 .sel-inline { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); font-size: var(--t-caption); padding: 6px 10px; }
+.set-text { width: 100%; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); font-size: var(--t-caption); font-family: inherit; line-height: 1.45; padding: 8px 10px; resize: vertical; }
+.set-text:focus { outline: none; border-color: var(--accent-line); }
 
 /* theme grid */
 .theme-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

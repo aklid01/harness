@@ -90,6 +90,43 @@ export interface SessionListItem {
   title: string;
 }
 
+/* Optional role agents and decision oversight (harness/agents.py). Each role
+   names a model by the id it already has in Settings; no credential is stored
+   here. A disabled or unset role keeps the existing default agent. */
+export interface AgentRole {
+  enabled: boolean;
+  model_id: string;
+  instructions: string;
+}
+export interface AgentOversight extends AgentRole {
+  intensity: string;
+  max_rounds: number;
+}
+export interface AgentConfig {
+  plan: AgentRole;
+  build: AgentRole;
+  oversight: AgentOversight;
+}
+
+export interface PlanEventPayload {
+  status: "generating" | "ready" | "skipped";
+  request?: string;
+  plan?: string;
+  model?: string;
+  reason?: string;
+}
+
+export interface DecisionEventPayload {
+  status: "reviewing" | "approved" | "revised" | "clarify" | "escalated" | "error" | "skipped";
+  tool?: string;
+  round?: number;
+  verdict?: string;
+  reasoning?: string;
+  risks?: string[];
+  correction?: string;
+  question?: string;
+}
+
 /* A workspace's open tabs, persisted so a restart brings them back. */
 export interface TabRef {
   session_id: string | null;
@@ -128,6 +165,8 @@ export type OpPayload =
   | { op: "set_active"; id: string }
   | { op: "set_effort"; id: string; effort: string | null }
   | { op: "set_permissions"; mode: string }
+  | { op: "get_agents" }
+  | { op: "set_agents"; config: AgentConfig }
   | { op: "save_provider"; entry: ProviderEntry; key?: string }
   | { op: "delete_provider"; id: string; scope?: "model" | "provider" }
   | { op: "test_provider"; id: string }
