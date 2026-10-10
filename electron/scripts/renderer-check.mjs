@@ -21,7 +21,10 @@ const REPORT = process.env.REPORT ?? path.join(ROOT, "tests", "renderer-check.tx
 const DEAD = "http://127.0.0.1:9/v1";
 
 const lines = [];
-const say = (text) => { lines.push(text); console.log(text); };
+/* The report is read wherever it lands, so keep it ASCII: the card text uses
+   typographic characters that survive a console but not a plain-text diff. */
+const plain = (text) => text.replace(/·/g, "-").replace(/…/g, "...").replace(/[^\x20-\x7e\n]/g, "?");
+const say = (text) => { lines.push(plain(text)); console.log(text); };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function prepareFixtures() {
