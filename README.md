@@ -54,14 +54,21 @@ them.
 ## Project rules
 
 Every workspace can keep its instructions in `AGENTS.md`, and they are
-injected into the system prompt the model sees: the workspace's own file
-first, then `~/.agents/AGENTS.md` as the global fallback, each capped at
-20,000 characters. The prompt says outright that where the project rules
-disagree with the app's own defaults, the project rules win. Skills are
-listed the same way but by name and description only - their bodies are read
-on demand with `read_skill`, so a 26 KB skill costs nothing until it is used.
-The rules are re-read whenever a session starts, so editing `AGENTS.md` takes
-effect on the next session in that workspace.
+injected into the system prompt the model sees. Three files are read, project
+first then global, each capped at 20,000 characters:
+
+1. `<workspace>\AGENTS.md` - the project's own rules
+2. `~\.agents\AGENTS.md` - the engine's global rules
+3. `%APPDATA%\harness-electron\harness\AGENTS.md` - the app profile's global
+   rules (created on first launch, alongside `providers.json` and
+   `recent-workspaces.json`)
+
+The prompt says outright that where the project rules disagree with the app's
+own defaults, the project rules win. Skills are listed the same way but by
+name and description only - their bodies are read on demand with
+`read_skill`, so a 26 KB skill costs nothing until it is used. The rules are
+re-read whenever a session starts, so editing `AGENTS.md` takes effect on the
+next session in that workspace.
 
 ## Providers, models and keys
 

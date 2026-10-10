@@ -143,8 +143,19 @@ def env_files() -> list[Path]:
 
 
 def instruction_files() -> list[Path]:
-    """Project instructions: the workspace's own, then the global fallback."""
-    return [project_root() / "AGENTS.md", Path.home() / ".agents" / "AGENTS.md"]
+    """Project instructions: the workspace's own, then the global fallbacks.
+
+    The engine's own global (`~/.agents`) comes before the app profile's, and
+    the two collapse to one entry when they are the same folder - the profile
+    falls back to `~/.agents` when no explicit app data dir was given.
+    """
+    found = []
+    for path in (project_root() / "AGENTS.md",
+                 Path.home() / ".agents" / "AGENTS.md",
+                 app_data_dir() / "AGENTS.md"):
+        if path not in found:
+            found.append(path)
+    return found
 
 
 def skill_dirs() -> list[Path]:

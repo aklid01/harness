@@ -52,6 +52,37 @@ class InstructionsCase(unittest.TestCase):
             self.assertIn("Project rule: single quotes", prompt)
             self.assertIn("Global rule: run the tests", prompt)
 
+    def test_the_app_profile_folder_is_a_global_source(self):
+        # The Electron profile's own app data folder (harness-electron/harness).
+        app_dir = Path(self.tmp.name) / "app"
+        self.write(app_dir / "AGENTS.md", "- App rule: ask before deleting.")
+        prompt = llm.system_prompt("build")
+        self.assertIn("App rule: ask before deleting", prompt)
+        self.assertIn(str((app_dir / "AGENTS.md").resolve()), prompt)
+
+    def test_sources_stack_project_first(self):
+        home = Path(self.tmp.name) / "home"
+        app_dir = Path(self.tmp.name) / "app"
+        self.write(self.root / "AGENTS.md", "- Project rule.")
+        self.write(home / ".agents" / "AGENTS.md", "- Engine global rule.")
+        self.write(app_dir / "AGENTS.md", "- App profile rule.")
+        with mock.patch("pathlib.Path.home", return_value=home):
+            prompt = llm.system_prompt("build")
+        self.assertLess(prompt.index("Project rule"), prompt.index("Engine global rule"))
+        self.assertLess(prompt.index("Engine global rule"), prompt.index("App profile rule"))
+        self.assertLess(prompt.index("Project rule"), prompt.index("App profile rule"))
+
+    def test_the_profile_fallback_to_the_home_dir_is_not_duplicated(self):
+        # With no explicit app data dir the profile IS ~/.agents: one file, one
+        # copy, not two.
+        home = Path(self.tmp.name) / "home"
+        with mock.patch("pathlib.Path.home", return_value=home):
+            paths.reset()
+            files = paths.instruction_files()
+            paths.init(project_root=self.root, app_data_dir=Path(self.tmp.name) / "app")
+        self.assertEqual(len(files), len(set(files)))
+        self.assertIn(home / ".agents" / "AGENTS.md", files)
+
     def test_a_huge_agents_md_is_capped(self):
         self.write(self.root / "AGENTS.md", "x" * (instructions.MAX_CHARS * 2))
         text = instructions.load()
