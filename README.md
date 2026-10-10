@@ -51,6 +51,18 @@ or a mid-session switch notice. Reasoning effort and temperature are per-model
 settings, forwarded to the API only when set, and only to models that support
 them.
 
+## Project rules
+
+Every workspace can keep its instructions in `AGENTS.md`, and they are
+injected into the system prompt the model sees: the workspace's own file
+first, then `~/.agents/AGENTS.md` as the global fallback, each capped at
+20,000 characters. The prompt says outright that where the project rules
+disagree with the app's own defaults, the project rules win. Skills are
+listed the same way but by name and description only - their bodies are read
+on demand with `read_skill`, so a 26 KB skill costs nothing until it is used.
+The rules are re-read whenever a session starts, so editing `AGENTS.md` takes
+effect on the next session in that workspace.
+
 ## Providers, models and keys
 
 Non-secret config lives in `providers.json`: providers, each holding its own

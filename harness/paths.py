@@ -142,5 +142,10 @@ def env_files() -> list[Path]:
     return [project_root() / ".env", Path.home() / ".agents" / "env"]
 
 
+def instruction_files() -> list[Path]:
+    """Project instructions: the workspace's own, then the global fallback."""
+    return [project_root() / "AGENTS.md", Path.home() / ".agents" / "AGENTS.md"]
+
+
 def skill_dirs() -> list[Path]:
     return [project_root() / ".agents" / "skills", Path.home() / ".agents" / "skills"]

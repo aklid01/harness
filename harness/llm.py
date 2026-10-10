@@ -10,6 +10,7 @@ this module owns that policy now.
 from types import SimpleNamespace
 
 from . import events
+from . import instructions
 from . import providers
 from . import retry as retry_mod
 from . import errors as errors_mod
@@ -226,6 +227,13 @@ You have skills available. Each one is a set of instructions for a task.
 If a skill matches what the user wants, call read_skill first and follow it.
 
 {skills}
+
+## Project rules
+
+The workspace keeps its rules in AGENTS.md. Where they disagree with anything
+above or with your own defaults, the project rules win.
+
+{instructions}
 """
 
 
@@ -264,6 +272,13 @@ You have skills available. Each one is a set of instructions for a task.
 If a skill matches what the user wants, call read_skill first and follow it.
 
 {skills}
+
+## Project rules
+
+The workspace keeps its rules in AGENTS.md. Where they disagree with anything
+above or with your own defaults, the project rules win.
+
+{instructions}
 """
 
 
@@ -273,4 +288,8 @@ def system_prompt(mode="build"):
     cwd = str(paths.project_root())
     skills = skills_prompt()
     template = PLAN_SYSTEM_PROMPT if mode == "plan" else SYSTEM_PROMPT
-    return template.replace("{cwd}", cwd).replace("{skills}", skills)
+    # Instructions last: their own text can contain anything, and replacing
+    # placeholders after injecting it would let it rewrite the prompt.
+    return (template.replace("{cwd}", cwd)
+                   .replace("{skills}", skills)
+                   .replace("{instructions}", instructions.load()))
