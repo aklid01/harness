@@ -1891,7 +1891,7 @@ function applyMode(ctx: Ctx, mode: Mode): void {
     modeLabel.textContent = modeLabelText(mode);
     statusMode.textContent = modeLabelText(mode);
     renderMenu(modeMenu, MODE_OPTIONS, mode, (v) => pickMode(ctx, v));
-    refreshModeIndicator();
+    refreshModelButton();  // the model control reflects the newly selected workflow
   }
 }
 function pickMode(ctx: Ctx, value: string): void { applyMode(ctx, value as Mode); }
@@ -1943,33 +1943,40 @@ function syncEffortFromModel(ctx: Ctx): void {
   ctx.effortVal = own !== "default" ? own : prefs.effortGlobal;
   if (ctx === activeCtx) effortLabel.textContent = ctx.effortVal;
 }
-/* What the composer's model button shows. When a custom build model is set, a
-   single session model is redundant - the button shows the plan>build workflow
-   (and oversight) and clicking edits the roles in Settings. Otherwise it stays
-   the session-default picker, since that model is what actually runs. */
+/* What the composer's model control shows for the selected workflow: it reflects
+   what that workflow will actually run, so Build, Plan and Plan->Build show
+   different models, not one shared agent combo. Clicking edits the role in
+   Settings>Agents when a role model is set, or picks the session model that
+   phase falls back to. */
 function modelSummary(): { label: string; title: string; goesToAgents: boolean; oversight: boolean } {
+  const mode = activeCtx?.modeVal ?? prefs.defaultMode;
   const cur = providerOptions.find((x) => x.id === activeCtx?.providerId);
   const sessionLabel = cur ? cur.label : "No providers";
-  const sessionTitle = cur ? `${cur.label} · ${cur.sub}` : "No providers";
   const cfg = agentConfig;
   const oversight = !!(cfg?.oversight?.enabled && cfg.oversight.model_id);
   const ov = oversight ? nameOfModel(cfg!.oversight.model_id) : null;
-  if (!cfg) return { label: sessionLabel, title: sessionTitle, goesToAgents: false, oversight };
-  const plan = cfg.plan?.enabled && cfg.plan.model_id ? nameOfModel(cfg.plan.model_id) : null;
-  const build = cfg.build?.enabled && cfg.build.model_id ? nameOfModel(cfg.build.model_id) : null;
-  if (build) {
-    const bits: string[] = [];
-    if (plan) bits.push(`Plan: ${plan}`);
-    bits.push(`Build: ${build}`);
+  const planModel = cfg?.plan?.enabled && cfg.plan.model_id ? cfg.plan.model_id : null;
+  const buildModel = cfg?.build?.enabled && cfg.build.model_id ? cfg.build.model_id : null;
+  const planName = planModel ? nameOfModel(planModel) : null;
+  const buildName = buildModel ? nameOfModel(buildModel) : null;
+
+  if (mode === "plan-build") {
+    const p = planName ?? sessionLabel;
+    const b = buildName ?? sessionLabel;
+    const bits = [`Plan: ${p}`, `Build: ${b}`];
     if (ov) bits.push(`Oversight: ${ov}`);
-    return { label: plan ? `${plan} › ${build}` : build, title: `${bits.join(" · ")} - click to edit in Settings > Agents`, goesToAgents: true, oversight };
+    return { label: `${p} › ${b}`, title: `${bits.join(" · ")} - edit in Settings > Agents`, goesToAgents: true, oversight };
   }
-  if (plan) {
-    let title = `Plan agent: ${plan} · Build: session model (${sessionLabel})`;
-    if (ov) title += ` · Oversight: ${ov}`;
-    return { label: sessionLabel, title, goesToAgents: false, oversight };
+  if (mode === "plan") {
+    const p = planName ?? sessionLabel;
+    const title = `Plan agent: ${p}` + (ov ? ` · Oversight: ${ov}` : "") +
+      (planName ? " - edit in Settings > Agents" : " - the session model this plan uses");
+    return { label: p, title, goesToAgents: !!planName, oversight };
   }
-  return { label: sessionLabel, title: ov ? `${sessionTitle} · Oversight: ${ov} on` : sessionTitle, goesToAgents: false, oversight };
+  const b = buildName ?? sessionLabel;
+  const title = `Build agent: ${b}` + (ov ? ` · Oversight: ${ov}` : "") +
+    (buildName ? " - edit in Settings > Agents" : " - the session model this build uses");
+  return { label: b, title, goesToAgents: !!buildName, oversight };
 }
 function nameOfModel(id: string): string {
   const m = providerById.get(id);

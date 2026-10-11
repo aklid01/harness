@@ -150,8 +150,16 @@ class Runner:
 
         try:
             if self.mode == "plan":
+                # Read-only planning that uses the PLAN agent's model when one is
+                # configured, so Build and Plan run different agents. With no plan
+                # agent it stays the session default - today's behaviour.
                 self._phase("planning")
-                self._turn()
+                plan_id = agents.resolve_model(config["plan"], default_model)
+                if plan_id and plan_id != default_model:
+                    with providers.use(plan_id):
+                        self._turn()
+                else:
+                    self._turn()
                 return
             if self.mode == "plan-build":
                 self._run_plan_build(user_text, config, default_model, build_cfg)

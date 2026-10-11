@@ -253,6 +253,26 @@ class RouteCase(RouteBase):
                          "Build mode never calls the planner")
         self.assertFalse(any(u.startswith("<plan>") for u in self.transcript_users()))
 
+    def test_plan_mode_uses_the_plan_agent_not_the_session_default(self):
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit(mode="plan")
+        self.assertEqual([m for m, _ in self.calls], ["plan-model"],
+                         "Plan mode runs the plan agent (read-only), not the build agent")
+
+    def test_build_and_plan_run_different_agents(self):
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit(mode="build")
+        self.assertEqual([m for m, _ in self.calls], ["build-model"])
+        self.submit(mode="plan")
+        self.assertEqual([m for m, _ in self.calls], ["plan-model"])
+
+    def test_plan_mode_without_a_plan_agent_uses_the_session_default(self):
+        self.submit(mode="plan")
+        self.assertEqual([m for m, _ in self.calls], ["default-model"],
+                         "no plan agent configured: Plan stays the session default")
+
     def test_plan_build_hands_off_and_builds_exactly_once(self):
         agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
                      "build": {"enabled": True, "model_id": "mdl-build"}})
