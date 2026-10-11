@@ -33,7 +33,7 @@ MAX_ROUNDS_LIMIT = 6
 _ROLE_FIELDS = ("enabled", "model_id", "instructions")
 
 DEFAULTS = {
-    "plan": {"enabled": False, "model_id": "", "instructions": ""},
+    "plan": {"enabled": False, "model_id": "", "instructions": "", "approve": False},
     "build": {"enabled": False, "model_id": "", "instructions": ""},
     "oversight": {"enabled": False, "model_id": "", "instructions": "",
                   "intensity": DEFAULT_INTENSITY, "max_rounds": DEFAULT_MAX_ROUNDS},
@@ -62,13 +62,15 @@ def _as_int(value, default, low, high):
     return max(low, min(high, n))
 
 
-def _clean_role(raw):
+def _clean_role(raw, approve_default=None):
     raw = raw if isinstance(raw, dict) else {}
     clean = {
         "enabled": _as_bool(raw.get("enabled")),
         "model_id": _as_text(raw.get("model_id")),
         "instructions": _as_text(raw.get("instructions")),
     }
+    if approve_default is not None:
+        clean["approve"] = _as_bool(raw.get("approve"), default=approve_default)
     if "intensity" in raw or "max_rounds" in raw:
         intensity = _as_text(raw.get("intensity")) or DEFAULT_INTENSITY
         clean["intensity"] = intensity if intensity in INTENSITIES else DEFAULT_INTENSITY
@@ -82,7 +84,8 @@ def normalise(raw):
     out = {"version": FORMAT_VERSION}
     for role, default in DEFAULTS.items():
         merged = dict(default)
-        merged.update(_clean_role(raw.get(role)))
+        merged.update(_clean_role(raw.get(role),
+                                  approve_default=False if role == "plan" else None))
         out[role] = merged
     return out
 
@@ -149,6 +152,15 @@ def resolve_model(role_config, default_id):
 def plan_active(config):
     """True when a dedicated planning pass should run before building."""
     return bool(config["plan"].get("enabled"))
+
+
+def plan_wants_approval(config):
+    """True when the plan should pause for the user before building.
+
+    Defaults to false, so a plan agent that is off (or one that left this off)
+    behaves exactly as before: plan then build automatically.
+    """
+    return bool(config["plan"].get("enabled")) and bool(config["plan"].get("approve"))
 
 
 def oversight_enabled(config):

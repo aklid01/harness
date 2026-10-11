@@ -491,6 +491,17 @@ function addNote(ctx: Ctx, text: string): void {
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
 }
+/* The plan is shown in full before it is built, so the user can actually read
+   and review it against the approval prompt rather than trusting a summary. */
+function addPlanCard(ctx: Ctx, text: string): void {
+  hideThinking(ctx);
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant plan-card";
+  wrap.innerHTML = `<div class="plan-tag">${ICONS.sliders}<span>Plan</span></div><div class="assistant">${renderMarkdown(text)}</div>`;
+  ctx.chatBody.appendChild(wrap);
+  updateEmptyStateOnly(ctx);
+  scrollBottom(ctx);
+}
 /* Decision Oversight status. Kept compact so internal review chatter does not
    flood the transcript: a review in progress is a status update, while a
    revision, clarification, escalation or failure is surfaced as a note with its
@@ -906,9 +917,7 @@ function renderActive(): void {
   statusMode.textContent = ctx.modeVal === "build" ? "Build" : "Plan";
   effortLabel.textContent = ctx.effortVal;
   permsLabel.textContent = PERMS.find((p) => p.value === ctx.permsVal)?.label ?? ctx.permsVal;
-  const cur = providerOptions.find((p) => p.id === ctx.providerId);
-  providerLabel.textContent = cur ? cur.label : "No providers";
-  providerBtn.classList.toggle("no-provider", !cur);
+  refreshModelButton();
   renderMenu(modeMenu, [{ label: "Build", value: "build" }, { label: "Plan", value: "plan" }], ctx.modeVal, (v) => pickMode(ctx, v));
   renderMenu(effortMenu, EFFORTS.map((e) => ({ label: e, value: e })), ctx.effortVal, (v) => pickEffort(ctx, v));
   renderMenu(permsMenu, PERMS.map((p) => ({ label: p.label, value: p.value })), ctx.permsVal, (v) => pickPerms(ctx, v));
@@ -1399,6 +1408,24 @@ function askPick(ctx: Ctx, title: string, rows: string[], id: string): void {
 const RISK_CLASS: Record<string, string> = { low: "risk-low", medium: "risk-medium", high: "risk-high", critical: "risk-critical" };
 function riskBadge(level: string): string { return `<span class="risk-badge ${RISK_CLASS[level] ?? "risk-medium"}">${escapeHtml((level || "?").toUpperCase())}</span>`; }
 function askApproval(ctx: Ctx, id: string, reason: string, tool = "", command = "", target = "", why = "", risk = "", riskReason = ""): void {
+  // A plan review is not a tool permission: it asks whether to build, with the
+  // full plan shown, Build/Skip instead of Allow/Deny. Enter builds, Esc skips,
+  // both through the same activeApproval keyboard path.
+  if (tool === "plan") {
+    showModal(
+      `<h3>Build this plan?</h3>` +
+        `<div class="perm-label">Plan</div><div class="plan-approve assistant">${renderMarkdown(why || reason)}</div>` +
+        `<div class="perm-hint">Enter to build · Esc to skip. If you skip, the plan stays here and nothing is built.</div>` +
+        `<div class="modal-actions"><button class="btn danger" id="mDeny">Skip</button><button class="btn primary" id="mAllow">Build</button></div>`,
+      "keep",
+    );
+    const allow = el<HTMLButtonElement>("mAllow");
+    allow.onclick = () => resolveApproval(ctx, id, true);
+    el<HTMLButtonElement>("mDeny").onclick = () => resolveApproval(ctx, id, false);
+    activeApproval = { ctx, id };
+    setTimeout(() => allow.focus(), 0);
+    return;
+  }
   const rows: string[] = [];
   if (command) rows.push(`<div class="perm-label">Command</div><pre class="perm-cmd">${escapeHtml(command)}</pre>`);
   else if (target) rows.push(`<div class="perm-label">${escapeHtml(tool || "File")}</div><div class="perm-target">${escapeHtml(target)}</div>`);
@@ -1633,9 +1660,9 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       case "subagent": if (ctx === activeCtx) setActivity("subagent exploring…"); addNote(ctx, "subagent: " + String(p["description"] ?? "")); break;
       case "plan": {
         const pl = p as unknown as PlanEventPayload;
-        if (pl.status === "generating") { if (ctx === activeCtx) { setActivity("Planning…"); setStatusState("working"); } showThinking(ctx); addNote(ctx, "Plan agent is generating a plan…"); }
-        else if (pl.status === "ready") { if (ctx === activeCtx) setActivity("Plan ready - handing to build"); addNote(ctx, "Plan ready - handed to the build agent."); }
-        else if (ctx === activeCtx) { setActivity("Planning skipped - building without a plan"); addNote(ctx, `Plan pass skipped${pl.reason ? ` (${pl.reason})` : ""} - proceeding to build.`); }
+        if (pl.status === "generating") { if (ctx === activeCtx) { setActivity("Planning…"); setStatusState("working"); } showThinking(ctx); }
+        else if (pl.status === "ready") { hideThinking(ctx); if (ctx === activeCtx) setActivity("Plan ready"); addPlanCard(ctx, String(pl.plan ?? "")); }
+        else { hideThinking(ctx); if (ctx === activeCtx) setActivity("Planning skipped - building without a plan"); addNote(ctx, `Plan pass skipped${pl.reason ? ` (${pl.reason})` : ""} - proceeding to build.`); }
         break;
       }
       case "decision": {
@@ -1683,22 +1710,24 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
     if (ctx.pendingEffort !== null) { const eff = ctx.pendingEffort; ctx.pendingEffort = null; if (eff !== ctx.effortVal) ctx.effortVal = eff; }
     syncEffortFromModel(ctx);
     if (ctx === activeCtx) {
-      const cur = providerOptions.find((p) => p.id === ctx.providerId);
-      providerLabel.textContent = cur ? cur.label : "No providers";
-      providerLabel.title = cur ? `${cur.label} · ${cur.sub}` : "No providers";
-      providerBtn.classList.toggle("no-provider", !cur);
+      refreshModelButton();
       effortLabel.textContent = ctx.effortVal;
       refreshProviderMenu();
       renderTabs();
     }
+    // Roles live alongside models in the composer button, so keep the agent
+    // config fresh for it (and Settings) whenever the provider list updates.
+    if (!agentConfig) send(ctx, { op: "get_agents" });
     if (settingsRequested) { settingsRequested = false; openSettings(settingsLastTab); }
   } else if (msg.reply === "get_agents" && msg.data && typeof msg.data === "object") {
     agentConfig = msg.data as AgentConfig;
+    refreshModelButton();
     // If the agents panel is already open (from a settings load that raced the
     // config), swap in the real values now instead of leaving defaults.
     if (document.getElementById("agSave")) { const [h, w] = settingsAgents(); el<HTMLDivElement>("settingsBody").innerHTML = `<div class="settings-panel">${h}</div>`; w(); }
   } else if (msg.reply === "set_agents") {
     if (msg.ok && msg.data && typeof msg.data === "object") agentConfig = msg.data as AgentConfig;
+    refreshModelButton();
     const status = document.getElementById("agStatus");
     if (status) { status.textContent = msg.ok ? "Saved." : `Could not save: ${String(msg.error ?? "")}`; status.className = msg.ok ? "status-line ok" : "status-line fail"; }
   } else if (msg.reply === "submit") {
@@ -1823,6 +1852,47 @@ function syncEffortFromModel(ctx: Ctx): void {
   ctx.effortVal = own !== "default" ? own : prefs.effortGlobal;
   if (ctx === activeCtx) effortLabel.textContent = ctx.effortVal;
 }
+/* What the composer's model button shows. When a custom build model is set, a
+   single session model is redundant - the button shows the plan>build workflow
+   (and oversight) and clicking edits the roles in Settings. Otherwise it stays
+   the session-default picker, since that model is what actually runs. */
+function modelSummary(): { label: string; title: string; goesToAgents: boolean; oversight: boolean } {
+  const cur = providerOptions.find((x) => x.id === activeCtx?.providerId);
+  const sessionLabel = cur ? cur.label : "No providers";
+  const sessionTitle = cur ? `${cur.label} · ${cur.sub}` : "No providers";
+  const cfg = agentConfig;
+  const oversight = !!(cfg?.oversight?.enabled && cfg.oversight.model_id);
+  const ov = oversight ? nameOfModel(cfg!.oversight.model_id) : null;
+  if (!cfg) return { label: sessionLabel, title: sessionTitle, goesToAgents: false, oversight };
+  const plan = cfg.plan?.enabled && cfg.plan.model_id ? nameOfModel(cfg.plan.model_id) : null;
+  const build = cfg.build?.enabled && cfg.build.model_id ? nameOfModel(cfg.build.model_id) : null;
+  if (build) {
+    const bits: string[] = [];
+    if (plan) bits.push(`Plan: ${plan}`);
+    bits.push(`Build: ${build}`);
+    if (ov) bits.push(`Oversight: ${ov}`);
+    return { label: plan ? `${plan} › ${build}` : build, title: `${bits.join(" · ")} - click to edit in Settings > Agents`, goesToAgents: true, oversight };
+  }
+  if (plan) {
+    let title = `Plan agent: ${plan} · Build: session model (${sessionLabel})`;
+    if (ov) title += ` · Oversight: ${ov}`;
+    return { label: sessionLabel, title, goesToAgents: false, oversight };
+  }
+  return { label: sessionLabel, title: ov ? `${sessionTitle} · Oversight: ${ov} on` : sessionTitle, goesToAgents: false, oversight };
+}
+function nameOfModel(id: string): string {
+  const m = providerById.get(id);
+  return m ? (m.name || m.model || id) : id;
+}
+function refreshModelButton(): void {
+  const s = modelSummary();
+  const cur = providerOptions.find((x) => x.id === activeCtx?.providerId);
+  providerLabel.textContent = s.label;
+  providerLabel.title = s.title;
+  providerBtn.classList.toggle("agents", s.goesToAgents);
+  providerBtn.classList.toggle("oversight", s.oversight);
+  providerBtn.classList.toggle("no-provider", !cur && !s.goesToAgents);
+}
 function selectModel(ctx: Ctx, modelId: string | null, options: { adoptEffort?: boolean } = {}): void {
   ctx.providerId = modelId;
   prefs.providerByWs[ctx.root] = modelId ?? "";
@@ -1836,10 +1906,7 @@ function selectModel(ctx: Ctx, modelId: string | null, options: { adoptEffort?: 
   send(ctx, { op: "set_active", id: modelId ?? "" });
   pushEffort(ctx);
   if (ctx === activeCtx) {
-    const cur = providerOptions.find((p) => p.id === ctx.providerId);
-    providerLabel.textContent = cur ? cur.label : "No providers";
-    providerLabel.title = cur ? `${cur.label} · ${cur.sub}` : "No providers";
-    providerBtn.classList.toggle("no-provider", !cur);
+    refreshModelButton();
     effortLabel.textContent = ctx.effortVal;
     refreshProviderMenu();
     renderTabs();
@@ -2261,11 +2328,17 @@ function settingsAgents(): [string, () => void] {
   const modelOpts = (current: string): string =>
     `<option value="">Keep session default</option>` +
     providerOptions.map((o) => `<option value="${o.id}"${o.id === current ? " selected" : ""}>${escapeHtml(o.label)} · ${escapeHtml(o.sub)}</option>`).join("");
-  const role = (title: string, desc: string, key: "plan" | "build", r: AgentRole): string =>
-    `<h4 class="card-title" style="margin-top:16px">${title} agent</h4>` +
-    `<div class="set-row"><div class="set-info"><div class="set-label">Enable the ${title.toLowerCase()} agent</div><div class="set-desc">${desc}</div></div><div class="set-ctl"><span id="sw_${key}"></span></div></div>` +
-    `<div class="set-row"><div class="set-info"><div class="set-label">Model</div><div class="set-desc">Pick a configured model, or keep the session's own. It keeps that model's key and settings.</div></div><div class="set-ctl"><select class="sel-inline" id="ag_${key}_model">${modelOpts(r.model_id)}</select></div></div>` +
-    `<div class="set-row" style="align-items:flex-start"><div class="set-info"><div class="set-label">Instructions</div><div class="set-desc">Optional guidance for this role, kept separate from the project's AGENTS.md rules.</div></div><div class="set-ctl" style="flex:1"><textarea id="ag_${key}_instr" class="set-text" rows="3" placeholder="Optional instructions for the ${key} agent">${escapeHtml(r.instructions)}</textarea></div></div>`;
+  const role = (title: string, desc: string, key: "plan" | "build", r: AgentRole): string => {
+    // Only the plan role offers the review-before-building pause.
+    const approveRow = key === "plan"
+      ? `<div class="set-row"><div class="set-info"><div class="set-label">Review the plan before building</div><div class="set-desc">After planning, pause so you can read the plan and choose Build or Skip. Off means it plans then builds in one go.</div></div><div class="set-ctl"><span id="sw_plan_approve"></span></div></div>`
+      : "";
+    return `<h4 class="card-title" style="margin-top:16px">${title} agent</h4>` +
+      `<div class="set-row"><div class="set-info"><div class="set-label">Enable the ${title.toLowerCase()} agent</div><div class="set-desc">${desc}</div></div><div class="set-ctl"><span id="sw_${key}"></span></div></div>` +
+      `<div class="set-row"><div class="set-info"><div class="set-label">Model</div><div class="set-desc">Pick a configured model, or keep the session's own. It keeps that model's key and settings.</div></div><div class="set-ctl"><select class="sel-inline" id="ag_${key}_model">${modelOpts(r.model_id)}</select></div></div>` +
+      `<div class="set-row" style="align-items:flex-start"><div class="set-info"><div class="set-label">Instructions</div><div class="set-desc">Optional guidance for this role, kept separate from the project's AGENTS.md rules.</div></div><div class="set-ctl" style="flex:1"><textarea id="ag_${key}_instr" class="set-text" rows="3" placeholder="Optional instructions for the ${key} agent">${escapeHtml(r.instructions)}</textarea></div></div>` +
+      approveRow;
+  };
   const ov = cfg.oversight;
   const html =
     `<p class="sub">Optionally route planning and building to their own models, and let a stronger model review significant decisions. Everything is off by default - the app behaves exactly as before until you enable a role. Models come from Settings &gt; Models and reuse that model's own key and settings.</p>` +
@@ -2282,12 +2355,13 @@ function settingsAgents(): [string, () => void] {
     const body = el<HTMLDivElement>("settingsBody");
     wireSwitch(body, "sw_plan", cfg.plan.enabled, () => {});
     wireSwitch(body, "sw_build", cfg.build.enabled, () => {});
+    wireSwitch(body, "sw_plan_approve", cfg.plan.approve ?? false, () => {});
     wireSwitch(body, "sw_oversight", cfg.oversight.enabled, () => {});
     const val = (id: string): string => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null)?.value ?? "";
     const isOn = (id: string): boolean => body.querySelector<HTMLElement>(`#${id}`)?.classList.contains("on") ?? false;
     el<HTMLButtonElement>("agSave").onclick = () => {
       const next: AgentConfig = {
-        plan: { enabled: isOn("sw_plan"), model_id: val("ag_plan_model"), instructions: val("ag_plan_instr") },
+        plan: { enabled: isOn("sw_plan"), approve: isOn("sw_plan_approve"), model_id: val("ag_plan_model"), instructions: val("ag_plan_instr") },
         build: { enabled: isOn("sw_build"), model_id: val("ag_build_model"), instructions: val("ag_build_instr") },
         oversight: {
           enabled: isOn("sw_oversight"), model_id: val("ag_oversight_model"),
@@ -2391,6 +2465,14 @@ wireMenu(permsBtn, permsMenu);
 providerBtn.onclick = (e) => {
   e.stopPropagation();
   if (!activeCtx) return;
+  // A custom build model makes the single session model redundant: the button
+  // edits the plan/build/oversight roles in Settings instead of switching one.
+  if (modelSummary().goesToAgents) {
+    settingsRequested = true; settingsLastTab = "agents";
+    send(ensureAppCtx(), { op: "list_providers" });
+    send(ensureAppCtx(), { op: "get_agents" });
+    return;
+  }
   if (!providerOptions.length) { settingsRequested = true; settingsLastTab = "models"; if (!send(ensureAppCtx(), { op: "list_providers" })) settingsRequested = false; else setActivity("no providers yet - opening Settings…"); return; }
   const was = providerMenu.classList.contains("hidden"); closeAllMenus(); if (was) providerMenu.classList.remove("hidden");
 };

@@ -132,9 +132,17 @@ class Runner:
                 user_text, plan_id, config["plan"].get("instructions") or "")
             self._plan_text = plan_text
             if plan_text and not self.cancelled():
-                self.messages.append(
-                    {"role": "user", "content": PLAN_HANDOFF.format(plan=plan_text)})
-                session.save(self.messages)
+                # Optionally pause so the user can read the plan before anything
+                # is built. Approved: it becomes the build agent's context.
+                # Declined: the plan is kept as a message and nothing is built.
+                if self._approve_plan(plan_text, config):
+                    self.messages.append(
+                        {"role": "user", "content": PLAN_HANDOFF.format(plan=plan_text)})
+                    session.save(self.messages)
+                else:
+                    self.messages.append({"role": "assistant", "content": plan_text})
+                    session.save(self.messages)
+                    return
 
         if self.cancelled():
             events.emit(events.NOTE, {"text": "stopped"})
@@ -220,6 +228,36 @@ class Runner:
             return None
         events.emit(events.PLAN, {"status": "ready", "plan": report, "model": label})
         return report
+
+    def _approve_plan(self, plan_text, config):
+        """Pause so the user can review the plan before it is built.
+
+        Returns True to build. Auto-builds (True) when the review toggle is off,
+        when no frontend can answer, or on cancel - a plan review is a courtesy,
+        never a way to wedge the turn. Blocks on the same interaction the tool
+        approval path uses, so an unanswered prompt is bounded by that timeout.
+        """
+        from . import tools as tools_module
+
+        if not agents.plan_wants_approval(config) or self.cancelled():
+            return True
+        if not tools_module.approval_channel_ready():
+            return True  # nobody to ask; keep building rather than deadlock
+        preview = plan_text if len(plan_text) <= 3200 else plan_text[:3200] + "\n\n… (full plan shown above)"
+        try:
+            approved = events.interact(events.APPROVAL, {
+                "tool": "plan", "reason": "Build this plan?",
+                "why": preview, "risk": "low", "risk_reason": "Plan approval",
+                "command": "", "target": "",
+            })
+        except Exception:  # noqa: BLE001 - never wedge the turn on the prompt
+            return True
+        if not approved:
+            events.emit(events.NOTE, {
+                "text": "You chose not to build. The plan is above; nothing was changed. "
+                        "Send a follow-up to refine it, or resubmit to plan again.",
+                "kind": "plan_skipped"})
+        return bool(approved)
 
     # --- decision oversight -------------------------------------------------
 

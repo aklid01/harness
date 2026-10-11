@@ -14,6 +14,7 @@ transcript - the existing agent, unchanged.
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -96,7 +97,9 @@ class ConfigCase(unittest.TestCase):
         self.assertFalse(agents.get()["plan"]["enabled"])
 
 
-class RouteCase(unittest.TestCase):
+class RouteBase(unittest.TestCase):
+    """Shared setup for routing and plan-approval tests: real providers, the
+    real backend, a mocked coder that records which model each call used."""
     """Plan then build, end to end, with a mocked call_llm."""
 
     def setUp(self):
@@ -190,6 +193,8 @@ class RouteCase(unittest.TestCase):
                 out.append(entry)
         return [m["content"] for m in out if m.get("role") == "user"]
 
+
+class RouteCase(RouteBase):
     # ---- the spine: disabled == today ---------------------------------
 
     def test_all_disabled_is_one_request_on_the_default_model(self):
@@ -275,6 +280,88 @@ class RouteCase(unittest.TestCase):
         users = self.transcript_users()
         self.assertEqual([u for u in users if not u.startswith("<plan>")],
                          ["first task", "second task"], "user messages are not duplicated")
+
+
+class PlanApproval(RouteBase):
+    """The optional review-before-building pause (plan.approve).
+
+    Reuses RouteCase's providers, mocked coder, and backend, and adds an
+    approval responder so the runner can actually pause and be answered. With
+    the toggle off (RouteCase's other tests) nothing changes; with it on, the
+    plan is shown, the user decides, and only an approval builds.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.approval_answer = True
+        self._answered: set = set()
+        self._stop = threading.Event()
+        threading.Thread(target=self._approver, daemon=True).start()
+        self.addCleanup(self._stop.set)
+
+    def _approver(self):
+        while not self._stop.wait(0.02):
+            for m in list(self.sent):
+                rid, req = m.get("id"), m.get("request")
+                if rid and req == "approval" and rid not in self._answered:
+                    self._answered.add(rid)
+                    s = self.backend.sessions.get(m.get("session"))
+                    if s:
+                        s.reply(rid, self.approval_answer)
+
+    def approvals(self):
+        return [m for m in self.sent if m.get("request") == "approval"]
+
+    def submit_with_plan(self):
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan", "approve": True},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit()
+
+    def test_off_by_default_means_no_pause(self):
+        # approve is not set -> the toggle defaults off, so no approval is
+        # requested and plan flows straight into build (today's behaviour).
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit()
+        self.assertEqual(self.approvals(), [], "no approval request without the toggle")
+        self.assertEqual([m for m, _ in self.calls], ["plan-model", "build-model"])
+
+    def test_approval_prompts_with_the_plan_visible(self):
+        self.submit_with_plan()
+        asks = self.approvals()
+        self.assertTrue(asks, "the plan review asks before building")
+        self.assertEqual(asks[0].get("tool"), "plan")
+        self.assertIn("PLAN_BODY", asks[0].get("why", ""), "the plan is shown to the user")
+
+    def test_building_only_happens_on_approval(self):
+        self.approval_answer = True
+        self.submit_with_plan()
+        self.assertEqual([m for m, _ in self.calls], ["plan-model", "build-model"])
+        build_call = next(c for c in self.calls if c[0] == "build-model")
+        self.assertTrue(build_call[1], "the approved plan reaches the build agent")
+        # the plan handoff is persisted for inspectability
+        users = self.transcript_users()
+        self.assertTrue(any(u.startswith("<plan>") for u in users))
+
+    def test_skipping_builds_nothing_but_keeps_the_plan(self):
+        self.approval_answer = False
+        self.submit_with_plan()
+        self.assertEqual([m for m, _ in self.calls], ["plan-model"],
+                         "a skipped plan never reaches the build agent")
+        # the plan is kept as an assistant message so the user can still read it
+        contents = []
+        sid = self.sid()
+        for line in (paths_mod.session_dir() / f"{sid}.jsonl").read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("role") == "assistant":
+                contents.append(entry.get("content") or "")
+        self.assertTrue(any("PLAN_BODY" in c for c in contents), "the plan is retained on skip")
+        skipped = [m for m in self.sent if m.get("event") == events.NOTE
+                   and (m.get("payload", {}) or {}).get("kind") == "plan_skipped"]
+        self.assertTrue(skipped, "a skip is surfaced to the user")
 
 
 if __name__ == "__main__":

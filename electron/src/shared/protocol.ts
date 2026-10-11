@@ -97,6 +97,7 @@ export interface AgentRole {
   enabled: boolean;
   model_id: string;
   instructions: string;
+  approve?: boolean;
 }
 export interface AgentOversight extends AgentRole {
   intensity: string;
