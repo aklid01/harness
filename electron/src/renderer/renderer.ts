@@ -697,7 +697,7 @@ function openModelPicker(ctx: Ctx): void {
   });
   el<HTMLButtonElement>("pmCancel").onclick = hideModal;
 }
-function addToolLine(ctx: Ctx, callId: string | null, name: string, args: Record<string, unknown>): string {
+function addToolLine(ctx: Ctx, callId: string | null, name: string, args: Record<string, unknown>, role?: string): string {
   hideThinking(ctx);
   const seq = ++toolSeq[ctx.id];
   const key = callId ?? `local-${seq}`;
@@ -705,8 +705,10 @@ function addToolLine(ctx: Ctx, callId: string | null, name: string, args: Record
   div.className = "tool";
   const summary = String(args?.["command"] ?? args?.["path"] ?? JSON.stringify(args ?? {}));
   const short = summary.length > 90 ? summary.slice(0, 87) + "..." : summary;
+  const roleChip = role ? `<span class="t-role ${escapeHtml(role)}">${escapeHtml(ROLE_LABEL[role] ?? role)}</span>` : "";
   div.innerHTML =
     `<span class="badge">…</span><span class="t-name">${escapeHtml(name)}</span>` +
+    roleChip +
     `<span class="t-summary">${escapeHtml(short)}</span>` +
     `<button class="t-tog" title="Toggle output" disabled>${ICONS.chev}</button><pre class="hidden"></pre>`;
   const button = div.querySelector("button") as HTMLButtonElement;
@@ -718,6 +720,7 @@ function addToolLine(ctx: Ctx, callId: string | null, name: string, args: Record
   scrollBottom(ctx);
   return key;
 }
+const ROLE_LABEL: Record<string, string> = { plan: "plan", build: "build", checker: "review" };
 const toolSeq: Record<string, number> = {};
 function finishToolLine(ctx: Ctx, callId: string | null, result: string): void {
   const div = (callId && ctx.toolCards.get(callId)) ?? [...ctx.toolCards.values()].pop();
@@ -1603,15 +1606,17 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
     switch (msg.event) {
       case "message":
         hideThinking(ctx);
+        clearRetryCard(ctx);
         if (p["role"] === "user") addUser(ctx, String(p["content"] ?? ""));
         else endStream(ctx, String(p["content"] ?? ""));
         if (ctx === activeCtx) setActivity("ready");
         break;
-      case "message_delta": appendDelta(ctx, String(p["text"] ?? "")); break;
+      case "message_delta": clearRetryCard(ctx); appendDelta(ctx, String(p["text"] ?? "")); break;
       case "tool_call": {
         const args = (p["args"] as Record<string, unknown>) ?? {};
+        const role = (p["agent"] ?? p["role"]) as string | undefined;
         if (p["name"] === "write_todos" && Array.isArray(args["todos"])) { ctx.planItems = args["todos"] as TodoItem[]; if (ctx === activeCtx) renderPlan(ctx); }
-        else { if (ctx === activeCtx) setActivity(`running ${p["name"]}: ${String(args["command"] ?? args["path"] ?? "")}`.slice(0, 120)); addToolLine(ctx, (p["call_id"] as string) ?? null, String(p["name"]), args); }
+        else { if (ctx === activeCtx) setActivity(`${role ? ROLE_LABEL[role] + " " : ""}running ${p["name"]}: ${String(args["command"] ?? args["path"] ?? "")}`.slice(0, 120)); addToolLine(ctx, (p["call_id"] as string) ?? null, String(p["name"]), args, role); }
         break;
       }
       case "tool_result":
@@ -1662,6 +1667,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         const pl = p as unknown as PlanEventPayload;
         if (pl.status === "generating") { if (ctx === activeCtx) { setActivity("Planning…"); setStatusState("working"); } showThinking(ctx); }
         else if (pl.status === "ready") { hideThinking(ctx); if (ctx === activeCtx) setActivity("Plan ready"); addPlanCard(ctx, String(pl.plan ?? "")); }
+        else if (pl.status === "failed") { hideThinking(ctx); if (ctx === activeCtx) { setActivity("Planning failed - nothing built"); setStatusState("error"); } addError(ctx, `Planning failed${pl.reason ? ` (${pl.reason})` : ""}. Nothing was built - retry or refine the request.`, {}); }
         else { hideThinking(ctx); if (ctx === activeCtx) setActivity("Planning skipped - building without a plan"); addNote(ctx, `Plan pass skipped${pl.reason ? ` (${pl.reason})` : ""} - proceeding to build.`); }
         break;
       }
@@ -1672,6 +1678,9 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       }
       case "done":
         setBusy(ctx, false);
+        // The turn is over: a retry that succeeded leaves no active retry card,
+        // and a retry that failed has already shown its error card instead.
+        clearRetryCard(ctx);
         if (ctx === activeCtx) setActivity("ready");
         send(ctx, { op: "list_sessions" });
         send(ctx, { op: "get_context" });
@@ -1811,6 +1820,25 @@ function applyMode(ctx: Ctx, mode: "build" | "plan"): void {
     modeLabel.textContent = mode === "build" ? "Build" : "Plan";
     statusMode.textContent = mode === "build" ? "Build" : "Plan";
     renderMenu(modeMenu, [{ label: "Build", value: "build" }, { label: "Plan", value: "plan" }], ctx.modeVal, (v) => pickMode(ctx, v));
+    refreshModeIndicator();
+  }
+}
+/* When the Plan -> Build workflow owns the turn, a "Build" mode chooser is
+   redundant and contradictory, so the control becomes the workflow indicator.
+   The mode menu stays available as an explicit override. */
+function refreshModeIndicator(): void {
+  const planOn = !!(agentConfig?.plan?.enabled);
+  if (planOn) {
+    modeLabel.textContent = "Plan → Build";
+    statusMode.textContent = "Plan → Build";
+    modeBtn.classList.add("workflow");
+    modeBtn.title = "Plan → Build is configured and runs automatically. The menu below is an explicit override; edit the workflow in Settings → Agents.";
+  } else {
+    const label = activeCtx?.modeVal === "plan" ? "Plan" : "Build";
+    modeLabel.textContent = label;
+    statusMode.textContent = label;
+    modeBtn.classList.remove("workflow");
+    modeBtn.title = "Mode";
   }
 }
 function pickMode(ctx: Ctx, value: string): void { applyMode(ctx, value as "build" | "plan"); }
@@ -1892,6 +1920,7 @@ function refreshModelButton(): void {
   providerBtn.classList.toggle("agents", s.goesToAgents);
   providerBtn.classList.toggle("oversight", s.oversight);
   providerBtn.classList.toggle("no-provider", !cur && !s.goesToAgents);
+  refreshModeIndicator();
 }
 function selectModel(ctx: Ctx, modelId: string | null, options: { adoptEffort?: boolean } = {}): void {
   ctx.providerId = modelId;

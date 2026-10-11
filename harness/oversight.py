@@ -23,6 +23,7 @@ import dataclasses
 import json
 
 from . import instructions
+from . import permissions
 from . import providers
 from .llm import call_llm
 
@@ -34,24 +35,6 @@ RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 # (read_file, read_skill) or a todo bookkeeping call is not a decision.
 REVIEWABLE = ("write_file", "str_replace", "bash")
 
-# A shell command that can delete, overwrite, fetch-and-run, or change config
-# is high-value regardless of intensity. This is deliberately narrower and more
-# conservative than permissions._bash_risk, which rates any unknown command
-# "medium" so it prompts for approval; here a routine "ls" must stay quiet.
-_HIGH_COMMAND = (
-    "rm ", "rm -rf", "rm -fr", "rmdir", "shred", "mv ", "del ", "truncate",
-    "dd if=", "mkfs", "shutdown", "reboot", ":(){", "| sh", "| bash", "|sh", "|bash",
-    "curl", "wget", "chmod", "chown",
-    "git reset", "git clean", "git checkout --", "git restore", "git checkout .",
-    "sed -i", ">", "xargs rm",
-)
-_MEDIUM_COMMAND = (
-    "install", "pip ", "npm ", "yarn ", "pnpm ", "apt", "apt-get", "brew",
-    "cargo", "go get", "gem ", "composer", "gradle", "mvn ",
-    "make", "tsc", "build", "compile", "pytest", "cargo build", "docker build",
-    "docker run", "npm run",
-)
-
 # How much gets reviewed at each intensity, as the minimum command risk.
 _MIN_RISK_BY_INTENSITY = {"low": "high", "medium": "medium", "high": "low"}
 
@@ -61,12 +44,14 @@ def risk_ge(level, floor):
 
 
 def command_risk(command):
-    low = str(command or "").lower()
-    if any(m in low for m in _HIGH_COMMAND):
-        return "high"
-    if any(m in low for m in _MEDIUM_COMMAND):
-        return "medium"
-    return "low"
+    """Risk of a shell command, from the shared quote-aware classifier.
+
+    Kept as a thin wrapper so permission risk and review eligibility answer the
+    same question the same way: a read-only `cat`, a stderr `2>/dev/null`, and a
+    plain `ls` of several directories are low and are not reviewed; editing,
+    deleting, installing or piping into a shell rises with real impact.
+    """
+    return permissions.classify_bash(command)[0]
 
 
 def decision_risk(name, args):

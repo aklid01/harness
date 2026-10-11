@@ -131,7 +131,7 @@ class Runner:
             plan_text = self._plan_phase(
                 user_text, plan_id, config["plan"].get("instructions") or "")
             self._plan_text = plan_text
-            if plan_text and not self.cancelled():
+            if plan_text:
                 # Optionally pause so the user can read the plan before anything
                 # is built. Approved: it becomes the build agent's context.
                 # Declined: the plan is kept as a message and nothing is built.
@@ -143,6 +143,11 @@ class Runner:
                     self.messages.append({"role": "assistant", "content": plan_text})
                     session.save(self.messages)
                     return
+            elif not self.cancelled():
+                # The plan agent produced no usable plan. Do not fabricate one and
+                # do not start building; the failure is already surfaced and the
+                # session is preserved for a retry or a refined request.
+                return
 
         if self.cancelled():
             events.emit(events.NOTE, {"text": "stopped"})
@@ -171,9 +176,10 @@ class Runner:
         ]
         toolset = [s for s in tools_module.TOOL_SCHEMAS
                    if s["function"]["name"] not in PLAN_WITHHELD]
-        report = None
+        final = None  # only a clean answer (a turn with no tool calls) is a plan
         label = plan_model_id
-        events.emit(events.PLAN, {"status": "generating", "request": request[:200]})
+        events.emit(events.PLAN, {"status": "generating", "request": request[:200],
+                                  "model": None, "role": "plan"})
         with providers.use(plan_model_id):
             caps = providers.active_model_capabilities()
             label = caps.get("name") or caps.get("model") or plan_model_id
@@ -184,22 +190,27 @@ class Runner:
                 prepared, trimmed = history.prepare(messages, window)
                 if trimmed:
                     events.emit(events.NOTE, {"text": trimmed})
-                events.emit(events.STATUS, {"active": "planning"})
+                events.emit(events.STATUS, {"active": "planning", "role": "plan"})
                 try:
                     message, usage = call_llm(prepared, tools=toolset, cancel=self.cancel_event)
-                except Exception as failure:  # noqa: BLE001 - degrade, don't kill the turn
+                except Exception as failure:  # noqa: BLE001 - report, don't fake a plan
                     events.emit(events.STATUS, {"active": None})
-                    events.emit(events.PLAN, {"status": "skipped",
-                                              "reason": type(failure).__name__, "model": label})
+                    events.emit(events.PLAN, {"status": "failed",
+                                              "reason": type(failure).__name__, "model": label,
+                                              "role": "plan"})
                     events.emit(events.NOTE, {
-                        "text": "the planning pass failed - proceeding to build "
-                                f"without a written plan ({type(failure).__name__})."})
+                        "text": f"the planning pass failed ({type(failure).__name__}); "
+                                "nothing was built. Press retry, or revise the request.",
+                        "kind": "plan_failed", "role": "plan"})
                     return None
                 events.emit(events.STATUS, {"active": None})
                 events.emit(events.USAGE, dict(usage))
                 messages.append(message.model_dump(exclude_none=True))
-                report = message.content or report
+                # A turn that keeps making tool calls is still exploring; only a
+                # turn that stops calling is a finished plan. Its earlier
+                # narration is never mistaken for the plan.
                 if not message.tool_calls:
+                    final = message.content or ""
                     break
                 for tool_call in message.tool_calls:
                     if self.cancelled():
@@ -215,19 +226,28 @@ class Runner:
                     else:
                         args, result = execute(tool_call, note=(message.content or ""))
                     events.emit(events.TOOL_CALL, {"call_id": call_id, "name": name,
-                                                   "args": args, "nested": True})
+                                                   "args": args, "nested": True, "role": "plan"})
                     events.emit(events.TOOL_RESULT, {"call_id": call_id, "name": name,
-                                                     "args": args, "result": result, "nested": True})
+                                                     "args": args, "result": result, "nested": True,
+                                                     "role": "plan"})
                     messages.append({"role": "tool", "tool_call_id": tool_call.id,
                                      "content": result})
                 if self.cancelled():
                     break
 
-        if not report:
-            events.emit(events.PLAN, {"status": "skipped", "reason": "empty", "model": label})
+        if self.cancelled():
             return None
-        events.emit(events.PLAN, {"status": "ready", "plan": report, "model": label})
-        return report
+        if not (final or "").strip():
+            reason = "the planner ran out of turns before writing a plan" if final is None else "empty"
+            events.emit(events.PLAN, {"status": "failed", "reason": reason,
+                                      "model": label, "role": "plan"})
+            events.emit(events.NOTE, {
+                "text": f"planning did not produce a plan ({reason}); nothing was built. "
+                        "Try retrying, or refine the request.",
+                "kind": "plan_failed", "role": "plan"})
+            return None
+        events.emit(events.PLAN, {"status": "ready", "plan": final, "model": label, "role": "plan"})
+        return final
 
     def _approve_plan(self, plan_text, config):
         """Pause so the user can review the plan before it is built.
@@ -300,6 +320,7 @@ class Runner:
 
         if len(history) >= max_rounds:
             events.emit(events.DECISION, {"status": "escalated", "tool": name, "round": len(history),
+                                          "review_id": fp, "agent": "checker", "subject": "build",
                                           "reasoning": f"unresolved after {len(history)} review round(s)"})
             events.emit(events.NOTE, {
                 "text": "Decision Oversight escalated: the coding agent and the "
@@ -317,8 +338,9 @@ class Runner:
                 "escalated",
             )
 
-        events.emit(events.DECISION, {"status": "reviewing", "tool": name, "round": len(history) + 1})
-        events.emit(events.STATUS, {"active": "reviewing a decision"})
+        events.emit(events.DECISION, {"status": "reviewing", "tool": name, "round": len(history) + 1,
+                                      "review_id": fp, "agent": "checker", "subject": "build"})
+        events.emit(events.STATUS, {"active": "reviewing a decision", "role": "checker"})
         verdict, usage = oversight.review(
             self._checker_model_id, self._oversight.get("instructions", ""),
             task=self._turn_text, plan=self._plan_text, name=name, args=args,
@@ -331,7 +353,8 @@ class Runner:
         self._review_log[fp] = history
 
         payload = {"tool": name, "verdict": verdict.verdict, "round": len(history),
-                   "reasoning": verdict.reasoning, "risks": verdict.risks}
+                   "reasoning": verdict.reasoning, "risks": verdict.risks,
+                   "review_id": fp, "agent": "checker", "subject": "build"}
 
         if verdict.verdict == "error":
             # The reviewer failed. A low/medium action proceeds under the normal
@@ -546,7 +569,7 @@ class Runner:
             if trimmed:
                 events.emit(events.NOTE, {"text": trimmed})
 
-            events.emit(events.STATUS, {"active": active_form()})
+            events.emit(events.STATUS, {"active": active_form(), "role": "build"})
             self._step += 1
             request_id = f"{self._request_prefix}:{self._step}"
             try:
@@ -642,7 +665,7 @@ class Runner:
                 events.emit(events.DEBUG, message.model_dump(exclude_none=True))
 
             if message.content:
-                events.emit(events.MESSAGE, {"role": "assistant", "content": message.content})
+                events.emit(events.MESSAGE, {"role": "assistant", "content": message.content, "agent": "build"})
 
             if not message.tool_calls:
                 break
@@ -675,8 +698,8 @@ class Runner:
                         args, result = execute(tool_call, note=(message.content or ""),
                                                call_key=(request_id, call_id or index))
                 extra = {"reviewed": review_marker} if review_marker else {}
-                events.emit(events.TOOL_CALL, {"call_id": call_id, "name": name, "args": args, "nested": False, **extra})
-                events.emit(events.TOOL_RESULT, {"call_id": call_id, "name": name, "args": args, "result": result, "nested": False, **extra})
+                events.emit(events.TOOL_CALL, {"call_id": call_id, "name": name, "args": args, "nested": False, "agent": "build", **extra})
+                events.emit(events.TOOL_RESULT, {"call_id": call_id, "name": name, "args": args, "result": result, "nested": False, "agent": "build", **extra})
                 if tool_call.function.name == "write_todos" and isinstance(args.get("todos"), list):
                     events.emit(events.TODOS, {"todos": args["todos"]})
 

@@ -282,6 +282,39 @@ class RouteCase(RouteBase):
                          ["first task", "second task"], "user messages are not duplicated")
 
 
+class PlanFailure(RouteBase):
+    """A planner that never emits a finished plan must not hand a fake plan to
+    the build agent or start building on its own."""
+
+    def test_narration_is_not_a_plan_and_failure_builds_nothing(self):
+        from harness.agent import PLAN_MAX_TURNS
+        # The plan model keeps "exploring" (a tool call every turn) and never
+        # produces a clean final answer, so it exhausts its turns.
+        def explore(messages, tools=None, on_delta=None, cancel=None):
+            model = providers.active_config()[2]
+            if model == "plan-model":
+                self.calls.append((model, True))
+                return reply("Let me try a different approach for this exploration:",
+                             [("read_file", {"path": "nope_missing.py"})]), USAGE
+            self.calls.append((model, False))
+            return reply("built without a real plan"), USAGE
+        self.llm.side_effect = explore
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit()
+
+        models = [m for m, _ in self.calls]
+        self.assertEqual(models.count("plan-model"), PLAN_MAX_TURNS,
+                         "the planner is bounded and never finalises")
+        self.assertNotIn("build-model", models, "build must not start on a failed plan")
+        failed = [m for m in self.sent if m.get("event") == events.PLAN
+                  and (m.get("payload", {}) or {}).get("status") == "failed"]
+        self.assertTrue(failed, "planning failure is surfaced, not hidden")
+        # the incidental narration is never stored as a plan
+        self.assertFalse(any(u.startswith("<plan>") for u in self.transcript_users()),
+                          "no fabricated plan handoff is persisted")
+
+
 class PlanApproval(RouteBase):
     """The optional review-before-building pause (plan.approve).
 

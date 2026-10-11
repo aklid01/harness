@@ -110,7 +110,7 @@ export interface AgentConfig {
 }
 
 export interface PlanEventPayload {
-  status: "generating" | "ready" | "skipped";
+  status: "generating" | "ready" | "failed" | "skipped";
   request?: string;
   plan?: string;
   model?: string;

@@ -1,5 +1,5 @@
 VERDICT plan-panel-closed-by-default: true ({"hidden":true,"toggleActive":false})
-VERDICT retry-card-ticks: true (["Retry 3 - in flight - 6s of 150s elapsed","Retry 3 - in flight - 7s of 150s elapsed"])
+VERDICT retry-card-ticks: true (["Retry 3 - in flight - 5s of 150s elapsed","Retry 3 - in flight - 6s of 150s elapsed"])
 VERDICT error-card-shown: true (could not reach the providercould not reach the provider (Dead Local): Connection error. -)
 VERDICT error-suggests-next-step: true (["Check the base URL and your connection, then press Retry."])
 VERDICT error-card-survives-session-switch: true (other=1 back=1)
