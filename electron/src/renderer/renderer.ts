@@ -740,6 +740,11 @@ const PHASE_LABEL: Record<string, string> = {
   reviewing: "Reviewing a decision…", completed: "Workflow complete",
   blocked: "Blocked", failed: "Workflow failed",
 };
+const PHASE_SHORT: Record<string, string> = {
+  planning: "Planning", replanning: "Replanning", validating: "Validating",
+  handing_off: "Handing off", building: "Building", reviewing: "Reviewing",
+  completed: "Done", blocked: "Blocked", failed: "Failed",
+};
 function showPhase(ctx: Ctx, phase: string | null): void {
   if (phase === null) { ctx.phaseEl?.remove(); ctx.phaseEl = null; return; }
   if (!ctx.phaseEl || ctx.phaseEl.parentElement !== ctx.chatBody) {
@@ -794,7 +799,7 @@ function renderTranscript(ctx: Ctx, messages: Array<Record<string, unknown>>): v
   messages.forEach((m, idx) => {
     if (m["role"] === "user" && typeof m["content"] === "string") {
       const content = m["content"] as string;
-      if (content.includes("<summary>") || content.startsWith("<env>") || content.startsWith("<system-reminder")) return;
+      if (content.includes("<summary>") || content.startsWith("<env>") || content.startsWith("<system-reminder") || content.startsWith("<plan>") || content.startsWith("<exploration>")) return;
       const { wrap, body } = turnWrap("user");
       body.textContent = content;
       wrap.appendChild(msgActions(ctx, idx, "user", content));
@@ -1644,6 +1649,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         break;
       case "message_delta": clearRetryCard(ctx); appendDelta(ctx, String(p["text"] ?? "")); break;
       case "tool_call": {
+        clearRetryCard(ctx);
         const args = (p["args"] as Record<string, unknown>) ?? {};
         const role = (p["agent"] ?? p["role"]) as string | undefined;
         if (p["name"] === "write_todos" && Array.isArray(args["todos"])) { ctx.planItems = args["todos"] as TodoItem[]; if (ctx === activeCtx) renderPlan(ctx); }
@@ -1651,14 +1657,18 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         break;
       }
       case "tool_result":
+        clearRetryCard(ctx);
         if (p["name"] !== "write_todos") finishToolLine(ctx, (p["call_id"] as string) ?? null, String(p["result"] ?? ""));
         if (ctx === activeCtx) setActivity("thinking…");
         break;
-      case "todos": ctx.planItems = (p["todos"] as TodoItem[]) ?? []; if (ctx === activeCtx) renderPlan(ctx); break;
-      case "usage": for (const [k, v] of Object.entries(p)) ctx.totals[k] = (ctx.totals[k] ?? 0) + (Number(v) || 0); if (ctx === activeCtx) renderUsage(ctx); break;
+      case "todos": clearRetryCard(ctx); ctx.planItems = (p["todos"] as TodoItem[]) ?? []; if (ctx === activeCtx) renderPlan(ctx); break;
+      // A usage card means a request completed, so any retry in flight has
+      // recovered - clear it even during phases that emit no message (planning,
+      // review), which is where it used to linger across the turn.
+      case "usage": clearRetryCard(ctx); for (const [k, v] of Object.entries(p)) ctx.totals[k] = (ctx.totals[k] ?? 0) + (Number(v) || 0); if (ctx === activeCtx) renderUsage(ctx); break;
       case "status": {
         const label = p["active"] as string | null;
-        if (label) { if (ctx === activeCtx) { setActivity(label); setStatusState("working"); } showThinking(ctx); }
+        if (label) { clearRetryCard(ctx); if (ctx === activeCtx) { setActivity(label); setStatusState("working"); } showThinking(ctx); }
         else { if (ctx === activeCtx && !ctx.busy) setStatusState("ready"); hideThinking(ctx); }
         break;
       }
@@ -1701,11 +1711,17 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         const pl = p as unknown as PlanEventPayload;
         if (pl.status === "generating") { if (ctx === activeCtx) { setActivity("Planning…"); setStatusState("working"); } showThinking(ctx); }
         else if (pl.status === "ready") { hideThinking(ctx); if (ctx === activeCtx) setActivity("Plan ready"); addPlanCard(ctx, String(pl.plan ?? "")); }
-        else if (pl.status === "failed") { hideThinking(ctx); if (ctx === activeCtx) { setActivity("Planning failed - nothing built"); setStatusState("error"); } addError(ctx, `Planning failed${pl.reason ? ` (${pl.reason})` : ""}. Nothing was built - retry or refine the request.`, {}); }
-        else { hideThinking(ctx); if (ctx === activeCtx) setActivity("Planning skipped - building without a plan"); addNote(ctx, `Plan pass skipped${pl.reason ? ` (${pl.reason})` : ""} - proceeding to build.`); }
+        else if (pl.status === "failed") {
+          // Recoverable: planning ran out after its bounded attempts and built
+          // nothing. A note, not a red error card, so it never contradicts a
+          // plan the user can see is actually there.
+          hideThinking(ctx); if (ctx === activeCtx) setActivity("Planning could not produce a usable plan");
+          addNote(ctx, `Planning did not produce a usable plan${pl.reason ? ` (${pl.reason})` : ""}. Nothing was built - retry, refine the request, or use Build mode directly.`);
+        } else { hideThinking(ctx); if (ctx === activeCtx) setActivity("Planning skipped - building without a plan"); addNote(ctx, `Plan pass skipped${pl.reason ? ` (${pl.reason})` : ""} - proceeding to build.`); }
         break;
       }
       case "decision": {
+        clearRetryCard(ctx);
         const d = p as unknown as DecisionEventPayload;
         showDecision(ctx, d);
         break;
@@ -1713,6 +1729,10 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       case "phase": {
         const ph = p as unknown as PhaseEventPayload;
         showPhase(ctx, ph.phase);
+        if (ctx === activeCtx) {
+          statusMode.textContent = ph.phase ? (PHASE_SHORT[ph.phase] ?? ph.phase)
+                                            : modeLabelText(ctx.modeVal);
+        }
         break;
       }
       case "done":
@@ -1875,24 +1895,15 @@ function applyMode(ctx: Ctx, mode: Mode): void {
   }
 }
 function pickMode(ctx: Ctx, value: string): void { applyMode(ctx, value as Mode); }
-/* When the Plan -> Build workflow owns the turn, a "Build" mode chooser is
-   redundant and contradictory, so the control becomes the workflow indicator.
-   The mode menu stays available as an explicit override. */
+/* The composer's mode control always shows the ACTUAL selected workflow, so its
+   label and its menu checkmark can never disagree. It is the single place to
+   choose the workflow; the status bar above shows the live phase during a run. */
 function refreshModeIndicator(): void {
   const mode = activeCtx?.modeVal ?? prefs.defaultMode;
-  const planOn = mode === "plan-build" || (!!agentConfig?.plan?.enabled && mode === "build");
-  if (planOn) {
-    modeLabel.textContent = "Plan → Build";
-    statusMode.textContent = "Plan → Build";
-    modeBtn.classList.add("workflow");
-    modeBtn.title = "Plan → Build is configured and runs automatically. The menu below is an explicit override; edit the workflow in Settings → Agents.";
-  } else {
-    const label = modeLabelText(mode);
-    modeLabel.textContent = label;
-    statusMode.textContent = label;
-    modeBtn.classList.remove("workflow");
-    modeBtn.title = "Mode";
-  }
+  modeLabel.textContent = modeLabelText(mode);
+  modeLabel.title = "Workflow: " + modeLabelText(mode);
+  statusMode.textContent = modeLabelText(mode);
+  modeBtn.classList.toggle("workflow", mode === "plan-build");
 }
 function pickEffort(ctx: Ctx, value: string): void {
   ctx.effortVal = value;

@@ -84,6 +84,7 @@ class Runner:
         self._oversight = None          # oversight config dict, or None when off
         self._checker_model_id = None
         self._plan_text = None          # plan handed to the build phase, if any
+        self._plan_findings: list = []  # what the planner read, carried to build
         self._build_started = False     # idempotent: build runs at most once per task
         self._review_log: dict = {}     # decision fingerprint -> prior verdicts
         self._stop_turn = False         # set when oversight escalates: stop safely
@@ -145,6 +146,7 @@ class Runner:
         self._checker_model_id = checker_id or None
         self._oversight = ov if (checker_id and providers.get_model(checker_id)) else None
         self._plan_text = None
+        self._plan_findings = []
 
         try:
             if self.mode == "plan":
@@ -213,23 +215,24 @@ class Runner:
         plan_cfg = config["plan"]
         plan_id = agents.resolve_model(plan_cfg, default_model)
         self._phase("planning")
-        plan_text, completion = self._plan_phase(
+        plan_text, completion, reason = self._plan_phase(
             user_text, plan_id, plan_cfg.get("instructions") or "")
         self._plan_text = plan_text
         self._persist_plan(user_text, plan_text, completion, "planned")
 
         # Bounded recovery: one targeted replan when the first pass yields
-        # nothing usable. Never hand an unusable plan to Build, never restart
-        # the whole task, never switch workflows on the user's behalf.
+        # nothing usable. Never hand an unusable plan to Build, never restart the
+        # whole task. One clear message says it is trying again.
         replans = 0
         while not plan_text and completion == plan_mod.UNUSABLE \
                 and replans < PLAN_REPLANS and not self.cancelled():
             replans += 1
             self._phase("replanning")
             events.emit(events.NOTE, {
-                "text": "planning produced no usable plan - trying once more, "
-                        "narrowly", "kind": "plan_replan", "role": "plan"})
-            plan_text, completion = self._plan_phase(
+                "text": f"Planning did not produce a usable plan ({reason}) - "
+                        "trying once more, more narrowly.",
+                "kind": "plan_replan", "role": "plan"})
+            plan_text, completion, reason = self._plan_phase(
                 user_text + "\n\nThe previous planning attempt did not yield a "
                 "usable plan. Produce a concrete, ordered plan now, and do not "
                 "spend turns exploring beyond what that plan needs.",
@@ -241,10 +244,13 @@ class Runner:
         if self.cancelled():
             return
         if not plan_text:
-            # Unusable, after bounded recovery. Surface and stop; a recoverable
-            # error lets the user retry, refine, or fall back to Build/Direct.
+            # Unusable, after bounded recovery. One recoverable signal (a note,
+            # not a hard error) - nothing was built and the session is intact for
+            # a retry, a refined request, or Plan reviewed by hand.
+            events.emit(events.PLAN, {"status": "failed", "reason": reason,
+                                      "role": "plan"})
             self._phase("failed")
-            plan_mod.current_save(phase="failed")
+            plan_mod.current_save(phase="failed", completion=plan_mod.UNUSABLE)
             return
 
         self._phase("validating")
@@ -263,17 +269,42 @@ class Runner:
     def _handoff_to_build(self, plan_text):
         """Pass the authoritative plan to Build, exactly once.
 
-        The plan becomes the build agent's structured context. Guarding on the
-        message already being last makes a replayed or duplicated completion
-        event a no-op, so Build is never launched twice for one task.
+        The plan becomes the build agent's structured context, preceded by what
+        planning already explored so Build does not re-read the same files.
+        Guarding on the message already being last makes a replayed or
+        duplicated completion event a no-op, so Build is never launched twice.
         """
         if self.cancelled():
             return
         handoff = {"role": "user", "content": PLAN_HANDOFF.format(plan=plan_text)}
         if self.messages and self.messages[-1] == handoff:
             return
+        findings = self._exploration_findings()
+        if findings:
+            self.messages.append({"role": "user", "content": findings})
         self.messages.append(handoff)
         session.save(self.messages)
+
+    def _exploration_findings(self):
+        """Carry what the planner read into Build so it need not re-explore.
+
+        Capped so a deep exploration cannot crowd out the task; newest runs are
+        kept, each snippet trimmed. Empty when the planner did not look around.
+        """
+        if not self._plan_findings:
+            return ""
+        budget_chars = 6000
+        kept, running = [], 0
+        for finding in reversed(self._plan_findings):
+            block = f"### {finding['name']}: {finding['brief']}\n{finding['snippet']}"
+            if running + len(block) > budget_chars and kept:
+                break
+            kept.insert(0, block)
+            running += len(block)
+        return ("<exploration>\nWhat the planning agent already looked at, so you "
+                "do not have to re-read it. Treat these as current; verify "
+                "anything the plan depends on before editing it.\n\n"
+                + "\n\n".join(kept) + "\n</exploration>")
 
     def _plan_phase(self, request, plan_model_id, plan_instructions):
         """A bounded, read-only planning pass on its own model.
@@ -295,8 +326,6 @@ class Runner:
         # The planner's own budget - separate from Build's and Oversight's.
         budget_obj = budget.Budget(turns=PLAN_MAX_TURNS, tool_calls=PLAN_MAX_TOOLS)
         progress = budget.Progress(limit=2)
-        final = None  # only a clean answer (a turn with no tool calls) is a plan
-        completion = plan_mod.UNUSABLE
         stopped = None  # why the phase stopped without finalising
         label = plan_model_id
         events.emit(events.PLAN, {"status": "generating", "request": request[:200],
@@ -315,16 +344,9 @@ class Runner:
                 events.emit(events.STATUS, {"active": "planning", "role": "plan"})
                 try:
                     message, usage = call_llm(prepared, tools=toolset, cancel=self.cancel_event)
-                except Exception as failure:  # noqa: BLE001 - report, don't fake a plan
+                except Exception as failure:  # noqa: BLE001 - a reason, not a crash
                     events.emit(events.STATUS, {"active": None})
-                    events.emit(events.PLAN, {"status": "failed",
-                                              "reason": type(failure).__name__, "model": label,
-                                              "role": "plan"})
-                    events.emit(events.NOTE, {
-                        "text": f"the planning pass failed ({type(failure).__name__}); "
-                                "nothing was built. Press retry, or revise the request.",
-                        "kind": "plan_failed", "role": "plan"})
-                    return None, plan_mod.UNUSABLE
+                    return None, plan_mod.UNUSABLE, f"the planner errored ({type(failure).__name__})"
                 events.emit(events.STATUS, {"active": None})
                 events.emit(events.USAGE, dict(usage))
                 messages.append(message.model_dump(exclude_none=True))
@@ -333,7 +355,10 @@ class Runner:
                 # narration is never mistaken for the plan.
                 if not message.tool_calls:
                     final = message.content or ""
-                    completion = plan_mod.COMPLETE if final.strip() else plan_mod.UNUSABLE
+                    if final.strip():
+                        events.emit(events.PLAN, {"status": "ready", "plan": final,
+                                                  "model": label, "role": "plan"})
+                        return final, plan_mod.COMPLETE, ""
                     break
                 stalled = False
                 for tool_call in message.tool_calls:
@@ -360,6 +385,13 @@ class Runner:
                                                      "role": "plan"})
                     messages.append({"role": "tool", "tool_call_id": tool_call.id,
                                      "content": result})
+                    # Keep what was read, so Build can reuse it instead of
+                    # re-exploring the same files. Capped, newest kept.
+                    brief = str(args.get("path") or args.get("command") or name)[:200]
+                    self._plan_findings.append({"name": name, "brief": brief,
+                                                "snippet": (result or "")[:700]})
+                    if len(self._plan_findings) > 30:
+                        del self._plan_findings[: len(self._plan_findings) - 30]
                     fingerprint = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
                     if progress.repeat(fingerprint):
                         stopped = "the planner kept repeating the same step"
@@ -369,19 +401,9 @@ class Runner:
                     break
 
         if self.cancelled():
-            return None, plan_mod.CANCELLED
-        if completion == plan_mod.COMPLETE:
-            events.emit(events.PLAN, {"status": "ready", "plan": final, "model": label, "role": "plan"})
-            return final, plan_mod.COMPLETE
-        reason = stopped or ("the planner returned an empty plan" if final is not None
-                              else "the planner ended without a finished plan")
-        events.emit(events.PLAN, {"status": "failed", "reason": reason,
-                                  "model": label, "role": "plan"})
-        events.emit(events.NOTE, {
-            "text": f"planning did not produce a usable plan ({reason}); nothing was built. "
-                    "Try retrying, or refine the request.",
-            "kind": "plan_failed", "role": "plan"})
-        return None, plan_mod.UNUSABLE
+            return None, plan_mod.CANCELLED, "cancelled"
+        reason = stopped or "the planner ended without a finished plan"
+        return None, plan_mod.UNUSABLE, reason
 
     def _approve_plan(self, plan_text, config):
         """Pause so the user can review the plan before it is built.

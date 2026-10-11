@@ -322,7 +322,7 @@ class PlanFailure(RouteBase):
     the build agent or start building on its own."""
 
     def test_narration_is_not_a_plan_and_failure_builds_nothing(self):
-        from harness.agent import PLAN_MAX_TURNS
+        from harness.agent import PLAN_MAX_TURNS, PLAN_REPLANS
         # The plan model keeps "exploring" (a tool call every turn) and never
         # produces a clean final answer, so it exhausts its turns.
         def explore(messages, tools=None, on_delta=None, cancel=None):
@@ -349,6 +349,12 @@ class PlanFailure(RouteBase):
         failed = [m for m in self.sent if m.get("event") == events.PLAN
                   and (m.get("payload", {}) or {}).get("status") == "failed"]
         self.assertTrue(failed, "planning failure is surfaced, not hidden")
+        self.assertEqual(len(failed), 1, "exactly one terminal planning-failure signal")
+        replans = [m for m in self.sent if m.get("event") == events.NOTE
+                   and (m.get("payload", {}) or {}).get("kind") == "plan_replan"]
+        self.assertEqual(len(replans), PLAN_REPLANS, "one bounded replan, one note")
+        errors = [m for m in self.sent if m.get("event") == events.ERROR]
+        self.assertEqual(errors, [], "an unusable plan is not a hard session error")
         # the incidental narration is never stored as a plan
         self.assertFalse(any(u.startswith("<plan>") for u in self.transcript_users()),
                           "no fabricated plan handoff is persisted")
@@ -467,6 +473,38 @@ class PlanArtifact(RouteBase):
         data = replies[-1].get("data") or {}
         self.assertEqual(data.get("completion"), plan_mod.COMPLETE)
         self.assertEqual(data.get("session_id"), sid)
+
+
+class PlanFindings(RouteBase):
+    """The planner's own reads must carry to Build so it need not re-explore."""
+
+    def test_planner_exploration_is_carried_to_build(self):
+        (self.root / "AGENTS.md").write_text("- rule: be brief\n", encoding="utf-8")
+        state = {"n": 0}
+
+        def flow(messages, tools=None, on_delta=None, cancel=None):
+            model = providers.active_config()[2]
+            if model == "plan-model":
+                if state["n"] == 0:
+                    state["n"] = 1
+                    return reply("Reading the rules", [("read_file", {"path": "AGENTS.md"})]), USAGE
+                return reply("PLAN_BODY: keep it brief."), USAGE
+            has_exploration = any("<exploration>" in str(m.get("content") or "") for m in messages)
+            has_plan = any("<plan>" in str(m.get("content") or "") for m in messages)
+            self.calls.append((model, has_exploration and has_plan))
+            return reply("built"), USAGE
+
+        self.llm.side_effect = flow
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
+        self.submit(mode="plan-build")
+        build_call = next(c for c in self.calls if c[0] == "build-model")
+        self.assertTrue(build_call[1],
+                        "the build agent received both the exploration and the plan")
+        users = self.transcript_users()
+        self.assertTrue(any(u.startswith("<exploration>") for u in users),
+                        "exploration is persisted alongside the handoff")
+        self.assertTrue(any(u.startswith("<plan>") for u in users))
 
 
 if __name__ == "__main__":
