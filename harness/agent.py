@@ -143,11 +143,15 @@ class Runner:
                 events.emit(events.ERROR, {"text": problem, "kind": "config", "role": "system"})
                 return
 
-        # Role instructions and oversight belong to the agent workflow only.
+        # Role instructions belong to the agent workflow only (the build agent's).
         self._role_instructions = (build_cfg.get("instructions") or "") \
             if agent_mode and build_cfg.get("enabled") else ""
+        # Decision Oversight is an independent feature: it is enabled on its own
+        # and applies to implementation in any mode that implements (Build, and
+        # the build phase of Plan -> Build), not just the agent workflow. It is
+        # live only when enabled and its reviewer model still resolves.
         ov = config["oversight"]
-        checker_id = ov.get("model_id") if (agent_mode and ov.get("enabled")) else None
+        checker_id = ov.get("model_id") if ov.get("enabled") else None
         self._checker_model_id = checker_id or None
         self._oversight = ov if (checker_id and providers.get_model(checker_id)) else None
         self._plan_text = None

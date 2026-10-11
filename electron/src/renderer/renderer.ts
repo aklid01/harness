@@ -1943,24 +1943,23 @@ function syncEffortFromModel(ctx: Ctx): void {
   ctx.effortVal = own !== "default" ? own : prefs.effortGlobal;
   if (ctx === activeCtx) effortLabel.textContent = ctx.effortVal;
 }
-/* The composer model control tracks the SELECTED workflow, with a sharp line:
-   Build and Plan are the normal, model-selected modes - the button is the plain
-   session-model picker and never shows the agents settings, whatever the user
-   configured. Only Plan -> Build is the agent workflow, so that is the only mode
-   whose button shows the plan/build/oversight roles (clicking edits them in
-   Settings). */
+/* The composer model control tracks the SELECTED workflow: Build and Plan are the
+   normal, model-selected modes (plain session-model picker), while Plan -> Build
+   is the only agent workflow whose button shows the plan/build roles. Decision
+   Oversight is independent of the workflow, so when it is on it is flagged on the
+   button in every mode. */
 function modelSummary(): { label: string; title: string; goesToAgents: boolean; oversight: boolean } {
   const mode = activeCtx?.modeVal ?? prefs.defaultMode;
   const cur = providerOptions.find((x) => x.id === activeCtx?.providerId);
   const sessionLabel = cur ? cur.label : "No providers";
   const sessionTitle = cur ? `${cur.label} · ${cur.sub}` : "No providers";
-  if (mode !== "plan-build") {
-    return { label: sessionLabel, title: sessionTitle, goesToAgents: false, oversight: false };
-  }
   const cfg = agentConfig;
-  if (!cfg) return { label: sessionLabel, title: sessionTitle, goesToAgents: false, oversight: false };
-  const oversight = !!(cfg.oversight?.enabled && cfg.oversight.model_id);
-  const ov = oversight ? nameOfModel(cfg.oversight.model_id) : null;
+  const oversight = !!(cfg?.oversight?.enabled && cfg.oversight.model_id);
+  const ov = oversight ? nameOfModel(cfg!.oversight.model_id) : null;
+  const oversightTitle = ov ? `${sessionTitle} · Oversight: ${ov} on` : sessionTitle;
+  if (mode !== "plan-build" || !cfg) {
+    return { label: sessionLabel, title: oversightTitle, goesToAgents: false, oversight };
+  }
   const planName = cfg.plan?.enabled && cfg.plan.model_id ? nameOfModel(cfg.plan.model_id) : null;
   const buildName = cfg.build?.enabled && cfg.build.model_id ? nameOfModel(cfg.build.model_id) : null;
   const p = planName ?? sessionLabel;

@@ -236,11 +236,6 @@ class GateCase(unittest.TestCase):
             s.join_background(timeout=10)
 
     def _code(self, messages, tools=None, on_delta=None, cancel=None):
-        # The planner (plan-model) finalises immediately; everything else is the
-        # build agent running the queued coder replies.
-        from harness import providers as _providers
-        if _providers.active_config()[2] == "plan-model":
-            return reply("PLAN_BODY: implement the thing."), USAGE
         if self._ci < len(self.coding):
             msg = self.coding[self._ci]
         else:
@@ -265,10 +260,9 @@ class GateCase(unittest.TestCase):
             question=spec.get("question", "")), USAGE
 
     def enable(self, **over_cfg):
-        # Oversight runs in the Plan -> Build workflow, so use it and a trivial
-        # plan agent; the build agent is the session default (coder).
-        cfg = {"plan": {"enabled": True, "model_id": "mdl-plan"},
-               "build": {"enabled": False},
+        # Oversight is independent of the workflow, so a plain Build-mode session
+        # is all it needs; the coder is the session default model.
+        cfg = {"plan": {"enabled": False}, "build": {"enabled": False},
                "oversight": {"enabled": True, "model_id": "mdl-rev",
                              "intensity": "medium", "max_rounds": 2}}
         cfg["oversight"].update(over_cfg)
@@ -294,7 +288,7 @@ class GateCase(unittest.TestCase):
         self.assertTrue(self.done("s", kind="session"))
         self.sent.clear()
         self.backend.dispatch({"op": "submit", "session": "s", "text": "do the thing",
-                               "mode": "plan-build", "req_id": time.time_ns()})
+                               "mode": "build", "req_id": time.time_ns()})
         self.assertTrue(self.done("s"))
         time.sleep(0.1)
 
@@ -430,11 +424,9 @@ class GateCase(unittest.TestCase):
         self.assertFalse(outside.exists(), "approval is not bypassed by the reviewer")
 
     def test_oversight_without_a_configured_model_is_inert(self):
-        # Plan -> Build with the plan agent set, but oversight enabled with no
-        # reviewer model - it is inert, and the write proceeds unreviewed.
-        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
-                     "build": {"enabled": False},
-                     "oversight": {"enabled": True, "model_id": ""}})
+        # Independent feature: enabled with no reviewer model => inert; the write
+        # proceeds unreviewed (in a normal Build session).
+        agents.save({"oversight": {"enabled": True, "model_id": ""}})
         self.coding = [reply("", [("write_file", {"path": str(self.target("g.txt")), "content": "g"})])]
         self.run_submit()
         self.assertEqual(len(self.review_calls), 0, "no reviewer model means no review")
@@ -448,23 +440,6 @@ class GateCase(unittest.TestCase):
         self.run_submit()
         self.assertEqual(len(self.review_calls), 0, "no silent fallback to another model")
         self.assertTrue(self.target("h.txt").exists())
-
-    def test_oversight_is_off_in_build_and_plan_modes(self):
-        # Build and Plan are the normal workflow: the oversight agent (an agent
-        # setting) does not apply to them, only to Plan -> Build.
-        self.enable()
-        self.coding = [reply("", [("write_file", {"path": str(self.target("n.txt")), "content": "n"})]), reply("ok")]
-        self.backend.dispatch({"op": "open", "session": "s", "root": str(self.root),
-                               "req_id": time.time_ns()})
-        self.assertTrue(self.done("s", kind="session"))
-        self.sent.clear()
-        self.review_calls.clear()
-        self.backend.dispatch({"op": "submit", "session": "s", "text": "do it",
-                               "mode": "build", "req_id": time.time_ns()})
-        self.assertTrue(self.done("s"))
-        time.sleep(0.1)
-        self.assertEqual(self.review_calls, [], "oversight does not review in Build mode")
-        self.assertTrue(self.target("n.txt").exists(), "the write proceeds normally")
 
     def test_readonly_shell_is_not_reviewed_but_still_runs(self):
         # A stderr redirect and a plain echo are read-only: not a decision, so no

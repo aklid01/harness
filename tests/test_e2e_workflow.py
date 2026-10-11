@@ -256,19 +256,17 @@ class WorkflowE2E(unittest.TestCase):
             {"kind": "text", "content": "Adapted and finished."},
         ]
         mock_state(self.server).cursors = {k: 0 for k in mock_state(self.server).scripts}
-        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
-                     "build": {"enabled": False},
-                     "oversight": {"enabled": True, "model_id": "mdl-rev",
+        agents.save({"oversight": {"enabled": True, "model_id": "mdl-rev",
                                    "intensity": "medium", "max_rounds": 2}})
-        self.run_turn(mode="plan-build")
+        self.run_turn()
 
         flow = [r for r in mock_state(self.server).requests
                 if not any("Title this coding task" in str(m.get("content") or "")
                            for m in r["messages"])]
         models = [r["model"] for r in flow]
-        # plan(1), coder(1) revise, reviewer(1), coder(2) approve, reviewer(2), coder(3)
-        self.assertEqual(models, ["plan-model", "coder-model", "reviewer-model",
-                                  "coder-model", "reviewer-model", "coder-model"],
+        # coder(1) revise, reviewer(1), coder(2) approve, reviewer(2), coder(3)
+        self.assertEqual(models, ["coder-model", "reviewer-model", "coder-model",
+                                  "reviewer-model", "coder-model"],
                          f"got {models}")
         self.assertIn("placeholder", self.edited.read_text(encoding="utf-8"),
                       "the adapted edit preserved the placeholder")
