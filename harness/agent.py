@@ -126,6 +126,13 @@ class Runner:
         default_model = providers.get_active_id()
         self._build_started = False  # one submission = one task: reset the guard
         build_cfg = config["build"]
+        # A configured role model that no longer exists must not silently fall
+        # back to another model: name it and stop, so the user reconfigures.
+        problem = self._missing_role_models(config)
+        if problem:
+            events.emit(events.PHASE, {"phase": "failed"})
+            events.emit(events.ERROR, {"text": problem, "kind": "config", "role": "system"})
+            return
         building = self.mode in ("build", "plan-build")
         self._role_instructions = (build_cfg.get("instructions") or "") \
             if (build_cfg.get("enabled") and building) else ""
@@ -154,6 +161,28 @@ class Runner:
     def _phase(self, status):
         """Emit the current workflow phase for the UI indicator. None clears."""
         events.emit(events.PHASE, {"phase": status})
+
+    def _missing_role_models(self, config):
+        """An actionable message if a used role points at a model that is gone.
+
+        Only the roles this workflow actually uses are checked, and only when the
+        role is on with a model chosen. A disabled or unset role falls back to the
+        session model as intended.
+        """
+        used = []
+        if self.mode in ("build", "plan-build"):
+            used.append(("Build", config["build"]))
+        if self.mode in ("plan", "plan-build"):
+            used.append(("Plan", config["plan"]))
+        missing = [f"{label} agent model '{cfg.get('model_id')}'"
+                   for label, cfg in used
+                   if cfg.get("enabled") and cfg.get("model_id")
+                   and providers.get_model(cfg.get("model_id")) is None]
+        if not missing:
+            return None
+        return ("The configured " + " and ".join(missing)
+                + " no longer exist. Re-select it in Settings, or switch the role "
+                  "off to use the session's model. Nothing was run.")
 
     def _persist_plan(self, task, plan_text, completion, phase, **extra):
         fields = {"task": task, "plan": plan_text or "", "completion": completion,

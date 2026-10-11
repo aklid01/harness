@@ -269,6 +269,15 @@ class RouteCase(RouteBase):
         self.assertIn("planning", phases)
         self.assertIn("building", phases)
 
+    def test_a_configured_role_model_that_is_gone_is_reported_not_swapped(self):
+        agents.save({"build": {"enabled": True, "model_id": "mdl-build"}})
+        providers.delete_model("mdl-build")
+        self.submit(mode="build")
+        self.assertEqual(self.calls, [], "no build runs on a substituted model")
+        errors = [m for m in self.sent if m.get("event") == events.ERROR]
+        self.assertTrue(errors, "the missing model is surfaced")
+        self.assertIn("no longer exist", errors[-1]["payload"].get("text", ""))
+
     # ---- partial enablement falls back to the default -------------------
 
     def test_build_only_uses_build_model_no_planning(self):
