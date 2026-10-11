@@ -1943,40 +1943,31 @@ function syncEffortFromModel(ctx: Ctx): void {
   ctx.effortVal = own !== "default" ? own : prefs.effortGlobal;
   if (ctx === activeCtx) effortLabel.textContent = ctx.effortVal;
 }
-/* What the composer's model control shows for the selected workflow: it reflects
-   what that workflow will actually run, so Build, Plan and Plan->Build show
-   different models, not one shared agent combo. Clicking edits the role in
-   Settings>Agents when a role model is set, or picks the session model that
-   phase falls back to. */
+/* The composer model control tracks the SELECTED workflow, with a sharp line:
+   Build and Plan are the normal, model-selected modes - the button is the plain
+   session-model picker and never shows the agents settings, whatever the user
+   configured. Only Plan -> Build is the agent workflow, so that is the only mode
+   whose button shows the plan/build/oversight roles (clicking edits them in
+   Settings). */
 function modelSummary(): { label: string; title: string; goesToAgents: boolean; oversight: boolean } {
   const mode = activeCtx?.modeVal ?? prefs.defaultMode;
   const cur = providerOptions.find((x) => x.id === activeCtx?.providerId);
   const sessionLabel = cur ? cur.label : "No providers";
+  const sessionTitle = cur ? `${cur.label} · ${cur.sub}` : "No providers";
+  if (mode !== "plan-build") {
+    return { label: sessionLabel, title: sessionTitle, goesToAgents: false, oversight: false };
+  }
   const cfg = agentConfig;
-  const oversight = !!(cfg?.oversight?.enabled && cfg.oversight.model_id);
-  const ov = oversight ? nameOfModel(cfg!.oversight.model_id) : null;
-  const planModel = cfg?.plan?.enabled && cfg.plan.model_id ? cfg.plan.model_id : null;
-  const buildModel = cfg?.build?.enabled && cfg.build.model_id ? cfg.build.model_id : null;
-  const planName = planModel ? nameOfModel(planModel) : null;
-  const buildName = buildModel ? nameOfModel(buildModel) : null;
-
-  if (mode === "plan-build") {
-    const p = planName ?? sessionLabel;
-    const b = buildName ?? sessionLabel;
-    const bits = [`Plan: ${p}`, `Build: ${b}`];
-    if (ov) bits.push(`Oversight: ${ov}`);
-    return { label: `${p} › ${b}`, title: `${bits.join(" · ")} - edit in Settings > Agents`, goesToAgents: true, oversight };
-  }
-  if (mode === "plan") {
-    const p = planName ?? sessionLabel;
-    const title = `Plan agent: ${p}` + (ov ? ` · Oversight: ${ov}` : "") +
-      (planName ? " - edit in Settings > Agents" : " - the session model this plan uses");
-    return { label: p, title, goesToAgents: !!planName, oversight };
-  }
+  if (!cfg) return { label: sessionLabel, title: sessionTitle, goesToAgents: false, oversight: false };
+  const oversight = !!(cfg.oversight?.enabled && cfg.oversight.model_id);
+  const ov = oversight ? nameOfModel(cfg.oversight.model_id) : null;
+  const planName = cfg.plan?.enabled && cfg.plan.model_id ? nameOfModel(cfg.plan.model_id) : null;
+  const buildName = cfg.build?.enabled && cfg.build.model_id ? nameOfModel(cfg.build.model_id) : null;
+  const p = planName ?? sessionLabel;
   const b = buildName ?? sessionLabel;
-  const title = `Build agent: ${b}` + (ov ? ` · Oversight: ${ov}` : "") +
-    (buildName ? " - edit in Settings > Agents" : " - the session model this build uses");
-  return { label: b, title, goesToAgents: !!buildName, oversight };
+  const bits = [`Plan: ${p}`, `Build: ${b}`];
+  if (ov) bits.push(`Oversight: ${ov}`);
+  return { label: `${p} › ${b}`, title: `${bits.join(" · ")} - edit in Settings > Agents`, goesToAgents: true, oversight };
 }
 function nameOfModel(id: string): string {
   const m = providerById.get(id);

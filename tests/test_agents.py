@@ -243,35 +243,31 @@ class RouteCase(RouteBase):
         self.assertIn("generating", statuses)
         self.assertIn("ready", statuses)
 
-    def test_build_mode_never_invokes_the_planner(self):
-        # Build mode executes directly: a configured plan agent does not sneak
-        # planning in. Planning only runs when Plan or Plan->Build is selected.
+    def test_build_mode_ignores_agent_settings_and_uses_the_session_model(self):
+        # Build is a normal, model-selected mode: a configured plan/build agent
+        # does not apply to it. It runs on the session's own model, directly.
         agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
                      "build": {"enabled": True, "model_id": "mdl-build"}})
         self.submit(mode="build")
-        self.assertEqual([m for m, _ in self.calls], ["build-model"],
-                         "Build mode never calls the planner")
+        self.assertEqual([m for m, _ in self.calls], ["default-model"],
+                         "Build mode uses the session model, never the build agent")
         self.assertFalse(any(u.startswith("<plan>") for u in self.transcript_users()))
 
-    def test_plan_mode_uses_the_plan_agent_not_the_session_default(self):
+    def test_plan_mode_ignores_agent_settings_and_uses_the_session_model(self):
         agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
                      "build": {"enabled": True, "model_id": "mdl-build"}})
         self.submit(mode="plan")
-        self.assertEqual([m for m, _ in self.calls], ["plan-model"],
-                         "Plan mode runs the plan agent (read-only), not the build agent")
+        self.assertEqual([m for m, _ in self.calls], ["default-model"],
+                         "Plan mode is the normal session-model read-only turn, never the plan agent")
 
-    def test_build_and_plan_run_different_agents(self):
+    def test_build_and_plan_both_use_the_session_model(self):
+        # The normal modes are independent of agent settings entirely.
         agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
                      "build": {"enabled": True, "model_id": "mdl-build"}})
         self.submit(mode="build")
-        self.assertEqual([m for m, _ in self.calls], ["build-model"])
+        self.assertEqual([m for m, _ in self.calls], ["default-model"])
         self.submit(mode="plan")
-        self.assertEqual([m for m, _ in self.calls], ["plan-model"])
-
-    def test_plan_mode_without_a_plan_agent_uses_the_session_default(self):
-        self.submit(mode="plan")
-        self.assertEqual([m for m, _ in self.calls], ["default-model"],
-                         "no plan agent configured: Plan stays the session default")
+        self.assertEqual([m for m, _ in self.calls], ["default-model"])
 
     def test_plan_build_hands_off_and_builds_exactly_once(self):
         agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
@@ -290,9 +286,11 @@ class RouteCase(RouteBase):
         self.assertIn("building", phases)
 
     def test_a_configured_role_model_that_is_gone_is_reported_not_swapped(self):
-        agents.save({"build": {"enabled": True, "model_id": "mdl-build"}})
+        # Only the agent workflow (Plan -> Build) validates role models.
+        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
+                     "build": {"enabled": True, "model_id": "mdl-build"}})
         providers.delete_model("mdl-build")
-        self.submit(mode="build")
+        self.submit(mode="plan-build")
         self.assertEqual(self.calls, [], "no build runs on a substituted model")
         errors = [m for m in self.sent if m.get("event") == events.ERROR]
         self.assertTrue(errors, "the missing model is surfaced")
@@ -300,11 +298,12 @@ class RouteCase(RouteBase):
 
     # ---- partial enablement falls back to the default -------------------
 
-    def test_build_only_uses_build_model_no_planning(self):
+    def test_build_mode_ignores_a_build_agent(self):
+        # Even with only a build agent configured, plain Build stays the session model.
         agents.save({"build": {"enabled": True, "model_id": "mdl-build"}})
-        self.submit()
-        self.assertEqual(self.calls, [("build-model", False)],
-                         "build-only + Build mode: no planning pass, build model, no plan context")
+        self.submit(mode="build")
+        self.assertEqual(self.calls, [("default-model", False)],
+                         "Build mode: session model, no planning, no build agent")
 
     def test_plan_only_plans_on_plan_model_then_builds_on_default(self):
         agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"}})

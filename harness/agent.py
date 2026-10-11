@@ -127,22 +127,27 @@ class Runner:
         default_model = providers.get_active_id()
         self._build_started = False  # one submission = one task: reset the guard
         build_cfg = config["build"]
-        # A configured role model that no longer exists must not silently fall
-        # back to another model: name it and stop, so the user reconfigures.
-        problem = self._missing_role_models(config)
-        if problem:
-            events.emit(events.PHASE, {"phase": "failed"})
-            events.emit(events.ERROR, {"text": problem, "kind": "config", "role": "system"})
-            return
-        building = self.mode in ("build", "plan-build")
-        self._role_instructions = (build_cfg.get("instructions") or "") \
-            if (build_cfg.get("enabled") and building) else ""
 
-        # Decision oversight: live only when enabled AND its reviewer model still
-        # resolves. An enabled role whose model was deleted is inert rather than
-        # silently reviewed by some other model.
+        # Build and Plan are the NORMAL, model-selected workflow: they run on the
+        # session's selected model and never consult the plan/build/oversight
+        # agents, whether or not those are configured. Only Plan -> Build is the
+        # agent-orchestrated workflow. That is what keeps the two worlds separate.
+        agent_mode = self.mode == "plan-build"
+
+        if agent_mode:
+            # A configured role model that no longer exists must not silently
+            # fall back to another model: name it and stop.
+            problem = self._missing_role_models(config)
+            if problem:
+                events.emit(events.PHASE, {"phase": "failed"})
+                events.emit(events.ERROR, {"text": problem, "kind": "config", "role": "system"})
+                return
+
+        # Role instructions and oversight belong to the agent workflow only.
+        self._role_instructions = (build_cfg.get("instructions") or "") \
+            if agent_mode and build_cfg.get("enabled") else ""
         ov = config["oversight"]
-        checker_id = ov.get("model_id") if ov.get("enabled") else None
+        checker_id = ov.get("model_id") if (agent_mode and ov.get("enabled")) else None
         self._checker_model_id = checker_id or None
         self._oversight = ov if (checker_id and providers.get_model(checker_id)) else None
         self._plan_text = None
@@ -150,21 +155,15 @@ class Runner:
 
         try:
             if self.mode == "plan":
-                # Read-only planning that uses the PLAN agent's model when one is
-                # configured, so Build and Plan run different agents. With no plan
-                # agent it stays the session default - today's behaviour.
+                # Normal read-only planning on the session's own model.
                 self._phase("planning")
-                plan_id = agents.resolve_model(config["plan"], default_model)
-                if plan_id and plan_id != default_model:
-                    with providers.use(plan_id):
-                        self._turn()
-                else:
-                    self._turn()
+                self._turn()
                 return
             if self.mode == "plan-build":
                 self._run_plan_build(user_text, config, default_model, build_cfg)
                 return
-            self._run_build_phase(user_text, build_cfg, default_model)
+            # Normal direct build on the session's own model - no build agent.
+            self._run_build_phase(user_text, default_model, use_agent=False)
         finally:
             self._phase(None)
 
@@ -203,8 +202,13 @@ class Runner:
         except Exception:  # noqa: BLE001 - persistence is best-effort, never fatal
             pass
 
-    def _run_build_phase(self, user_text, build_cfg, default_model):
-        """Run the Build phase exactly once - idempotent across duplicates."""
+    def _run_build_phase(self, user_text, default_model, use_agent=True, build_cfg=None):
+        """Run the Build phase exactly once - idempotent across duplicates.
+
+        ``use_agent`` routes to the configured Build agent (the Plan -> Build
+        workflow). It is False for the normal Build mode, which runs on the
+        session's own model and never consults agent settings.
+        """
         if self._build_started:
             return
         self._build_started = True
@@ -212,7 +216,7 @@ class Runner:
             events.emit(events.NOTE, {"text": "stopped"})
             return
         self._phase("building")
-        build_id = agents.resolve_model(build_cfg, default_model)
+        build_id = agents.resolve_model(build_cfg, default_model) if use_agent else None
         if build_id:
             with providers.use(build_id):
                 self._turn()
@@ -272,7 +276,7 @@ class Runner:
 
         self._phase("handing_off")
         self._handoff_to_build(plan_text)
-        self._run_build_phase(user_text, build_cfg, default_model)
+        self._run_build_phase(user_text, default_model, use_agent=True, build_cfg=build_cfg)
 
     def _handoff_to_build(self, plan_text):
         """Pass the authoritative plan to Build, exactly once.
