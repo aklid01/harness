@@ -1,4 +1,32 @@
-export type Mode = "build" | "plan";
+export type Mode = "build" | "plan" | "plan-build";
+
+/* Workflow phase indicator for the Plan -> Build cycle. */
+export type WorkflowPhase =
+  | "planning"
+  | "replanning"
+  | "validating"
+  | "handing_off"
+  | "building"
+  | "reviewing"
+  | "completed"
+  | "blocked"
+  | "failed"
+  | null;
+
+export interface PhaseEventPayload {
+  phase: WorkflowPhase;
+}
+
+/* Session-scoped plan artifact (harness/plan.py). */
+export type PlanCompletion = "complete" | "partial" | "unusable" | "cancelled";
+export interface PlanRecord {
+  session_id?: string;
+  task?: string;
+  plan?: string;
+  completion?: PlanCompletion;
+  phase?: string;
+  attempts?: number;
+}
 
 export interface GitInfo {
   has_git: boolean;
@@ -168,6 +196,7 @@ export type OpPayload =
   | { op: "set_permissions"; mode: string }
   | { op: "get_agents" }
   | { op: "set_agents"; config: AgentConfig }
+  | { op: "get_plan"; id?: string }
   | { op: "save_provider"; entry: ProviderEntry; key?: string }
   | { op: "delete_provider"; id: string; scope?: "model" | "provider" }
   | { op: "test_provider"; id: string }

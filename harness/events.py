@@ -40,6 +40,7 @@ ERROR = "error"
 RETRY = "retry"
 PLAN = "plan"
 DECISION = "decision"
+PHASE = "phase"
 
 APPROVAL = "approval"
 PICK = "pick"

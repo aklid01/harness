@@ -4,11 +4,13 @@ from types import SimpleNamespace
 
 from . import commands
 from . import compact
+from . import budget
 from . import events
 from . import history
 from . import providers
 from . import agents
 from . import oversight
+from . import plan as plan_mod
 from . import texttools
 from . import session
 from .context import reminder
@@ -54,6 +56,9 @@ PLAN_HANDOFF = (
 # instruction in its prompt, mirroring how subagent.py fences a guest.
 PLAN_WITHHELD = {"write_file", "str_replace", "write_todos"}
 PLAN_MAX_TURNS = 16  # a runaway planner is worse than a missing plan
+PLAN_MAX_TOOLS = 40  # the planner inspects; it is not a search budget
+BUILD_MAX_TOOLS = 200  # bound a runaway build; a healthy build stops on its own
+PLAN_REPLANS = 1  # one targeted replan when planning yields nothing usable
 
 
 # Every Runner gets its own request-id space, so a tool call made by one
@@ -79,6 +84,7 @@ class Runner:
         self._oversight = None          # oversight config dict, or None when off
         self._checker_model_id = None
         self._plan_text = None          # plan handed to the build phase, if any
+        self._build_started = False     # idempotent: build runs at most once per task
         self._review_log: dict = {}     # decision fingerprint -> prior verdicts
         self._stop_turn = False         # set when oversight escalates: stop safely
         self._request_prefix = f"r{next(TURN_KEYS)}"
@@ -103,61 +109,142 @@ class Runner:
         self._run_workflow(user_text)
 
     def _run_workflow(self, user_text):
-        """Plan (optional) then build, in one session and one transcript.
+        """Run the workflow the selected mode names, in one session/transcript.
 
-        With no custom agents configured this is a plain build turn, byte for
-        byte as before. A configured plan agent runs a bounded read-only pass
-        first and hands its plan to the build agent as context; a configured
-        build agent routes the implementation pass to its own model. Neither
-        creates a second session, a second copy of the user message, or a
-        competing history: it is all the one Runner on the one transcript.
+        * build      - execute directly with the build (or default) agent.
+        * plan       - read-only planning turn: propose, never implement.
+        * plan-build - bounded planning, then a single automatic handoff to
+                       Build (respecting any plan-approval gate). Build always
+                       starts exactly once, after a usable plan exists.
+
+        With no custom agents configured this reduces to a plain build turn,
+        byte for byte as before. Mode selects the workflow; agent settings only
+        choose which model each phase uses - and changing one never edits the
+        other.
         """
         config = agents.get()
         default_model = providers.get_active_id()
+        self._build_started = False  # one submission = one task: reset the guard
         build_cfg = config["build"]
-        self._role_instructions = (build_cfg.get("instructions") or "") if build_cfg.get("enabled") else ""
+        building = self.mode in ("build", "plan-build")
+        self._role_instructions = (build_cfg.get("instructions") or "") \
+            if (build_cfg.get("enabled") and building) else ""
 
-        # Decision oversight: live only when enabled AND its reviewer model
-        # still resolves. An enabled role whose model was deleted is inert
-        # rather than silently reviewed by some other model.
+        # Decision oversight: live only when enabled AND its reviewer model still
+        # resolves. An enabled role whose model was deleted is inert rather than
+        # silently reviewed by some other model.
         ov = config["oversight"]
         checker_id = ov.get("model_id") if ov.get("enabled") else None
         self._checker_model_id = checker_id or None
         self._oversight = ov if (checker_id and providers.get_model(checker_id)) else None
         self._plan_text = None
 
-        plan_id = agents.resolve_model(config["plan"], default_model)
-        if plan_id is not None and self.mode != "plan" and not self.cancelled():
-            plan_text = self._plan_phase(
-                user_text, plan_id, config["plan"].get("instructions") or "")
-            self._plan_text = plan_text
-            if plan_text:
-                # Optionally pause so the user can read the plan before anything
-                # is built. Approved: it becomes the build agent's context.
-                # Declined: the plan is kept as a message and nothing is built.
-                if self._approve_plan(plan_text, config):
-                    self.messages.append(
-                        {"role": "user", "content": PLAN_HANDOFF.format(plan=plan_text)})
-                    session.save(self.messages)
-                else:
-                    self.messages.append({"role": "assistant", "content": plan_text})
-                    session.save(self.messages)
-                    return
-            elif not self.cancelled():
-                # The plan agent produced no usable plan. Do not fabricate one and
-                # do not start building; the failure is already surfaced and the
-                # session is preserved for a retry or a refined request.
+        try:
+            if self.mode == "plan":
+                self._phase("planning")
+                self._turn()
                 return
+            if self.mode == "plan-build":
+                self._run_plan_build(user_text, config, default_model, build_cfg)
+                return
+            self._run_build_phase(user_text, build_cfg, default_model)
+        finally:
+            self._phase(None)
 
+    def _phase(self, status):
+        """Emit the current workflow phase for the UI indicator. None clears."""
+        events.emit(events.PHASE, {"phase": status})
+
+    def _persist_plan(self, task, plan_text, completion, phase, **extra):
+        fields = {"task": task, "plan": plan_text or "", "completion": completion,
+                  "phase": phase}
+        fields.update(extra)
+        try:
+            plan_mod.current_save(**fields)
+        except Exception:  # noqa: BLE001 - persistence is best-effort, never fatal
+            pass
+
+    def _run_build_phase(self, user_text, build_cfg, default_model):
+        """Run the Build phase exactly once - idempotent across duplicates."""
+        if self._build_started:
+            return
+        self._build_started = True
         if self.cancelled():
             events.emit(events.NOTE, {"text": "stopped"})
             return
+        self._phase("building")
         build_id = agents.resolve_model(build_cfg, default_model)
         if build_id:
             with providers.use(build_id):
                 self._turn()
         else:
             self._turn()
+
+    def _run_plan_build(self, user_text, config, default_model, build_cfg):
+        plan_cfg = config["plan"]
+        plan_id = agents.resolve_model(plan_cfg, default_model)
+        self._phase("planning")
+        plan_text, completion = self._plan_phase(
+            user_text, plan_id, plan_cfg.get("instructions") or "")
+        self._plan_text = plan_text
+        self._persist_plan(user_text, plan_text, completion, "planned")
+
+        # Bounded recovery: one targeted replan when the first pass yields
+        # nothing usable. Never hand an unusable plan to Build, never restart
+        # the whole task, never switch workflows on the user's behalf.
+        replans = 0
+        while not plan_text and completion == plan_mod.UNUSABLE \
+                and replans < PLAN_REPLANS and not self.cancelled():
+            replans += 1
+            self._phase("replanning")
+            events.emit(events.NOTE, {
+                "text": "planning produced no usable plan - trying once more, "
+                        "narrowly", "kind": "plan_replan", "role": "plan"})
+            plan_text, completion = self._plan_phase(
+                user_text + "\n\nThe previous planning attempt did not yield a "
+                "usable plan. Produce a concrete, ordered plan now, and do not "
+                "spend turns exploring beyond what that plan needs.",
+                plan_id, plan_cfg.get("instructions") or "")
+            self._plan_text = plan_text
+            self._persist_plan(user_text, plan_text, completion, "planned",
+                               attempts=replans + 1)
+
+        if self.cancelled():
+            return
+        if not plan_text:
+            # Unusable, after bounded recovery. Surface and stop; a recoverable
+            # error lets the user retry, refine, or fall back to Build/Direct.
+            self._phase("failed")
+            plan_mod.current_save(phase="failed")
+            return
+
+        self._phase("validating")
+        if plan_cfg.get("approve") and not self._approve_plan(plan_text, config):
+            # Declined: keep the plan visible in the transcript and the artifact,
+            # and build nothing.
+            self.messages.append({"role": "assistant", "content": plan_text})
+            session.save(self.messages)
+            self._persist_plan(user_text, plan_text, completion, "awaiting_user")
+            return
+
+        self._phase("handing_off")
+        self._handoff_to_build(plan_text)
+        self._run_build_phase(user_text, build_cfg, default_model)
+
+    def _handoff_to_build(self, plan_text):
+        """Pass the authoritative plan to Build, exactly once.
+
+        The plan becomes the build agent's structured context. Guarding on the
+        message already being last makes a replayed or duplicated completion
+        event a no-op, so Build is never launched twice for one task.
+        """
+        if self.cancelled():
+            return
+        handoff = {"role": "user", "content": PLAN_HANDOFF.format(plan=plan_text)}
+        if self.messages and self.messages[-1] == handoff:
+            return
+        self.messages.append(handoff)
+        session.save(self.messages)
 
     def _plan_phase(self, request, plan_model_id, plan_instructions):
         """A bounded, read-only planning pass on its own model.
@@ -176,7 +263,12 @@ class Runner:
         ]
         toolset = [s for s in tools_module.TOOL_SCHEMAS
                    if s["function"]["name"] not in PLAN_WITHHELD]
+        # The planner's own budget - separate from Build's and Oversight's.
+        budget_obj = budget.Budget(turns=PLAN_MAX_TURNS, tool_calls=PLAN_MAX_TOOLS)
+        progress = budget.Progress(limit=2)
         final = None  # only a clean answer (a turn with no tool calls) is a plan
+        completion = plan_mod.UNUSABLE
+        stopped = None  # why the phase stopped without finalising
         label = plan_model_id
         events.emit(events.PLAN, {"status": "generating", "request": request[:200],
                                   "model": None, "role": "plan"})
@@ -184,8 +276,9 @@ class Runner:
             caps = providers.active_model_capabilities()
             label = caps.get("name") or caps.get("model") or plan_model_id
             window = providers.active_context_window()
-            for _ in range(PLAN_MAX_TURNS):
-                if self.cancelled():
+            while not self.cancelled():
+                if budget_obj.turn() or budget_obj.timed_out():
+                    stopped = f"the planner {budget_obj.reason()}"
                     break
                 prepared, trimmed = history.prepare(messages, window)
                 if trimmed:
@@ -202,7 +295,7 @@ class Runner:
                         "text": f"the planning pass failed ({type(failure).__name__}); "
                                 "nothing was built. Press retry, or revise the request.",
                         "kind": "plan_failed", "role": "plan"})
-                    return None
+                    return None, plan_mod.UNUSABLE
                 events.emit(events.STATUS, {"active": None})
                 events.emit(events.USAGE, dict(usage))
                 messages.append(message.model_dump(exclude_none=True))
@@ -211,9 +304,15 @@ class Runner:
                 # narration is never mistaken for the plan.
                 if not message.tool_calls:
                     final = message.content or ""
+                    completion = plan_mod.COMPLETE if final.strip() else plan_mod.UNUSABLE
                     break
+                stalled = False
                 for tool_call in message.tool_calls:
                     if self.cancelled():
+                        break
+                    if budget_obj.tool():
+                        stopped = "the planner hit its tool-call budget"
+                        stalled = True
                         break
                     name = tool_call.function.name
                     call_id = getattr(tool_call, "id", None)
@@ -232,22 +331,28 @@ class Runner:
                                                      "role": "plan"})
                     messages.append({"role": "tool", "tool_call_id": tool_call.id,
                                      "content": result})
-                if self.cancelled():
+                    fingerprint = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+                    if progress.repeat(fingerprint):
+                        stopped = "the planner kept repeating the same step"
+                        stalled = True
+                        break
+                if stalled:
                     break
 
         if self.cancelled():
-            return None
-        if not (final or "").strip():
-            reason = "the planner ran out of turns before writing a plan" if final is None else "empty"
-            events.emit(events.PLAN, {"status": "failed", "reason": reason,
-                                      "model": label, "role": "plan"})
-            events.emit(events.NOTE, {
-                "text": f"planning did not produce a plan ({reason}); nothing was built. "
-                        "Try retrying, or refine the request.",
-                "kind": "plan_failed", "role": "plan"})
-            return None
-        events.emit(events.PLAN, {"status": "ready", "plan": final, "model": label, "role": "plan"})
-        return final
+            return None, plan_mod.CANCELLED
+        if completion == plan_mod.COMPLETE:
+            events.emit(events.PLAN, {"status": "ready", "plan": final, "model": label, "role": "plan"})
+            return final, plan_mod.COMPLETE
+        reason = stopped or ("the planner returned an empty plan" if final is not None
+                              else "the planner ended without a finished plan")
+        events.emit(events.PLAN, {"status": "failed", "reason": reason,
+                                  "model": label, "role": "plan"})
+        events.emit(events.NOTE, {
+            "text": f"planning did not produce a usable plan ({reason}); nothing was built. "
+                    "Try retrying, or refine the request.",
+            "kind": "plan_failed", "role": "plan"})
+        return None, plan_mod.UNUSABLE
 
     def _approve_plan(self, plan_text, config):
         """Pause so the user can review the plan before it is built.
@@ -525,6 +630,9 @@ class Runner:
         self._text_calls = set()
         self._review_log = {}
         self._stop_turn = False
+        # Build's own budget, independent of the plan and review phases.
+        self._build_budget = budget.Budget(tool_calls=BUILD_MAX_TOOLS)
+        self._build_progress = budget.Progress(limit=4)
         for message in reversed(self.messages[:self._turn_index + 1]):
             if message.get("role") == "user" and not str(message.get("content") or "").startswith("<"):
                 self._turn_text = str(message.get("content") or "")
@@ -680,6 +788,22 @@ class Runner:
                     args = json.loads(tool_call.function.arguments)
                 except ValueError:
                     args = {}
+                # Build's independent budget and no-progress guard: a runaway or
+                # stuck build stops with a clear status instead of grinding.
+                over_budget = self._build_budget.tool()
+                looping = self._build_progress.repeat(
+                    f"{name}:{json.dumps(args, sort_keys=True, default=str)}")
+                if over_budget or looping:
+                    events.emit(events.NOTE, {
+                        "text": ("Build stopped - it "
+                                 + ("reached its tool-call budget" if over_budget
+                                    else "kept repeating the same step")
+                                 + " without finishing. Work so far is saved; refine "
+                                   "the request to continue."),
+                        "kind": "build_budget"})
+                    events.emit(events.PHASE, {"phase": "blocked"})
+                    self._stop_turn = True
+                    break
                 review_marker = None
                 if self.mode == "plan" and name in ("write_file", "str_replace"):
                     result = f"Plan mode: read-only, no edits made. Describe the change instead of calling {name}."

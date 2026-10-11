@@ -824,6 +824,11 @@ class Harness:
                 return R({"reply": op, "ok": True, "data": data})
             except OSError as failure:
                 return R({"reply": op, "ok": False, "error": str(failure)})
+        if op == "get_plan":
+            from . import plan as plan_mod
+            with s.workspace():
+                data = plan_mod.load(obj.get("id") or s.session_id or "")
+            return R({"reply": op, "ok": True, "data": data})
         if op == "rename_session":
             with s.workspace():
                 session_mod.set_title(obj.get("id", ""), (obj.get("title", "") or "")[:60])

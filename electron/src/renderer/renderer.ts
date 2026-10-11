@@ -1,4 +1,4 @@
-import type { AgentConfig, AgentRole, ClientOp, ContextInfo, DecisionEventPayload, OpPayload, PlanEventPayload, ProviderEntry, ProviderGroup, ProviderState, RetryInfo, RetryProgress, ServerEnvelope, SessionListItem, TabRef, TodoItem } from "../shared/protocol";
+import type { AgentConfig, AgentRole, ClientOp, ContextInfo, DecisionEventPayload, Mode, OpPayload, PhaseEventPayload, PlanEventPayload, PlanRecord, ProviderEntry, ProviderGroup, ProviderState, RetryInfo, RetryProgress, ServerEnvelope, SessionListItem, TabRef, TodoItem } from "../shared/protocol";
 import type { PreloadHarness, WorkspaceRef } from "../shared/preload-types";
 
 declare global {
@@ -40,7 +40,8 @@ interface Prefs {
   reduceMotion: boolean;
   rightPanel: boolean;
   confirmProtected: boolean;
-  defaultMode: "build" | "plan";
+  defaultMode: Mode;
+  modeByWs: Record<string, Mode>;
   effortGlobal: string;
   effortByWs: Record<string, string>;
   providerByWs: Record<string, string>;
@@ -52,6 +53,7 @@ const DEFAULT_PREFS: Prefs = {
   theme: "neon", fontScale: "base", density: "comfortable",
   reduceMotion: false, rightPanel: false,
   confirmProtected: true, defaultMode: "build",
+  modeByWs: {},
   effortGlobal: "default",
   effortByWs: {}, providerByWs: {}, lastSessionByWs: {}, tabsByWs: {},
 };
@@ -178,7 +180,7 @@ interface Ctx {
   draft: boolean;
   totals: Record<string, number>;
   planItems: TodoItem[];
-  modeVal: "build" | "plan";
+  modeVal: Mode;
   providerId: string | null;
   effortVal: string;
   permsVal: string;
@@ -193,6 +195,7 @@ interface Ctx {
   pendingResume: boolean;
   failure: { retry: RetryInfo | null; headline: string; model: string | null; text: string; transient: boolean; hint: string } | null;
   retryCard: HTMLDivElement | null;
+  phaseEl: HTMLDivElement | null;
   retryTick: RetryTick | null;
   retryTimer: number | null;
   streamPre: HTMLDivElement | null;
@@ -248,6 +251,14 @@ let pendingRewindCount: number | null = null;
 let popHideTimer: number | null = null;
 
 const EFFORTS = ["default", "low", "medium", "high", "xhigh"];
+const MODE_OPTIONS: Array<{ label: string; value: Mode }> = [
+  { label: "Build", value: "build" },
+  { label: "Plan", value: "plan" },
+  { label: "Plan → Build", value: "plan-build" },
+];
+function modeLabelText(mode: Mode): string {
+  return mode === "plan-build" ? "Plan → Build" : mode === "plan" ? "Plan" : "Build";
+}
 const PERMS: Array<{ label: string; value: string }> = [
   { label: "Default", value: "default" },
   { label: "Strict", value: "strict" },
@@ -267,11 +278,11 @@ function makeCtx(root: string, project: string, intent: Ctx["openIntent"], openI
     id: `t${++tabSeq}`, root, project,
     hadReady: false,
     sessionId: null, sessionTitle: "New Session", openIntent: intent, openId: openId ?? null,
-    busy: false, draft: false, totals: {}, planItems: [], modeVal: prefs.defaultMode,
+    busy: false, draft: false, totals: {}, planItems: [], modeVal: prefs.modeByWs[root] ?? prefs.defaultMode,
     providerId: null, effortVal: prefs.effortGlobal, permsVal: "default",
     gitInfo: { has_git: false, branch: "", default_branch: "", is_protected: false }, lastBranch: "", branchAck: "",
     pendingText: null, pendingRewind: null, pendingEffort: null, pendingProviderId: null, pendingOpenSessionId: null, pendingResume: false,
-    failure: null, retryCard: null, retryTick: null, retryTimer: null,
+    failure: null, retryCard: null, retryTick: null, retryTimer: null, phaseEl: null,
     streamPre: null, streamWrap: null, streamText: [], thinking: null, toolCards: new Map(),
     chatBody: document.createElement("div"), entryDraft: "",
   };
@@ -475,7 +486,7 @@ function showThinking(ctx: Ctx): void {
   if (ctx.thinking || ctx.streamPre) return;
   ctx.thinking = document.createElement("div");
   ctx.thinking.className = "note thinking";
-  ctx.thinking.innerHTML = `<span class="spin"></span><span>thinking… [${ctx.modeVal}]</span>`;
+  ctx.thinking.innerHTML = `<span class="spin"></span><span>thinking… [${modeLabelText(ctx.modeVal)}]</span>`;
   ctx.chatBody.appendChild(ctx.thinking);
   scrollBottom(ctx);
 }
@@ -721,6 +732,26 @@ function addToolLine(ctx: Ctx, callId: string | null, name: string, args: Record
   return key;
 }
 const ROLE_LABEL: Record<string, string> = { plan: "plan", build: "build", checker: "review" };
+/* Workflow phase indicator for the Plan -> Build cycle. One live card, updated
+   in place, so the phases read as progress and not as chat chatter. */
+const PHASE_LABEL: Record<string, string> = {
+  planning: "Planning…", replanning: "Replanning…", validating: "Validating the plan…",
+  handing_off: "Handing off to Build…", building: "Building…",
+  reviewing: "Reviewing a decision…", completed: "Workflow complete",
+  blocked: "Blocked", failed: "Workflow failed",
+};
+function showPhase(ctx: Ctx, phase: string | null): void {
+  if (phase === null) { ctx.phaseEl?.remove(); ctx.phaseEl = null; return; }
+  if (!ctx.phaseEl || ctx.phaseEl.parentElement !== ctx.chatBody) {
+    ctx.phaseEl?.remove();
+    const d = document.createElement("div");
+    d.className = "phase";
+    ctx.chatBody.appendChild(d);
+    ctx.phaseEl = d;
+  }
+  ctx.phaseEl.innerHTML = `<span class="spin"></span><span>${escapeHtml(PHASE_LABEL[phase] ?? phase)}</span>`;
+  scrollBottom(ctx);
+}
 const toolSeq: Record<string, number> = {};
 function finishToolLine(ctx: Ctx, callId: string | null, result: string): void {
   const div = (callId && ctx.toolCards.get(callId)) ?? [...ctx.toolCards.values()].pop();
@@ -916,12 +947,12 @@ function renderActive(): void {
   updateEmptyState();
   scrollBottom(ctx);
   renderPlan(ctx); renderUsage(ctx); renderContext(ctx);
-  modeLabel.textContent = ctx.modeVal === "build" ? "Build" : "Plan";
-  statusMode.textContent = ctx.modeVal === "build" ? "Build" : "Plan";
+  modeLabel.textContent = modeLabelText(ctx.modeVal);
+  statusMode.textContent = modeLabelText(ctx.modeVal);
   effortLabel.textContent = ctx.effortVal;
   permsLabel.textContent = PERMS.find((p) => p.value === ctx.permsVal)?.label ?? ctx.permsVal;
   refreshModelButton();
-  renderMenu(modeMenu, [{ label: "Build", value: "build" }, { label: "Plan", value: "plan" }], ctx.modeVal, (v) => pickMode(ctx, v));
+  renderMenu(modeMenu, MODE_OPTIONS, ctx.modeVal, (v) => pickMode(ctx, v));
   renderMenu(effortMenu, EFFORTS.map((e) => ({ label: e, value: e })), ctx.effortVal, (v) => pickEffort(ctx, v));
   renderMenu(permsMenu, PERMS.map((p) => ({ label: p.label, value: p.value })), ctx.permsVal, (v) => pickPerms(ctx, v));
   refreshProviderMenu();
@@ -1653,6 +1684,9 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         clearRetryCard(ctx);
         renderTranscript(ctx, (p["messages"] as Array<Record<string, unknown>>) ?? []);
         primeContext(ctx);
+        // Load this session's plan artifact so a reload shows the plan that was
+        // actually made (inspectable, and never a stale plan from another tab).
+        if (id) send(ctx, { op: "get_plan", id });
         if (ctx === activeCtx) setActivity(String(p["label"] ?? ""));
         break;
       }
@@ -1676,8 +1710,14 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         showDecision(ctx, d);
         break;
       }
+      case "phase": {
+        const ph = p as unknown as PhaseEventPayload;
+        showPhase(ctx, ph.phase);
+        break;
+      }
       case "done":
         setBusy(ctx, false);
+        showPhase(ctx, null);
         // The turn is over: a retry that succeeded leaves no active retry card,
         // and a retry that failed has already shown its error card instead.
         clearRetryCard(ctx);
@@ -1692,7 +1732,14 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
     return;
   }
 
-  if (msg.reply === "list_sessions" && Array.isArray(msg.data)) {
+  if (msg.reply === "get_plan") {
+    const rec = (msg.data && typeof msg.data === "object") ? (msg.data as PlanRecord) : null;
+    // Only show it when the transcript itself does not already carry the plan,
+    // so a live <plan> handoff is never duplicated on a plain reload.
+    if (rec && (rec.plan ?? "").trim() && !ctx.chatBody.querySelector(".plan-card")) {
+      addPlanCard(ctx, String(rec.plan));
+    }
+  } else if (msg.reply === "list_sessions" && Array.isArray(msg.data)) {
     const list = msg.data as SessionListItem[];
     refreshSessionsCache(ctx, list);
     resumeIfNeeded(ctx, list);
@@ -1814,34 +1861,39 @@ function renderMenu(menu: HTMLDivElement, options: Array<{ label: string; value:
 function wireMenu(button: HTMLButtonElement, menu: HTMLDivElement): void {
   button.onclick = (e) => { e.stopPropagation(); const was = menu.classList.contains("hidden"); closeAllMenus(); if (was) menu.classList.remove("hidden"); };
 }
-function applyMode(ctx: Ctx, mode: "build" | "plan"): void {
+function applyMode(ctx: Ctx, mode: Mode): void {
   ctx.modeVal = mode;
+  // The workflow selection is a per-workspace preference, remembered so the user
+  // does not re-pick it every time; it never touches agent settings.
+  prefs.modeByWs[ctx.root] = mode;
+  savePrefs();
   if (ctx === activeCtx) {
-    modeLabel.textContent = mode === "build" ? "Build" : "Plan";
-    statusMode.textContent = mode === "build" ? "Build" : "Plan";
-    renderMenu(modeMenu, [{ label: "Build", value: "build" }, { label: "Plan", value: "plan" }], ctx.modeVal, (v) => pickMode(ctx, v));
+    modeLabel.textContent = modeLabelText(mode);
+    statusMode.textContent = modeLabelText(mode);
+    renderMenu(modeMenu, MODE_OPTIONS, mode, (v) => pickMode(ctx, v));
     refreshModeIndicator();
   }
 }
+function pickMode(ctx: Ctx, value: string): void { applyMode(ctx, value as Mode); }
 /* When the Plan -> Build workflow owns the turn, a "Build" mode chooser is
    redundant and contradictory, so the control becomes the workflow indicator.
    The mode menu stays available as an explicit override. */
 function refreshModeIndicator(): void {
-  const planOn = !!(agentConfig?.plan?.enabled);
+  const mode = activeCtx?.modeVal ?? prefs.defaultMode;
+  const planOn = mode === "plan-build" || (!!agentConfig?.plan?.enabled && mode === "build");
   if (planOn) {
     modeLabel.textContent = "Plan → Build";
     statusMode.textContent = "Plan → Build";
     modeBtn.classList.add("workflow");
     modeBtn.title = "Plan → Build is configured and runs automatically. The menu below is an explicit override; edit the workflow in Settings → Agents.";
   } else {
-    const label = activeCtx?.modeVal === "plan" ? "Plan" : "Build";
+    const label = modeLabelText(mode);
     modeLabel.textContent = label;
     statusMode.textContent = label;
     modeBtn.classList.remove("workflow");
     modeBtn.title = "Mode";
   }
 }
-function pickMode(ctx: Ctx, value: string): void { applyMode(ctx, value as "build" | "plan"); }
 function pickEffort(ctx: Ctx, value: string): void {
   ctx.effortVal = value;
   if (ctx === activeCtx) { effortLabel.textContent = value; renderMenu(effortMenu, EFFORTS.map((e) => ({ label: e, value: e })), ctx.effortVal, (v) => pickEffort(ctx, v)); }
@@ -2417,7 +2469,7 @@ function settingsGeneral(): [string, () => void] {
   const html =
     `<p class="sub">Behavior defaults that apply across workspaces.</p>` +
     `<div class="set-row"><div class="set-info"><div class="set-label">Confirm before editing the default branch</div><div class="set-desc">Ask before a turn that writes directly to the protected branch.</div></div><div class="set-ctl"><span id="swProtected"></span></div></div>` +
-    `<div class="set-row"><div class="set-info"><div class="set-label">Default mode for new sessions</div><div class="set-desc">Plan mode is read-only.</div></div><div class="set-ctl">${seg(prefs.defaultMode, [{ value: "build", label: "Build" }, { value: "plan", label: "Plan" }], "defMode")}</div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Default workflow for new sessions</div><div class="set-desc">Build runs directly. Plan proposes read-only. Plan → Build plans, then hands off to Build automatically.</div></div><div class="set-ctl">${seg(prefs.defaultMode, MODE_OPTIONS, "defMode")}</div></div>` +
     `<h4 class="card-title" style="margin-top:16px">Keyboard shortcuts</h4>` +
     `<div class="set-row"><div class="set-info"><div class="set-label">Focus composer</div></div><div class="set-ctl"><span class="set-desc">Ctrl / ⌘ + K</span></div></div>` +
     `<div class="set-row"><div class="set-info"><div class="set-label">Send / new line</div></div><div class="set-ctl"><span class="set-desc">Enter / Shift+Enter</span></div></div>` +
@@ -2425,7 +2477,7 @@ function settingsGeneral(): [string, () => void] {
     `<div class="set-row"><div class="set-info"><div class="set-label">Cancel edit · close dialog</div></div><div class="set-ctl"><span class="set-desc">Esc</span></div></div>`;
   const wire = (): void => {
     const body = el<HTMLDivElement>("settingsBody");
-    wireSeg(body, "defMode", (v) => { prefs.defaultMode = v as "build" | "plan"; savePrefs(); const ctx = activeCtx; if (ctx) applyMode(ctx, prefs.defaultMode); });
+    wireSeg(body, "defMode", (v) => { prefs.defaultMode = v as Mode; savePrefs(); const ctx = activeCtx; if (ctx) applyMode(ctx, prefs.defaultMode); });
     wireSwitch(body, "swProtected", prefs.confirmProtected, (v) => { prefs.confirmProtected = v; savePrefs(); });
   };
   return [html, wire];

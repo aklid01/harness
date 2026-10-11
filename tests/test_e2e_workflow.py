@@ -169,13 +169,13 @@ class WorkflowE2E(unittest.TestCase):
                 return m["payload"]["id"]
         return None
 
-    def run_turn(self, text="set a marker in app.py"):
+    def run_turn(self, text="set a marker in app.py", mode="build"):
         self.backend.dispatch({"op": "open", "session": "s", "root": str(self.root),
                                "req_id": time.time_ns()})
         self.assertTrue(self.done("s", kind="session"))
         self.sent.clear()
         self.backend.dispatch({"op": "submit", "session": "s", "text": text,
-                               "mode": "build", "req_id": time.time_ns()})
+                               "mode": mode, "req_id": time.time_ns()})
         self.assertTrue(self.done("s"))
         time.sleep(0.2)
         for s in list(self.backend.sessions.values()):
@@ -186,7 +186,7 @@ class WorkflowE2E(unittest.TestCase):
                      "build": {"enabled": False},  # build falls back to the session model
                      "oversight": {"enabled": True, "model_id": "mdl-rev",
                                    "intensity": "medium", "max_rounds": 2}})
-        self.run_turn()
+        self.run_turn(mode="plan-build")
 
         # Only workflow requests, not the background title request (coder-model).
         flow = [r for r in mock_state(self.server).requests
