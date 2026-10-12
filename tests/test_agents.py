@@ -494,6 +494,45 @@ class PlanArtifact(RouteBase):
         self.assertEqual(data.get("session_id"), sid)
 
 
+class TodoReconcile(unittest.TestCase):
+    """Plan steps cross out from real tool/test evidence, not LLM self-report."""
+
+    def setUp(self):
+        from harness import todos
+        todos.TODOS[:] = []
+        self.addCleanup(lambda: todos.TODOS.clear())
+        self.todos = todos
+
+    def test_writing_a_named_file_completes_its_step(self):
+        self.todos.TODOS[:] = [{"content": "Create src/text_analyzer.py", "activeForm": "x", "status": "pending"}]
+        self.assertTrue(self.todos.reconcile("write_file",
+                                             {"path": "C:/x/src/text_analyzer.py"},
+                                             "Wrote C:/x/src/text_analyzer.py"))
+        self.assertEqual(self.todos.TODOS[0]["status"], "done")
+
+    def test_running_the_named_verification_completes_its_step(self):
+        self.todos.TODOS[:] = [{"content": "Validate syntax with py_compile", "activeForm": "x", "status": "pending"}]
+        self.assertTrue(self.todos.reconcile("bash",
+                                             {"command": "python -m py_compile src/text_analyzer.py"},
+                                             "ok"))
+        self.assertEqual(self.todos.TODOS[0]["status"], "done")
+
+    def test_a_failed_tool_completes_nothing(self):
+        self.todos.TODOS[:] = [{"content": "Run pytest on the tests", "activeForm": "x", "status": "pending"}]
+        self.assertFalse(self.todos.reconcile("bash", {"command": "pytest"}, "Error: no tests found"))
+        self.assertEqual(self.todos.TODOS[0]["status"], "pending")
+
+    def test_an_unrelated_verification_does_not_complete_the_step(self):
+        # The step asked to lint; the command ran pytest - evidence does not match.
+        self.todos.TODOS[:] = [{"content": "Lint with flake8", "activeForm": "x", "status": "pending"}]
+        self.assertFalse(self.todos.reconcile("bash", {"command": "pytest tests"}, "1 passed"))
+        self.assertEqual(self.todos.TODOS[0]["status"], "pending")
+
+    def test_a_done_step_is_left_alone(self):
+        self.todos.TODOS[:] = [{"content": "Create src/text_analyzer.py", "activeForm": "x", "status": "done"}]
+        self.assertFalse(self.todos.reconcile("write_file", {"path": "src/text_analyzer.py"}, "Wrote"))
+
+
 class PlanFindings(RouteBase):
     """The planner's own reads must carry to Build so it need not re-explore."""
 

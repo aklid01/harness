@@ -51,6 +51,21 @@ class PermissionCase(unittest.TestCase):
         permissions.set_mode("autopilot")
         self.assertEqual(permissions.check("write_file", outside)[0], "allow")
 
+    def test_mode_ref_is_read_live_so_mid_turn_changes_apply(self):
+        # The session binds permission mode by reference; changing it while a
+        # turn is running must take effect on the very next check.
+        ref = permissions.mode_ref("default")
+        with permissions.moded(ref):
+            self.assertEqual(permissions.current_mode(), "default")
+            self.assertEqual(permissions.check("bash", {"command": "python -c 'print(1)'"})[0], "ask")
+            ref.value = "autopilot"  # user switches policy mid-work
+            self.assertEqual(permissions.current_mode(), "autopilot")
+            self.assertEqual(permissions.check("bash", {"command": "python -c 'print(1)'"})[0], "allow")
+
+    def test_plain_string_mode_is_still_supported(self):
+        with permissions.moded("strict"):
+            self.assertEqual(permissions.current_mode(), "strict")
+
 
 class ClassifyBashCase(unittest.TestCase):
     """Risk is judged by what a command does, quote-aware and redirect-aware."""

@@ -25,6 +25,25 @@ MODE = "default"
 _ACTIVE_MODE = contextvars.ContextVar("harness_perm_mode", default=None)
 
 
+class ModeRef:
+    """A live permission-mode holder for one session.
+
+    Session bindings set the active mode by reference, so changing it while a
+    turn is already running takes effect on the next permission check - the
+    running worker reads ``value`` at call time instead of a mode captured when
+    the turn started.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value if value in MODES else MODE
+
+
+def mode_ref(initial=MODE):
+    return ModeRef(initial)
+
+
 def set_mode(mode):
     """Execution policy for the default (global) owner. The deny list wins in
     every mode, no exceptions."""
@@ -34,9 +53,14 @@ def set_mode(mode):
 
 
 @contextlib.contextmanager
-def moded(mode):
-    """Scope the policy to ``mode`` for the current context (one session)."""
-    token = _ACTIVE_MODE.set(mode if mode in MODES else None)
+def moded(target):
+    """Scope the policy for the current context (one session).
+
+    ``target`` may be a mode string (captured once) or a ``ModeRef`` (read live,
+    so a mid-turn change applies).
+    """
+    ref = target if isinstance(target, ModeRef) else ModeRef(target)
+    token = _ACTIVE_MODE.set(ref)
     try:
         yield
     finally:
@@ -47,8 +71,12 @@ def moded(mode):
 
 
 def current_mode():
-    m = _ACTIVE_MODE.get()
-    return m if m is not None else MODE
+    ref = _ACTIVE_MODE.get()
+    if isinstance(ref, ModeRef):
+        return ref.value if ref.value in MODES else MODE
+    if ref in MODES:
+        return ref
+    return MODE
 
 # Last matching rule wins, so put the catch-all first.
 BASH_RULES = {

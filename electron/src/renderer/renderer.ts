@@ -195,7 +195,7 @@ interface Ctx {
   pendingResume: boolean;
   failure: { retry: RetryInfo | null; headline: string; model: string | null; text: string; transient: boolean; hint: string } | null;
   retryCard: HTMLDivElement | null;
-  phaseEl: HTMLDivElement | null;
+  phaseEl: string | null;
   retryTick: RetryTick | null;
   retryTimer: number | null;
   streamPre: HTMLDivElement | null;
@@ -271,7 +271,14 @@ const THEMES = [
   { id: "ember", name: "Ember", desc: "Graphite + warm amber", swatch: ["#0a0806", "#191410", "#f0883e"] },
   { id: "graphite", name: "Graphite", desc: "Neutral, low-distraction", swatch: ["#09090a", "#161618", "#c6cad3"] },
 ];
-const PLAN_ICON: Record<string, string> = { pending: ICONS.pending, in_progress: ICONS.doing, completed: ICONS.done };
+const PLAN_ICON: Record<string, string> = { pending: ICONS.pending, in_progress: ICONS.doing, completed: ICONS.done, done: ICONS.done };
+/* The backend and the model speak "done" (todos.py); the UI historically looked
+   for "completed", so completed steps never crossed out. Normalise on ingest so
+   the two vocabularies never disagree downstream. */
+function normPlanStatus(s: unknown): string { return s === "done" ? "completed" : String(s ?? "pending"); }
+function normPlanItems(items: unknown): TodoItem[] {
+  return Array.isArray(items) ? items.map((i: Record<string, unknown>) => ({ ...i, status: normPlanStatus(i["status"]) })) as TodoItem[] : [];
+}
 
 function makeCtx(root: string, project: string, intent: Ctx["openIntent"], openId: string | null): Ctx {
   const ctx: Ctx = {
@@ -732,13 +739,16 @@ function addToolLine(ctx: Ctx, callId: string | null, name: string, args: Record
   return key;
 }
 const ROLE_LABEL: Record<string, string> = { plan: "plan", build: "build", checker: "review" };
-/* Workflow phase indicator for the Plan -> Build cycle. One live card, updated
-   in place, so the phases read as progress and not as chat chatter. */
+/* Workflow phase marker for the Plan -> Build cycle. Each transition appends a
+   distinct marker into the transcript, so the sequence - planning, plan ready,
+   handing off, building, done - reads as a timeline and it is clear which phase
+   ran when. Per-decision reviews are not repeated here (the decision cards
+   already show those). */
 const PHASE_LABEL: Record<string, string> = {
-  planning: "Planning…", replanning: "Replanning…", validating: "Validating the plan…",
-  handing_off: "Handing off to Build…", building: "Building…",
-  reviewing: "Reviewing a decision…", completed: "Workflow complete",
-  blocked: "Blocked", failed: "Workflow failed",
+  planning: "Planning…", replanning: "Replanning…",
+  validating: "Validating the plan…", handing_off: "Plan ready · handing off to build…",
+  building: "Building…", reviewing: "Reviewing a decision…",
+  completed: "Workflow complete", blocked: "Blocked", failed: "Workflow failed",
 };
 const PHASE_SHORT: Record<string, string> = {
   planning: "Planning", replanning: "Replanning", validating: "Validating",
@@ -746,15 +756,18 @@ const PHASE_SHORT: Record<string, string> = {
   completed: "Done", blocked: "Blocked", failed: "Failed",
 };
 function showPhase(ctx: Ctx, phase: string | null): void {
-  if (phase === null) { ctx.phaseEl?.remove(); ctx.phaseEl = null; return; }
-  if (!ctx.phaseEl || ctx.phaseEl.parentElement !== ctx.chatBody) {
-    ctx.phaseEl?.remove();
-    const d = document.createElement("div");
-    d.className = "phase";
-    ctx.chatBody.appendChild(d);
-    ctx.phaseEl = d;
-  }
-  ctx.phaseEl.innerHTML = `<span class="spin"></span><span>${escapeHtml(PHASE_LABEL[phase] ?? phase)}</span>`;
+  // A new turn resets the marker sequence; the markers already in the
+  // transcript stay, so the run reads as a timeline rather than being wiped.
+  if (phase === null) { ctx.phaseEl = null; return; }
+  if (phase === "reviewing") return;   // shown in the status bar + decision cards, not repeated here
+  if (phase === ctx.phaseEl) return;   // dedup consecutive
+  ctx.phaseEl = phase;
+  const d = document.createElement("div");
+  d.className = `phase phase-${phase}`;
+  const terminal = phase === "completed" || phase === "failed" || phase === "blocked";
+  d.innerHTML = `${terminal ? "" : `<span class="spin"></span>`}<span>${escapeHtml(PHASE_LABEL[phase] ?? phase)}</span>`;
+  ctx.chatBody.appendChild(d);
+  updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
 }
 const toolSeq: Record<string, number> = {};
@@ -935,7 +948,7 @@ function renderTabs(): void {
     el0.setAttribute("aria-selected", String(t === activeCtx));
     el0.innerHTML =
       `<span class="tab-glyph">${ICONS.chat}</span>` +
-      `<span class="tab-label"><span class="tab-ws">${escapeHtml(t.project)}</span><span class="tab-title"><span class="mq">${escapeHtml(displayTitle(t.sessionTitle))}</span></span></span>` +
+      `<span class="tab-label"><span class="tab-ws">${escapeHtml(t.project)}</span><span class="tab-title" title="${escapeHtml(displayTitle(t.sessionTitle))}"><span class="mq">${escapeHtml(displayTitle(t.sessionTitle))}</span></span></span>` +
       `<button class="tab-close" title="Close tab">${ICONS.close}</button>`;
     attachMarquee(el0.querySelector<HTMLElement>(".tab-title"));
     el0.onclick = (e) => { if ((e.target as HTMLElement).closest(".tab-close")) return; activateTab(t.id); };
@@ -1652,7 +1665,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         clearRetryCard(ctx);
         const args = (p["args"] as Record<string, unknown>) ?? {};
         const role = (p["agent"] ?? p["role"]) as string | undefined;
-        if (p["name"] === "write_todos" && Array.isArray(args["todos"])) { ctx.planItems = args["todos"] as TodoItem[]; if (ctx === activeCtx) renderPlan(ctx); }
+        if (p["name"] === "write_todos" && Array.isArray(args["todos"])) { ctx.planItems = normPlanItems(args["todos"]); if (ctx === activeCtx) renderPlan(ctx); }
         else { if (ctx === activeCtx) setActivity(`${role ? ROLE_LABEL[role] + " " : ""}running ${p["name"]}: ${String(args["command"] ?? args["path"] ?? "")}`.slice(0, 120)); addToolLine(ctx, (p["call_id"] as string) ?? null, String(p["name"]), args, role); }
         break;
       }
@@ -1661,7 +1674,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         if (p["name"] !== "write_todos") finishToolLine(ctx, (p["call_id"] as string) ?? null, String(p["result"] ?? ""));
         if (ctx === activeCtx) setActivity("thinking…");
         break;
-      case "todos": clearRetryCard(ctx); ctx.planItems = (p["todos"] as TodoItem[]) ?? []; if (ctx === activeCtx) renderPlan(ctx); break;
+      case "todos": clearRetryCard(ctx); ctx.planItems = normPlanItems(p["todos"]); if (ctx === activeCtx) renderPlan(ctx); break;
       // A usage card means a request completed, so any retry in flight has
       // recovered - clear it even during phases that emit no message (planning,
       // review), which is where it used to linger across the turn.

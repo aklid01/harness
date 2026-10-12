@@ -453,7 +453,9 @@ class Session:
         self._seq = 0
         self._submissions: dict = {}
         self._workers: list = []
-        self.mode = "build"
+        self.mode = "build"                 # workflow: build / plan / plan-build
+        self.perms = "default"              # permission policy: default/strict/...
+        self._mode_ref = permissions_mod.mode_ref(self.perms)  # live, changeable mid-turn
         self.effort = "default"
         self.active_provider: str | None = None
 
@@ -502,7 +504,7 @@ class Session:
             stack.enter_context(events.attached(self))
             if self.root is not None:
                 stack.enter_context(paths_mod.rooted(self.root))
-            stack.enter_context(permissions_mod.moded(self.mode))
+            stack.enter_context(permissions_mod.moded(self._mode_ref))
             stack.enter_context(providers_mod.scoped(self.active_provider, self.effort))
             stack.enter_context(session_mod.scoped(self.root, self.session_id, self.written))
             yield
@@ -866,7 +868,10 @@ class Harness:
         if op == "set_permissions":
             mode = obj.get("mode", "default")
             if mode in permissions_mod.MODES:
-                s.mode = mode
+                s.perms = mode
+                # Live: a turn already running will honour this on its next
+                # permission check, so the user can relax or tighten mid-work.
+                s._mode_ref.value = mode
             return R({"reply": op, "ok": True})
         if op == "set_active":
             ok = providers_mod.set_active(obj.get("id"))

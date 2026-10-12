@@ -453,6 +453,21 @@ class Runner:
 
     # --- decision oversight -------------------------------------------------
 
+    def _reconcile_todos(self, name, args, result):
+        """Cross out plan steps whose work just happened, from tool evidence.
+
+        Keeps the checklist honest when the agent moves on without calling
+        write_todos: a written file or a passing verification completes the step
+        that asked for it, and the UI is told so it can cross it out.
+        """
+        if self.mode == "plan":
+            return
+        try:
+            from . import todos as todos_mod
+            if todos_mod.reconcile(name, args, result):
+                events.emit(events.TODOS, {"todos": todos_mod.TODOS})
+        except Exception:  # noqa: BLE001 - reconciliation is best-effort
+            pass
     def _needs_review(self, name, args):
         if not self._oversight or self.mode == "plan":
             return False
@@ -888,6 +903,7 @@ class Runner:
                         # a re-entered stream replays the recorded result.
                         args, result = execute(tool_call, note=(message.content or ""),
                                                call_key=(request_id, call_id or index))
+                        self._reconcile_todos(name, args, result)
                 extra = {"reviewed": review_marker} if review_marker else {}
                 events.emit(events.TOOL_CALL, {"call_id": call_id, "name": name, "args": args, "nested": False, "agent": "build", **extra})
                 events.emit(events.TOOL_RESULT, {"call_id": call_id, "name": name, "args": args, "result": result, "nested": False, "agent": "build", **extra})
