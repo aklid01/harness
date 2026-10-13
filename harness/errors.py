@@ -94,7 +94,7 @@ class ModelError(Exception):
 
     def __init__(self, kind, detail="", *, status=None, retry_after=None,
                  model=None, model_id=None, partial=None, transient=None,
-                 exhausted=False, cause=None):
+                 exhausted=False, retries=None, cause=None):
         self.kind = kind
         self.detail = scrub(detail)
         self.status = status
@@ -104,6 +104,7 @@ class ModelError(Exception):
         self.partial = partial
         self.transient = kind in TRANSIENT_KINDS if transient is None else transient
         self.exhausted = exhausted
+        self.retries = retries
         self.cause = cause
 
     @property
@@ -132,7 +133,11 @@ class ModelError(Exception):
         if self.detail:
             out = f"{out}: {self.detail}"
         if self.exhausted:
-            out = f"{out} - still failing after repeated attempts"
+            if self.retries:
+                tries = "retry" if self.retries == 1 else "retries"
+                out = f"{out} - still failing after {self.retries} {tries}"
+            else:
+                out = f"{out} - still failing after repeated attempts"
         return scrub(out)
 
     def payload(self):
@@ -146,6 +151,7 @@ class ModelError(Exception):
             "retry_after": self.retry_after,
             "transient": self.transient,
             "exhausted": self.exhausted,
+            "retries": self.retries,
             "model": self.model,
             "model_id": self.model_id,
         }

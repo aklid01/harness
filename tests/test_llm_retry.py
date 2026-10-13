@@ -15,7 +15,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import errors, history, llm, providers  # noqa: E402
+from harness import errors, history, llm, providers, retry  # noqa: E402
 
 
 class FakeKeyring:
@@ -62,6 +62,9 @@ class LlmCase(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         mock.patch.object(providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json").start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
+        # The fixed schedule is the policy under test in test_retry.py; here a
+        # retry is just plumbing, so its wait costs milliseconds, not seconds.
+        mock.patch.object(retry, "RETRY_SCHEDULE", (0.01,) * len(retry.RETRY_SCHEDULE)).start()
         self.addCleanup(mock.patch.stopall)
 
     def use(self, **extra):

@@ -2,31 +2,36 @@
 
 The budget is an attempt count plus one monotonic deadline shared by every
 attempt, and that deadline is only a backstop. Two invariants matter: it has
-to span more than one attempt, because the old 30s window was smaller than
-two 20s read timeouts - one slow provider burned the entire budget before
-the retry had even started, so a conversation that only needed a second
-chance died instead; and the attempts it spans have to be cheap to lose,
-because three 90s hangs cost a silent four minutes while the user waits.
-Only failures that are plausibly transient are retried; everything else (a
-bad key, an unknown model id, parameters the provider will not accept) fails
-straight away with an explanation of what to fix.
+to span the whole schedule, because the old 30s window was smaller than two
+20s read timeouts - one slow provider burned the entire budget before the
+retry had even started, so a conversation that only needed a second chance
+died instead; and a full run has to stay bounded, because six attempts that
+each burn their read timeout plus every scheduled wait is already close to
+six silent minutes for the user watching the card.
+
+The waits are a fixed schedule, not exponential jitter: 3s, 5s, 15s, 20s and
+30s before retries one through five. A flaky provider usually answers inside
+the first two retries, the tail is there for a provider that is properly
+down, and the numbers are the same every time - so "Retry 2 of 5, trying
+again in 5s" on the card is a promise instead of a guess. Only failures that
+are plausibly transient are retried; everything else (a bad key, an unknown
+model id, parameters the provider will not accept) fails straight away with
+an explanation of what to fix.
 
 Retries are cancellable: every wait and the loop itself watch the caller's
 cancel event, and a request abandoned that way leaves nothing running behind it.
 """
 
-import random
 import threading
 import time
 
 from . import errors as errors_mod
 
-MAX_ATTEMPTS = 3
-RETRY_WINDOW = 150.0
-BACKOFF_BASE = 0.4
-BACKOFF_CAP = 4.0
-MIN_WAIT = 0.1
-_SLICE = 0.05
+# Seconds to wait before each retry, by retry number: the first retry comes
+# quickly, the tail is spaced out because a provider that is still failing
+# after four tries needs minutes, not seconds, to come back.
+RETRY_SCHEDULE = (3.0, 5.0, 15.0, 20.0, 30.0)
+MAX_ATTEMPTS = len(RETRY_SCHEDULE) + 1
 
 CONNECT_TIMEOUT = 6.0
 # What one attempt waits for the provider to say something: on a stream that
@@ -37,6 +42,14 @@ CONNECT_TIMEOUT = 6.0
 # request comes back in seconds.
 READ_TIMEOUT = 45.0
 POOL_TIMEOUT = 5.0
+
+MIN_WAIT = 0.1
+_SLICE = 0.05
+
+# The deadline has to outlast the worst legal run of the whole policy: every
+# attempt burning its full read timeout plus every scheduled wait. Sized
+# smaller, a slow first attempt eats the retries that were promised to it.
+RETRY_WINDOW = MAX_ATTEMPTS * READ_TIMEOUT + sum(RETRY_SCHEDULE)
 
 _GATES = {}
 _GATES_LOCK = threading.Lock()
@@ -96,12 +109,13 @@ def _pause(host, seconds, cancel, limit=None):
     return _sleep(0.0, cancel)
 
 
-def _backoff(attempt):
-    top = min(BACKOFF_CAP, BACKOFF_BASE * (2 ** (attempt - 1)))
-    return random.uniform(0.0, top)
+def _wait_for(retry_number, schedule=None):
+    """Seconds to wait before the retry with this number, from the schedule."""
+    table = RETRY_SCHEDULE if not schedule else tuple(schedule)
+    return table[min(max(int(retry_number), 1), len(table)) - 1]
 
 
-def _next_wait(attempt, err, remaining):
+def _next_wait(attempt, err, remaining, schedule=None):
     """Seconds to wait before the next attempt, or None to give up now."""
     if err.kind == "rate_limited" and err.retry_after is not None:
         asked = err.retry_after
@@ -109,20 +123,25 @@ def _next_wait(attempt, err, remaining):
         if asked + MIN_WAIT > remaining:
             return None
         return max(asked, MIN_WAIT)
-    return min(_backoff(attempt), max(MIN_WAIT, remaining - MIN_WAIT))
+    # A scheduled wait that cannot fit is squeezed into what is left of the
+    # window rather than skipped: the retry still gets its chance.
+    return min(_wait_for(attempt, schedule), max(MIN_WAIT, remaining - MIN_WAIT))
 
 
 def run(request, *, window=RETRY_WINDOW, cancel=None, on_attempt=None,
-        model=None, model_id=None, api_key=None, host="", attempts=MAX_ATTEMPTS):
+        model=None, model_id=None, api_key=None, host="", attempts=MAX_ATTEMPTS,
+        schedule=None):
     """Run request() until it succeeds, gives up, or runs out of budget.
 
     The budget is the attempt count first and the shared window second: one
     attempt that burns its whole read timeout must leave a whole retry behind
-    it, which is why window is sized to span every attempt. on_attempt()
-    receives a progress dict before each retry wait: {"attempt", "wait",
-    "error", "model", "elapsed", "window"}.
+    it, which is why window is sized to span every attempt. ``schedule``
+    overrides RETRY_SCHEDULE (the seconds before each retry). on_attempt()
+    receives a progress dict before each retry wait: {"attempt",
+    "retries_total", "wait", "error", "model", "elapsed", "window"}.
     """
     deadline = time.monotonic() + float(window)
+    table = RETRY_SCHEDULE if not schedule else tuple(schedule)
     limit = max(1, int(attempts))
     attempt = 0
     while True:
@@ -141,16 +160,19 @@ def run(request, *, window=RETRY_WINDOW, cancel=None, on_attempt=None,
             remaining = deadline - time.monotonic()
             if attempt >= limit or remaining <= MIN_WAIT:
                 # Out of tries or out of window - either way the turn is over,
-                # and the caller says so with "still failing after attempts".
+                # and the caller says so with "still failing after N retries".
                 err.exhausted = True
+                err.retries = attempt - 1
                 raise err
-            wait = _next_wait(attempt, err, remaining)
+            wait = _next_wait(attempt, err, remaining, schedule)
             if wait is None:
                 err.exhausted = True
+                err.retries = attempt - 1
                 raise err
             if on_attempt is not None:
                 on_attempt({
                     "attempt": attempt + 1,
+                    "retries_total": len(table),
                     "wait": round(wait, 1),
                     "error": err,
                     "model": model,

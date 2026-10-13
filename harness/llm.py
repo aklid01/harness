@@ -91,7 +91,8 @@ def _close(handle):
 
 def _progress(caps):
     def emit(state):
-        payload = {"attempt": state["attempt"], "wait": state["wait"],
+        payload = {"attempt": state["attempt"], "retries_total": state.get("retries_total"),
+                   "wait": state["wait"],
                    "elapsed": state["elapsed"], "window": state["window"],
                    "model": caps.get("name") or caps.get("model"),
                    "model_id": caps.get("model")}
@@ -111,9 +112,10 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
     complete calls - only text streams.
 
     Failures are retried up to retry.MAX_ATTEMPTS times inside one bounded
-    window (retry.RETRY_WINDOW). A stream that breaks after it has already
-    delivered text is not retried: the text is on screen and sending it again
-    would duplicate it.
+    window (retry.RETRY_WINDOW), waiting the fixed seconds of
+    retry.RETRY_SCHEDULE before each retry. A stream that breaks after it has
+    already delivered text is not retried: the text is on screen and sending
+    it again would duplicate it.
     """
     client = get_client()
     caps = providers.active_model_capabilities()

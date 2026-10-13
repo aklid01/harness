@@ -90,12 +90,15 @@ export interface RequestFailure {
   status?: number | null;
   transient?: boolean;
   exhausted?: boolean;
+  retries?: number | null;
+  hint?: string;
   model?: string | null;
   model_id?: string | null;
 }
 
 export interface RetryProgress {
   attempt: number;
+  retries_total?: number | null;
   wait: number;
   elapsed: number;
   window: number;
@@ -105,6 +108,10 @@ export interface RetryProgress {
   headline?: string;
   detail?: string;
   status?: number | null;
+  retry_after?: number | null;
+  transient?: boolean;
+  exhausted?: boolean;
+  hint?: string;
 }
 
 export interface RetryInfo {
@@ -146,7 +153,14 @@ export interface PlanEventPayload {
 }
 
 export interface DecisionEventPayload {
-  status: "reviewing" | "approved" | "revised" | "clarify" | "escalated" | "error" | "skipped";
+  status:
+    | "reviewing"
+    | "approved"
+    | "revised"
+    | "clarify"
+    | "escalated"
+    | "error"
+    | "skipped";
   tool?: string;
   round?: number;
   verdict?: string;
@@ -200,9 +214,9 @@ export type OpPayload =
   | { op: "save_provider"; entry: ProviderEntry; key?: string }
   | { op: "delete_provider"; id: string; scope?: "model" | "provider" }
   | { op: "test_provider"; id: string }
-    | { op: "migrate_keys" }
-    | { op: "get_context" }
-    | { op: "ws_sessions"; root: string }
+  | { op: "migrate_keys" }
+  | { op: "get_context" }
+  | { op: "ws_sessions"; root: string }
   | { op: "approval_reply"; id: string; allow: boolean }
   | { op: "pick_reply"; id: string; index: number | null }
   | { op: "retry"; count: number; text: string; mode: Mode };

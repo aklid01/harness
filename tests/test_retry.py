@@ -1,5 +1,5 @@
-"""Retries: bounded by an attempt count and one shared deadline, transient
-only, cancellable, and never leaking the key."""
+"""Retries: a fixed 3/5/15/20/30s schedule, bounded by an attempt count and
+one shared deadline, transient only, cancellable, and never leaking the key."""
 
 import os
 import threading
@@ -152,7 +152,8 @@ class RunCase(unittest.TestCase):
 
     def test_transient_then_success(self):
         started = time.monotonic()
-        value = retry.run(self.request(2), window=30, host="h")
+        value = retry.run(self.request(2), window=30, host="h",
+                          schedule=(0.05, 0.05))
         self.assertEqual(value, "ok")
         self.assertEqual(len(self.calls), 3)
         self.assertLess(time.monotonic() - started, 10)
@@ -181,7 +182,10 @@ class RunCase(unittest.TestCase):
         self.assertLessEqual(elapsed, 3.0)
         self.assertTrue(raised.exception.exhausted)
         self.assertTrue(raised.exception.kind == "timeout")
-        self.assertGreater(len(self.calls), 2, "the window should allow several attempts")
+        # The scheduled 3s wait is squeezed into what is left of the window,
+        # so the deadline still allows a retry before it gives up.
+        self.assertGreaterEqual(len(self.calls), 2,
+                                "the window still allows a retry")
 
     def test_attempt_count_caps_the_retries(self):
         def call():
@@ -189,15 +193,40 @@ class RunCase(unittest.TestCase):
             raise http(503, "overloaded")
 
         with self.assertRaises(errors.ModelError) as raised:
-            retry.run(call, window=60, host="h")
+            retry.run(call, window=60, host="h", schedule=(0.05,) * 5)
         self.assertEqual(len(self.calls), retry.MAX_ATTEMPTS)
         self.assertTrue(raised.exception.exhausted)
+        self.assertEqual(raised.exception.retries, retry.MAX_ATTEMPTS - 1)
+        self.assertIn(f"still failing after {retry.MAX_ATTEMPTS - 1} retries",
+                      raised.exception.text())
+
+    def test_the_fixed_schedule_is_honored(self):
+        """The user-visible promise: retry 1 comes 3s later, retry 2 after
+        5s, and the card counts them off in that order."""
+        def call():
+            self.calls.append(time.monotonic())
+            if len(self.calls) <= 2:
+                raise http(503, "overloaded")
+            return "ok"
+
+        self.assertEqual(retry.run(call, window=120, host="h"), "ok")
+        first = self.calls[1] - self.calls[0]
+        second = self.calls[2] - self.calls[1]
+        self.assertGreaterEqual(first, 2.5)
+        self.assertLess(first, 4.5)
+        self.assertGreaterEqual(second, 4.5)
+        self.assertLess(second, 7.5)
 
     def test_the_budget_outlasts_a_single_attempt_timeout(self):
         """The regression pin: one attempt burning its whole read timeout must
-        leave a whole retry behind it, not eat the budget."""
-        self.assertGreaterEqual(retry.RETRY_WINDOW, 2 * retry.READ_TIMEOUT)
-        self.assertGreaterEqual(retry.MAX_ATTEMPTS, 3)
+        leave a whole retry behind it, not eat the budget. With the fixed
+        schedule that means the window spans every attempt plus every wait,
+        and the schedule is the 3/5/15/20/30 the card promises."""
+        self.assertEqual(retry.RETRY_SCHEDULE, (3.0, 5.0, 15.0, 20.0, 30.0))
+        self.assertEqual(retry.MAX_ATTEMPTS, len(retry.RETRY_SCHEDULE) + 1)
+        self.assertGreaterEqual(
+            retry.RETRY_WINDOW,
+            retry.MAX_ATTEMPTS * retry.READ_TIMEOUT + sum(retry.RETRY_SCHEDULE))
 
     def test_a_slow_first_attempt_still_gets_its_retry(self):
         """A provider that stalls for longer than the old read timeout, then
@@ -211,7 +240,8 @@ class RunCase(unittest.TestCase):
                 raise openai.APITimeoutError(request=mock.Mock(url="https://x/v1"))
             return "answer"
 
-        self.assertEqual(retry.run(call, attempts=3, host="h"), "answer")
+        self.assertEqual(retry.run(call, attempts=3, host="h",
+                                   schedule=(0.05, 0.05)), "answer")
         self.assertEqual(len(self.calls), 3)
 
     def test_retry_after_is_respected(self):
@@ -250,7 +280,8 @@ class RunCase(unittest.TestCase):
             raise http(503, "overloaded")
 
         with self.assertRaises(errors.ModelError) as raised:
-            retry.run(call, window=30, cancel=cancel, host="h")
+            retry.run(call, window=30, cancel=cancel, host="h",
+                      schedule=(0.2, 0.2, 0.2, 0.2, 0.2))
         self.assertEqual(raised.exception.kind, "cancelled")
         attempts = len(self.calls)
         time.sleep(0.8)
@@ -259,11 +290,13 @@ class RunCase(unittest.TestCase):
     def test_progress_events_report_wait_and_model(self):
         seen = []
         retry.run(self.request(1), window=10, host="h", model="DeepSeek V4.1 Flash",
+                  schedule=(0.1, 0.1),
                   on_attempt=lambda state: seen.append(state))
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0]["model"], "DeepSeek V4.1 Flash")
         self.assertGreater(seen[0]["attempt"], 1)
         self.assertGreaterEqual(seen[0]["wait"], 0.0)
+        self.assertEqual(seen[0]["retries_total"], 2)
         self.assertEqual(seen[0]["window"], 10)
 
     def test_concurrent_retries_share_one_slot_per_host(self):

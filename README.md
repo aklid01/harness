@@ -107,33 +107,34 @@ instead of a confusing 401. `settings.json`, `.env`, `providers.json`,
 A failed model request never ends the session. `harness/errors.py` classifies
 the failure - connection, DNS, timeout, 408/429/5xx, auth, unknown model id,
 unsupported parameter, malformed body, interrupted stream - and
-`harness/retry.py` retries only the transient ones, up to `MAX_ATTEMPTS`
-attempts inside one shared window that is sized to span all of them. The
-window is only a backstop: a first attempt that burns its whole read timeout
-still leaves a whole retry behind it, because a 30s window that could not
-hold two 20s timeouts meant a slow provider killed conversations instead of
-getting the second chance it needed. The read timeout itself is 45s - long
-enough for a reasoning model's first token at high effort, short enough that
-a provider that has gone quiet is cut off and retried instead of costing a
-stall per attempt. Backoff is exponential with jitter, `Retry-After` is
-respected when it fits the budget, one retry slot per endpoint so a failing
-host is not hammered, and every wait is cancellable (Stop, or switching
-model). A bad key or an unknown model id fails straight away; a stream that
-breaks after text has already arrived is reported rather than silently
-re-sent, since sending it again would duplicate the answer.
+`harness/retry.py` retries only the transient ones, on a fixed schedule:
+3s, 5s, 15s, 20s and 30s before retries one through five. The schedule runs
+inside one shared window (343s) sized to span every attempt at its full read
+timeout plus every scheduled wait, so a first attempt that burns its whole
+45s read timeout still leaves the whole schedule behind it - a 30s window
+that could not hold two 20s timeouts meant a slow provider killed
+conversations instead of getting the second chance it needed. `Retry-After`
+is respected when it fits the window, one retry slot per endpoint so a
+failing host is not hammered, and every wait is cancellable (Stop, or
+switching model). A bad key or an unknown model id fails straight away; a
+stream that breaks after text has already arrived is reported rather than
+silently re-sent, since sending it again would duplicate the answer.
 
-The composer shows one status area that ticks as retries progress
-(`Retry 2 · waiting 3s · 5s of 150s elapsed`) and a final error card with
-the provider's own message, a suggested next step taken from the HTTP status
-(`401` wants a new key, `404` a different model id, `429` a wait and a
-Retry), and **Retry** / **Switch model**. The card is part of the
-conversation: it survives the transcript reconcile that follows a turn, and
-it stays put when you switch sessions. Retrying rewinds the conversation to
-the message that failed - the message is never duplicated - and leaves
-project files alone. Switching model keeps the workspace, session, history,
-unsaved composer text and permission state, and while a request is in flight
-it stops that request first rather than letting two models write into one
-session. No restart is ever needed to recover from an upstream failure.
+The composer shows one status area for the whole retry process: the exact
+error the upstream returned (`the provider reported a server error:
+overloaded (HTTP 503)`), a **Things to do** line taken from the failure kind
+and status (`401` wants a new key, `404` a different model id, `429` a wait
+and a Retry), and the countdown (`Retry 2 of 5 · trying again in 5s`, then
+`attempt in flight…`). When the retries are spent, a final error card carries
+the provider's own message, the same next-step hint, and **Retry** /
+**Switch model**. The card is part of the conversation: it survives the
+transcript reconcile that follows a turn, and it stays put when you switch
+sessions. Retrying rewinds the conversation to the message that failed - the
+message is never duplicated - and leaves project files alone. Switching model
+keeps the workspace, session, history, unsaved composer text and permission
+state, and while a request is in flight it stops that request first rather
+than letting two models write into one session. No restart is ever needed to
+recover from an upstream failure.
 
 ## Sessions
 
