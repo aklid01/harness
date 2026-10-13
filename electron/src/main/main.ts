@@ -34,7 +34,8 @@ function loadLastWorkspace(): string | null {
   try {
     const raw = fs.readFileSync(workspaceFile(), "utf-8");
     const root = (JSON.parse(raw) as { projectRoot?: string }).projectRoot;
-    if (root && fs.existsSync(root) && fs.statSync(root).isDirectory()) return root;
+    if (root && fs.existsSync(root) && fs.statSync(root).isDirectory())
+      return root;
   } catch {
     /* no saved workspace yet */
   }
@@ -51,13 +52,18 @@ function saveLastWorkspace(root: string): void {
 }
 
 function recentsFile(): string {
-  return path.join(app.getPath("userData"), "harness", "recent-workspaces.json");
+  return path.join(
+    app.getPath("userData"),
+    "harness",
+    "recent-workspaces.json",
+  );
 }
 
 function loadRecentsRoots(): string[] {
   try {
     const arr = JSON.parse(fs.readFileSync(recentsFile(), "utf-8"));
-    if (Array.isArray(arr)) return arr.filter((x): x is string => typeof x === "string");
+    if (Array.isArray(arr))
+      return arr.filter((x): x is string => typeof x === "string");
   } catch {
     /* no recents file yet */
   }
@@ -100,8 +106,11 @@ function isDir(p: string): boolean {
 }
 
 function sidecarPaths(): { projectRoot: string; appDataDir: string } {
-  const projectRoot = process.env.HARNESS_PROJECT_ROOT ?? loadLastWorkspace() ?? repoRoot();
-  const appDataDir = process.env.HARNESS_APP_DATA ?? path.join(app.getPath("userData"), "harness");
+  const projectRoot =
+    process.env.HARNESS_PROJECT_ROOT ?? loadLastWorkspace() ?? repoRoot();
+  const appDataDir =
+    process.env.HARNESS_APP_DATA ??
+    path.join(app.getPath("userData"), "harness");
   return { projectRoot, appDataDir };
 }
 
@@ -132,26 +141,46 @@ function spawnProc(port: number, projectRoot: string): ChildProcess {
   const { appDataDir } = sidecarPaths();
   const root = repoRoot();
   const args = [
-    "run", "python", "-m", "harness.server",
-    "--port", String(port),
-    "--project-root", projectRoot,
-    "--app-data-dir", appDataDir,
+    "run",
+    "python",
+    "-m",
+    "harness.server",
+    "--port",
+    String(port),
+    "--project-root",
+    projectRoot,
+    "--app-data-dir",
+    appDataDir,
   ];
   log("main", `spawning backend: uv ${args.join(" ")} (cwd=${root})`);
   try {
     return spawn("uv", args, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
   } catch (err) {
     log("main", `spawn threw synchronously: ${String(err)}`);
-    dialog.showErrorBox("Harness backend failed", `Could not spawn uv: ${String(err)}`);
+    dialog.showErrorBox(
+      "Harness backend failed",
+      `Could not spawn uv: ${String(err)}`,
+    );
     throw err;
   }
 }
 
 function wireProc(proc: ChildProcess): void {
-  proc.stdout?.on("data", (chunk) => process.stdout.write(`[backend] ${chunk}`));
-  proc.stderr?.on("data", (chunk) => process.stderr.write(`[backend] ${chunk}`));
-  proc.on("error", (err) => log("main", `backend spawn error: ${String(err)} (is uv on PATH?)`));
-  proc.on("exit", (code, signal) => log("main", `backend exited pid=${proc.pid} code=${code} signal=${signal ?? "none"}`));
+  proc.stdout?.on("data", (chunk) =>
+    process.stdout.write(`[backend] ${chunk}`),
+  );
+  proc.stderr?.on("data", (chunk) =>
+    process.stderr.write(`[backend] ${chunk}`),
+  );
+  proc.on("error", (err) =>
+    log("main", `backend spawn error: ${String(err)} (is uv on PATH?)`),
+  );
+  proc.on("exit", (code, signal) =>
+    log(
+      "main",
+      `backend exited pid=${proc.pid} code=${code} signal=${signal ?? "none"}`,
+    ),
+  );
 }
 
 function startBackend(port: number, projectRoot: string): void {
@@ -178,10 +207,22 @@ function blockDevtoolsShortcuts(target: BrowserWindow): void {
     const key = input.key.toLowerCase();
     if (input.key === "F12") event.preventDefault();
     else if (input.key === "F5") event.preventDefault();
-    else if ((input.control || input.meta) && input.shift && ["i", "j", "c"].includes(key)) event.preventDefault();
-    else if ((input.control || input.meta) && !input.shift && ["r"].includes(key)) event.preventDefault();
+    else if (
+      (input.control || input.meta) &&
+      input.shift &&
+      ["i", "j", "c"].includes(key)
+    )
+      event.preventDefault();
+    else if (
+      (input.control || input.meta) &&
+      !input.shift &&
+      ["r"].includes(key)
+    )
+      event.preventDefault();
   });
-  target.webContents.on("devtools-opened", () => target.webContents.closeDevTools());
+  target.webContents.on("devtools-opened", () =>
+    target.webContents.closeDevTools(),
+  );
 }
 
 function createWindow(port: number, projectRoot: string): void {
@@ -201,13 +242,20 @@ function createWindow(port: number, projectRoot: string): void {
   const target = path.join(__dirname, "..", "renderer", "index.html");
   const stamp = Date.now();
   const bootFile = writeBootHtml(target, stamp);
-  log("main", `loading renderer: ${bootFile} with query port=${port} projectRoot=${projectRoot}`);
-  win.webContents.on("did-fail-load", (_e, code, desc) => log("main", `renderer did-fail-load code=${code} desc=${desc}`));
+  log(
+    "main",
+    `loading renderer: ${bootFile} with query port=${port} projectRoot=${projectRoot}`,
+  );
+  win.webContents.on("did-fail-load", (_e, code, desc) =>
+    log("main", `renderer did-fail-load code=${code} desc=${desc}`),
+  );
   win.webContents.on("did-finish-load", () => {
     log("main", `renderer finished load, sending sidecar-config port=${port}`);
     win?.webContents.send("sidecar-config", { port, projectRoot });
   });
-  win.loadFile(bootFile, { query: { port: String(port), projectRoot, _v: String(stamp) } });
+  win.loadFile(bootFile, {
+    query: { port: String(port), projectRoot, _v: String(stamp) },
+  });
   win.on("closed", () => {
     win = null;
   });
@@ -220,8 +268,14 @@ function writeBootHtml(indexPath: string, stamp: number): string {
   try {
     const dir = path.dirname(indexPath);
     let html = fs.readFileSync(indexPath, "utf-8");
-    html = html.replace(/(["'])(\.\/styles\.css)(\?[^"']*)?(\1)/g, `$1$2?v=${stamp}$4`);
-    html = html.replace(/(["'])(\.\/renderer\.js)(\?[^"']*)?(\1)/g, `$1$2?v=${stamp}$4`);
+    html = html.replace(
+      /(["'])(\.\/styles\.css)(\?[^"']*)?(\1)/g,
+      `$1$2?v=${stamp}$4`,
+    );
+    html = html.replace(
+      /(["'])(\.\/renderer\.js)(\?[^"']*)?(\1)/g,
+      `$1$2?v=${stamp}$4`,
+    );
     const bootFile = path.join(dir, `.boot-${stamp}.html`);
     fs.writeFileSync(bootFile, html);
     try {
@@ -247,7 +301,10 @@ app.whenReady().then(async () => {
     activePort = await pickPort();
   } catch (err) {
     log("main", `pickPort failed: ${String(err)}`);
-    dialog.showErrorBox("Harness failed", `Could not find a free port: ${String(err)}`);
+    dialog.showErrorBox(
+      "Harness failed",
+      `Could not find a free port: ${String(err)}`,
+    );
     return;
   }
   const { projectRoot } = sidecarPaths();
@@ -257,7 +314,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("select-workspace", async () => {
     if (!win) return null;
-    const picked = await dialog.showOpenDialog(win, { properties: ["openDirectory"] });
+    const picked = await dialog.showOpenDialog(win, {
+      properties: ["openDirectory"],
+    });
     if (picked.canceled || !picked.filePaths.length) return null;
     const root = picked.filePaths[0];
     pushRecent(root);
@@ -266,7 +325,10 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("get-recent-workspaces", async () =>
-    loadRecentsRoots().filter((r) => isDir(r)).map((r) => ({ root: r, name: path.basename(r) || r })));
+    loadRecentsRoots()
+      .filter((r) => isDir(r))
+      .map((r) => ({ root: r, name: path.basename(r) || r })),
+  );
 
   ipcMain.handle("forget-workspace", async (_event, root: string) => {
     if (typeof root !== "string" || !root) return false;
@@ -277,7 +339,10 @@ app.whenReady().then(async () => {
     saveRecentsRoots(kept);
     const last = workspaceFile();
     try {
-      if (fs.existsSync(last) && JSON.parse(fs.readFileSync(last, "utf-8")).projectRoot === root) {
+      if (
+        fs.existsSync(last) &&
+        JSON.parse(fs.readFileSync(last, "utf-8")).projectRoot === root
+      ) {
         fs.unlinkSync(last);
       }
     } catch (err) {
@@ -287,7 +352,8 @@ app.whenReady().then(async () => {
   });
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow(activePort, activeRoot);
+    if (BrowserWindow.getAllWindows().length === 0)
+      createWindow(activePort, activeRoot);
   });
 });
 

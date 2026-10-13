@@ -52,7 +52,9 @@ if (!existsSync(main)) {
 
 const binary = electronBinary();
 if (!binary) {
-  console.error("the electron binary is missing - run `npm install` in electron/.");
+  console.error(
+    "the electron binary is missing - run `npm install` in electron/.",
+  );
   process.exit(1);
 }
 
@@ -68,11 +70,16 @@ for (const name of ["ELECTRON_RUN_AS_NODE", "NODE_OPTIONS"]) {
   }
 }
 
-const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf-8"));
-console.log(`launching electron ${packageJson.devDependencies?.electron ?? ""}`.trim());
+const packageJson = JSON.parse(
+  readFileSync(path.join(root, "package.json"), "utf-8"),
+);
+console.log(
+  `launching electron ${packageJson.devDependencies?.electron ?? ""}`.trim(),
+);
 console.log(`  binary: ${binary}`);
 console.log(`  app:    ${root}`);
-if (cleared.length) console.log(`  cleared for the child: ${cleared.join(", ")}`);
+if (cleared.length)
+  console.log(`  cleared for the child: ${cleared.join(", ")}`);
 const result = spawnSync(binary, [root, ...process.argv.slice(2)], {
   stdio: "inherit",
   env,

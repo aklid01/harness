@@ -6,7 +6,9 @@ contextBridge.exposeInMainWorld("harness", {
     ipcRenderer.on("sidecar-config", (_event, cfg) => cb(cfg as SidecarConfig));
   },
   selectWorkspace: (): Promise<{ projectRoot: string } | null> =>
-    ipcRenderer.invoke("select-workspace") as Promise<{ projectRoot: string } | null>,
+    ipcRenderer.invoke("select-workspace") as Promise<{
+      projectRoot: string;
+    } | null>,
   recentWorkspaces: (): Promise<WorkspaceRef[]> =>
     ipcRenderer.invoke("get-recent-workspaces") as Promise<WorkspaceRef[]>,
   forgetWorkspace: (root: string): Promise<boolean> =>
