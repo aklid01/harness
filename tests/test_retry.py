@@ -56,6 +56,11 @@ class ClassifyCase(unittest.TestCase):
             openai.APIConnectionError(request=mock.Mock(url="https://x/v1")),
             ConnectionResetError("connection reset by peer"),
             ValueError("Expecting value: line 1 column 1 (char 0)"),
+            # The SDK's base APIError: it could not map the provider's answer
+            # onto a status error, and "currently unavailable, try again
+            # later" reaches us in exactly this shape.
+            openai.APIError("This model is currently unavailable. Please try again later.",
+                            request=mock.Mock(url="https://x/v1"), body=None),
         ]
         for failure in transient:
             error = errors.classify(failure, model="m")
@@ -82,6 +87,8 @@ class ClassifyCase(unittest.TestCase):
             openai.APITimeoutError(request=mock.Mock(url="https://x/v1")): "timeout",
             openai.APIConnectionError(request=mock.Mock(url="https://x/v1")): "network",
             ConnectionResetError("reset"): "network",
+            openai.APIError("This model is currently unavailable. Please try again later.",
+                            request=mock.Mock(url="https://x/v1"), body=None): "server",
         }
         for failure, kind in cases.items():
             self.assertEqual(errors.classify(failure).kind, kind)

@@ -318,6 +318,7 @@ interface Ctx {
   } | null;
   retryCard: HTMLDivElement | null;
   phaseEl: string | null;
+  phaseCard: HTMLDivElement | null;
   retryTick: RetryTick | null;
   retryTimer: number | null;
   streamPre: HTMLDivElement | null;
@@ -488,6 +489,7 @@ function makeCtx(
     retryTick: null,
     retryTimer: null,
     phaseEl: null,
+    phaseCard: null,
     streamPre: null,
     streamWrap: null,
     streamText: [],
@@ -1245,20 +1247,36 @@ function showPhase(ctx: Ctx, phase: string | null): void {
   // A new turn resets the marker sequence; the markers already in the
   // transcript stay, so the run reads as a timeline rather than being wiped.
   if (phase === null) {
+    // The turn is over (successfully or not): the phase that was in progress
+    // stops spinning, so a finished run never leaves a live "Planning…" or
+    // "Building…" pill above its result - or above an error card.
+    settlePhaseCard(ctx);
     ctx.phaseEl = null;
     return;
   }
   if (phase === "reviewing") return; // shown in the status bar + decision cards, not repeated here
   if (phase === ctx.phaseEl) return; // dedup consecutive
   ctx.phaseEl = phase;
+  settlePhaseCard(ctx);
   const d = document.createElement("div");
   d.className = `phase phase-${phase}`;
   const terminal =
     phase === "completed" || phase === "failed" || phase === "blocked";
   d.innerHTML = `${terminal ? "" : `<span class="spin"></span>`}<span>${escapeHtml(PHASE_LABEL[phase] ?? phase)}</span>`;
   ctx.chatBody.appendChild(d);
+  ctx.phaseCard = d;
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
+}
+
+/* Only the newest phase marker is "in progress"; the ones before it are
+   history, and history does not spin. */
+function settlePhaseCard(ctx: Ctx): void {
+  const card = ctx.phaseCard;
+  ctx.phaseCard = null;
+  if (!card || !card.isConnected) return;
+  card.querySelector(".spin")?.remove();
+  card.classList.add("settled");
 }
 const toolSeq: Record<string, number> = {};
 function finishToolLine(ctx: Ctx, callId: string | null, result: string): void {

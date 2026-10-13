@@ -226,6 +226,13 @@ def classify(exc, api_key=None, model=None, model_id=None, kind=None):
     mapped = kind
     if mapped is None:
         mapped = _by_name(name) or _by_status(status) or _by_text(text)
+        if mapped is None and name == "APIError" and status is None:
+            # The SDK raises the base APIError when it cannot map the
+            # provider's answer onto one of its status errors. That opaque
+            # failure belongs to the provider ("This model is currently
+            # unavailable. Please try again later." is exactly this shape), so
+            # it is worth another try instead of ending the turn on the spot.
+            mapped = "server"
     if mapped == "stream_interrupted":
         return ModelError("stream_interrupted", detail, status=status,
                           retry_after=retry_after, model=model, model_id=model_id,

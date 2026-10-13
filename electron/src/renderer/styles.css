@@ -1160,6 +1160,11 @@ button {
   background: var(--accent-soft);
   border-radius: 999px;
 }
+/* a phase the run has moved past (or a turn that ended): history, not status */
+.phase.settled {
+  color: var(--text-3);
+  background: var(--panel-2);
+}
 
 /* the plan, shown in full before it is built */
 .msg.plan-card {
