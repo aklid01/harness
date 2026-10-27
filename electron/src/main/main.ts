@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain } from "electron";
-import { spawn, ChildProcess } from "node:child_process";
+import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -20,6 +20,12 @@ function log(tag: string, message: string): void {
 
 function repoRoot(): string {
   return path.resolve(__dirname, "..", "..", "..");
+}
+
+function venvPython(): string {
+  return process.platform === "win32"
+    ? path.join(repoRoot(), ".venv", "Scripts", "python.exe")
+    : path.join(repoRoot(), ".venv", "bin", "python");
 }
 
 function preferredPort(): number {
@@ -140,9 +146,7 @@ async function pickPort(): Promise<number> {
 function spawnProc(port: number, projectRoot: string): ChildProcess {
   const { appDataDir } = sidecarPaths();
   const root = repoRoot();
-  const args = [
-    "run",
-    "python",
+  const tail = [
     "-m",
     "harness.server",
     "--port",
@@ -152,14 +156,20 @@ function spawnProc(port: number, projectRoot: string): ChildProcess {
     "--app-data-dir",
     appDataDir,
   ];
-  log("main", `spawning backend: uv ${args.join(" ")} (cwd=${root})`);
+  // uv is the documented entry point, but a machine without it still has the
+  // synced venv: fall back to its interpreter instead of failing to start.
+  const useUv =
+    spawnSync("uv", ["--version"], { stdio: "ignore" }).error == null;
+  const cmd = useUv ? "uv" : venvPython();
+  const args = useUv ? ["run", "python", ...tail] : tail;
+  log("main", `spawning backend: ${cmd} ${args.join(" ")} (cwd=${root})`);
   try {
-    return spawn("uv", args, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+    return spawn(cmd, args, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
   } catch (err) {
     log("main", `spawn threw synchronously: ${String(err)}`);
     dialog.showErrorBox(
       "Harness backend failed",
-      `Could not spawn uv: ${String(err)}`,
+      `Could not spawn ${cmd}: ${String(err)}`,
     );
     throw err;
   }
