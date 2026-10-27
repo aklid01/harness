@@ -8,6 +8,10 @@ approved action runs exactly once, a revise holds the action and returns the
 correction, a coding agent that keeps insisting is bounded and finally escalated
 rather than looping, a failed reviewer is held for high-risk shell but not for a
 lower-risk edit, and nothing here can run a tool the permission layer would deny.
+A third layer covers the review-budget rules: a file's first edit in a turn is
+the decision, further small edits to it ride that verdict, a large rewrite or a
+new turn re-opens it, and a call the human already approved through the
+permission dialog is never sent to the reviewer a second time.
 """
 
 import json
@@ -471,6 +475,97 @@ class GateCase(unittest.TestCase):
         self.reviews = [{"verdict": "revise", "reasoning": "r", "correction": "c"}]
         self.run_submit()
         self.assertEqual(len(self.review_calls), 1, "the checker does not review its own verdict")
+
+    # ---- the review budget: one decision per file per turn ---------------
+
+    def test_a_second_small_edit_to_a_reviewed_file_rides_the_verdict(self):
+        self.enable()
+        self.coding = [
+            reply("", [("write_file", {"path": str(self.target("f.txt")), "content": "one"})]),
+            reply("", [("str_replace", {"path": str(self.target("f.txt")),
+                                        "old_str": "one", "new_str": "two"})]),
+            reply("ok"),
+        ]
+        self.reviews = [{"verdict": "approve"}]
+        self.run_submit()
+        self.assertEqual(len(self.review_calls), 1,
+                         "the follow-up edit on the same file rides the approved verdict")
+        self.assertEqual(self.target("f.txt").read_text(), "two", "and the edit still ran")
+        self.assertEqual([s for s in self.decision_statuses() if s != "reviewing"],
+                         ["approved"])
+
+    def test_a_large_rewrite_of_a_reviewed_file_is_re_reviewed(self):
+        self.enable()
+        self.coding = [
+            reply("", [("write_file", {"path": str(self.target("f.txt")), "content": "one"})]),
+            reply("", [("write_file", {"path": str(self.target("f.txt")), "content": "x" * 5000})]),
+            reply("ok"),
+        ]
+        self.reviews = [{"verdict": "approve"}, {"verdict": "approve"}]
+        self.run_submit()
+        self.assertEqual(len(self.review_calls), 2,
+                         "a rewrite far larger than a follow-up is its own decision")
+
+    def resubmit(self, text):
+        self.sent.clear()
+        self.backend.dispatch({"op": "submit", "session": "s", "text": text,
+                               "mode": "build", "req_id": time.time_ns()})
+        self.assertTrue(self.done("s"))
+        time.sleep(0.1)
+
+    def test_a_new_turn_reviews_the_file_again(self):
+        self.enable()
+        self.coding = [
+            reply("", [("write_file", {"path": str(self.target("f.txt")), "content": "one"})]),
+            reply("first turn done"),
+            reply("", [("str_replace", {"path": str(self.target("f.txt")),
+                                        "old_str": "one", "new_str": "two"})]),
+            reply("second turn done"),
+        ]
+        self.reviews = [{"verdict": "approve"}, {"verdict": "approve"}]
+        self.run_submit()
+        self.resubmit("continue")
+        self.assertEqual(len(self.review_calls), 2,
+                         "each turn's first edit to a file is its own decision")
+
+    def test_low_intensity_skips_follow_up_edits_on_touched_files(self):
+        self.enable(intensity="low")
+        self.coding = [
+            reply("", [("write_file", {"path": str(self.target("f.txt")), "content": "one"})]),
+            reply("first turn done"),
+            reply("", [("str_replace", {"path": str(self.target("f.txt")),
+                                        "old_str": "one", "new_str": "two"})]),
+            reply("ok"),
+        ]
+        self.reviews = [{"verdict": "approve"}]
+        self.run_submit()
+        self.resubmit("continue")
+        self.assertEqual(len(self.review_calls), 1,
+                         "at low intensity a small follow-up on a touched file is not a decision")
+        self.assertEqual(self.target("f.txt").read_text(), "two", "and it still ran")
+
+    def test_a_user_approved_call_skips_the_reviewer_when_reproposed(self):
+        real_interact = events.interact
+        approvals = []
+
+        def approve(kind, payload):
+            if kind == events.APPROVAL:
+                approvals.append(payload)
+                return True
+            return real_interact(kind, payload)
+
+        self.enable()
+        self.coding = [
+            reply("", [("bash", {"command": "pip install requests"})]),
+            reply("", [("bash", {"command": "pip install requests"})]),
+            reply("ok"),
+        ]
+        self.reviews = [{"verdict": "approve"}]
+        with mock.patch("harness.events.interact", side_effect=approve):
+            self.run_submit()
+        self.assertEqual(len(self.review_calls), 1,
+                         "the identical re-proposal rides the human's approval")
+        self.assertEqual(len(approvals), 2, "the permission layer still asks every time")
 
 
 if __name__ == "__main__":

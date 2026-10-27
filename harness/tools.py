@@ -142,6 +142,11 @@ def _resolve(path):
     return paths.project_root() / p
 
 
+def resolve_path(path):
+    """The resolved path of a model-provided argument, as execute() would set it."""
+    return str(_resolve(path))
+
+
 def bash(command: str) -> str:
     """Run a shell command and return its combined stdout and stderr."""
     try:
@@ -289,6 +294,9 @@ def execute(tool_call, note="", call_key=None):
             info = approval_info(name, args, reason, note)
             if not events.interact(events.APPROVAL, info):
                 return args, "The user denied this tool call."
+            _USER_APPROVED.append((name, dict(args)))
+            while len(_USER_APPROVED) > _USER_APPROVED_LIMIT:
+                _USER_APPROVED.pop(0)
         if name in ("write_file", "str_replace"):
             outcome = args, _tracked_write(name, args)
         else:
@@ -309,6 +317,17 @@ def execute(tool_call, note="", call_key=None):
 # most recent calls are remembered, which is the window a retry can land in.
 _EXECUTED: dict = {}
 _EXECUTED_LIMIT = 64
+
+# Calls a human approved through the permission dialog, newest last. A re-run
+# of an identical call then skips the decision reviewer: the user already
+# looked at exactly this action.
+_USER_APPROVED: list = []
+_USER_APPROVED_LIMIT = 32
+
+
+def user_approved(name, args):
+    """Was this exact call approved by the user through the permission dialog?"""
+    return any(n == name and a == args for n, a in _USER_APPROVED)
 
 
 def _remember(call_key, outcome):

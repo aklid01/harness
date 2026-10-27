@@ -35,6 +35,10 @@ RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 # (read_file, read_skill) or a todo bookkeeping call is not a decision.
 REVIEWABLE = ("write_file", "str_replace", "bash")
 
+# A focused follow-up edit: combined old+new text under this many chars on a
+# file the session has already edited is routine work, not a fresh decision.
+SMALL_EDIT_CHARS = 2000
+
 # How much gets reviewed at each intensity, as the minimum command risk.
 _MIN_RISK_BY_INTENSITY = {"low": "high", "medium": "medium", "high": "low"}
 
@@ -54,24 +58,46 @@ def command_risk(command):
     return permissions.classify_bash(command)[0]
 
 
-def decision_risk(name, args):
-    """How significant this *specific* call is as a decision, or None to skip."""
+def decision_risk(name, args, touched=()):
+    """How significant this *specific* call is as a decision, or None to skip.
+
+    ``touched`` holds the paths this session has already edited. Editing
+    source is what this feature exists to check, so a first touch, a new file
+    or a large rewrite is always high; a small change to a file the session
+    is already working in is follow-up work and grades medium.
+    """
     if name not in REVIEWABLE:
         return None
     if name in ("write_file", "str_replace"):
-        return "high"  # editing source is the decision this feature exists to check
+        if str(args.get("path") or "") in touched and _small_edit(name, args):
+            return "medium"
+        return "high"
     if name == "bash":
         return command_risk(args.get("command", ""))
     return None
+
+
+def _small_edit(name, args):
+    if name == "str_replace":
+        size = len(str(args.get("old_str") or "")) + len(str(args.get("new_str") or ""))
+    else:
+        size = len(str(args.get("content") or ""))
+    return size <= SMALL_EDIT_CHARS
+
+
+def is_small_edit(name, args):
+    """Would this call count as a small follow-up? The per-file review-once
+    rule lets these ride on an earlier verdict; anything bigger re-reviews."""
+    return name in ("write_file", "str_replace") and _small_edit(name, args)
 
 
 def min_review_risk(intensity):
     return _MIN_RISK_BY_INTENSITY.get(intensity, "medium")
 
 
-def wants_review(name, args, intensity):
+def wants_review(name, args, intensity, touched=()):
     """Should this call be sent to the reviewer at this intensity?"""
-    risk = decision_risk(name, args)
+    risk = decision_risk(name, args, touched)
     return risk is not None and risk_ge(risk, min_review_risk(intensity))
 
 

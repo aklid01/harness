@@ -13,6 +13,7 @@ from . import oversight
 from . import plan as plan_mod
 from . import texttools
 from . import session
+from . import tools
 from .context import reminder
 from .errors import ModelError
 from . import errors as errors_mod
@@ -88,6 +89,9 @@ class Runner:
         self._build_started = False     # idempotent: build runs at most once per task
         self._review_log: dict = {}     # decision fingerprint -> prior verdicts
         self._stop_turn = False         # set when oversight escalates: stop safely
+        self._touched: set = set()      # files this session has edited (resolved)
+        self._reviewed_files: set = set()   # files whose first edit this turn was approved
+        self._user_approved: set = set()    # fingerprints a human approved this turn
         self._request_prefix = f"r{next(TURN_KEYS)}"
         self.messages = [{"role": "system", "content": system_prompt(mode)}]
         if resume:
@@ -471,7 +475,13 @@ class Runner:
     def _needs_review(self, name, args):
         if not self._oversight or self.mode == "plan":
             return False
-        return oversight.wants_review(name, args, self._oversight.get("intensity", "medium"))
+        probe = args
+        if name in ("write_file", "str_replace") and isinstance(args, dict):
+            # Grade against the resolved path: the touched set holds what
+            # execute() actually wrote, and the model may have used a relative one.
+            probe = {**args, "path": tools.resolve_path(args.get("path") or "")}
+        return oversight.wants_review(name, probe, self._oversight.get("intensity", "medium"),
+                                      touched=self._touched)
 
     def _held(self, headline, body):
         """A tool result that says an action was reviewed and NOT run."""
@@ -499,6 +509,15 @@ class Runner:
             return None
 
         fp = oversight.fingerprint(name, args)
+        # Two ways a judgment already happened and the reviewer need not run
+        # again: a human approved this exact call through the permission
+        # dialog this turn, or this file's first edit this turn was approved
+        # and this is another small change to it.
+        if fp in self._user_approved or (
+                name in ("write_file", "str_replace")
+                and tools.resolve_path(args.get("path") or "") in self._reviewed_files
+                and oversight.is_small_edit(name, args)):
+            return None
         history = self._review_log.get(fp, [])
         try:
             max_rounds = max(1, int(self._oversight.get("max_rounds") or 1))
@@ -569,6 +588,8 @@ class Runner:
 
         if verdict.verdict == "approve":
             events.emit(events.DECISION, {**payload, "status": "approved"})
+            if name in ("write_file", "str_replace"):
+                self._reviewed_files.add(tools.resolve_path(args.get("path") or ""))
             return None
 
         # revise / clarify / escalate -> hold and hand back the reviewer's guidance
@@ -711,6 +732,8 @@ class Runner:
         self._text_retries = 0
         self._text_calls = set()
         self._review_log = {}
+        self._reviewed_files = set()
+        self._user_approved = set()
         self._stop_turn = False
         # Build's own budget, independent of the plan and review phases.
         self._build_budget = budget.Budget(tool_calls=BUILD_MAX_TOOLS)
@@ -887,6 +910,9 @@ class Runner:
                     self._stop_turn = True
                     break
                 review_marker = None
+                # Fingerprinted before execute() resolves paths, so a re-proposed
+                # identical call fingerprints the same way it did at review time.
+                decision_fp = oversight.fingerprint(name, args)
                 if self.mode == "plan" and name in ("write_file", "str_replace"):
                     result = f"Plan mode: read-only, no edits made. Describe the change instead of calling {name}."
                 else:
@@ -903,6 +929,14 @@ class Runner:
                         # a re-entered stream replays the recorded result.
                         args, result = execute(tool_call, note=(message.content or ""),
                                                call_key=(request_id, call_id or index))
+                        if tools.user_approved(name, args):
+                            self._user_approved.add(decision_fp)
+                        if (name in ("write_file", "str_replace")
+                                and not str(result).startswith(
+                                    ("Error:", "Blocked by policy:", "The user denied"))):
+                            # A landed edit: later small edits to this file are
+                            # follow-up work on a decision already reviewed.
+                            self._touched.add(str(args.get("path") or ""))
                         self._reconcile_todos(name, args, result)
                 extra = {"reviewed": review_marker} if review_marker else {}
                 events.emit(events.TOOL_CALL, {"call_id": call_id, "name": name, "args": args, "nested": False, "agent": "build", **extra})
