@@ -1012,6 +1012,7 @@ def main(argv=None):
 
     paths_mod.init(project_root=args.project_root, app_data_dir=args.app_data_dir)
     paths_mod.migrate_providers()
+    paths_mod.migrate_sessions()
     config_mod.reload()
     session_mod.migrate_root_sessions()
     get_backend()

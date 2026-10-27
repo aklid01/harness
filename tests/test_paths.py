@@ -34,9 +34,15 @@ class PathsCase(unittest.TestCase):
         self.assertEqual(paths.providers_file(), self.appdata.resolve() / "providers.json")
 
     def test_session_dir_uses_explicit_root(self):
-        expected = Path.home() / ".agents" / "sessions" / paths.slug_for(self.project)
+        expected = self.appdata.resolve() / "sessions" / paths.slug_for(self.project)
         self.assertEqual(paths.session_dir(), expected)
+        self.assertEqual(paths.sessions_root(), self.appdata.resolve() / "sessions")
         self.assertEqual(session._dir(), expected)
+
+    def test_sessions_root_override_wins(self):
+        os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "elsewhere")
+        self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
+        self.assertEqual(paths.sessions_root(), Path(self.tmp.name) / "elsewhere")
 
     def test_migrate_copies_legacy_file_once(self):
         legacy = self.project / "providers.json"
@@ -61,7 +67,41 @@ class PathsCase(unittest.TestCase):
         other = Path(self.tmp.name) / "other"
         other.mkdir()
         paths.init(project_root=other, app_data_dir=self.appdata)
-        self.assertNotEqual(paths.session_dir(), Path.home() / ".agents" / "sessions" / paths.slug_for(self.project))
+        self.assertNotEqual(paths.session_dir(),
+                            self.appdata.resolve() / "sessions" / paths.slug_for(self.project))
+
+    def test_migrate_sessions_moves_legacy_home_tree(self):
+        home = Path(self.tmp.name) / "home"
+        legacy = home / ".agents" / "sessions"
+        slug = paths.slug_for(self.project)
+        (legacy / slug).mkdir(parents=True)
+        (legacy / slug / "20260101-000000.jsonl").write_text("{}\n")
+        with mock.patch.object(Path, "home", return_value=home):
+            moved = paths.migrate_sessions()
+        self.assertEqual(moved, legacy)
+        self.assertTrue((paths.sessions_root() / slug / "20260101-000000.jsonl").exists())
+        self.assertFalse(legacy.exists())
+
+    def test_migrate_sessions_refuses_a_data_dir_in_use(self):
+        home = Path(self.tmp.name) / "home"
+        legacy = home / ".agents" / "sessions"
+        legacy.mkdir(parents=True)
+        (legacy / "20260101-000000.jsonl").write_text("{}\n")
+        live = paths.sessions_root()
+        live.mkdir(parents=True, exist_ok=True)
+        (live / "keep.jsonl").write_text("{}\n")
+        with mock.patch.object(Path, "home", return_value=home):
+            moved = paths.migrate_sessions()
+        self.assertIsNone(moved)
+        self.assertTrue(legacy.exists())
+        self.assertTrue((live / "keep.jsonl").exists())
+
+    def test_migrate_sessions_disabled_under_override(self):
+        os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "elsewhere")
+        self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
+        with mock.patch.object(Path, "home", return_value=Path(self.tmp.name)):
+            moved = paths.migrate_sessions()
+        self.assertIsNone(moved)
 
 
 if __name__ == "__main__":

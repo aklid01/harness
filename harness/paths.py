@@ -125,12 +125,40 @@ def migrate_providers() -> Path | None:
     return None
 
 
+def migrate_sessions() -> Path | None:
+    """Move the legacy ~/.agents/sessions tree into the app data dir.
+
+    Sessions used to live under the home dotfolder while config lived in the
+    app data dir, so a data-dir move left every transcript behind. Only an
+    empty or missing target is filled - never merge into a data dir already
+    in use - and the HARNESS_SESSIONS_ROOT override disables it entirely so
+    test isolation never touches the real home.
+    """
+    if os.environ.get("HARNESS_SESSIONS_ROOT"):
+        return None
+    legacy = Path.home() / ".agents" / "sessions"
+    target = sessions_root()
+    try:
+        if legacy.resolve() == target.resolve() or not legacy.is_dir():
+            return None
+        if target.exists():
+            if any(target.iterdir()):
+                return None
+            target.rmdir()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(target)
+        return legacy
+    except OSError:
+        return None
+
+
 def sessions_root() -> Path:
-    """Where transcripts live. Isolated for tests via HARNESS_SESSIONS_ROOT."""
+    """Where transcripts live: inside the app data dir, next to the config it
+    belongs with. Isolated for tests via HARNESS_SESSIONS_ROOT."""
     override = os.environ.get("HARNESS_SESSIONS_ROOT")
     if override:
         return Path(override).expanduser()
-    return Path.home() / ".agents" / "sessions"
+    return app_data_dir() / "sessions"
 
 
 def session_dir(root: Path | str | None = None) -> Path:
