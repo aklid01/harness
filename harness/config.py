@@ -27,15 +27,11 @@ def reload():
 
 reload()
 
-try:
-    BASE_URL = os.environ["BASE_URL"]
-    API_KEY = os.environ["API_KEY"]
-except KeyError as missing:
-    raise SystemExit(
-        f"Missing {missing}. Set it in the environment, in ./.env, or in "
-        f"~/.agents/env. See .env.example. Free OpenAI-compatible "
-        f"endpoints are listed in settings.json."
-    ) from None
+# Optional: the keyring is the primary credential source. These only matter
+# for the legacy no-registry flow, and a missing key surfaces at request time
+# as a no_key error instead of killing the engine at import.
+BASE_URL = os.environ.get("BASE_URL")
+API_KEY = os.environ.get("API_KEY")
 
 MODEL = os.environ.get("MODEL", "deepseek/deepseek-v4-flash")
 
