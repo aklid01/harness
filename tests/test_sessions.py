@@ -10,6 +10,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
+from harness import paths  # noqa: E402
 from harness import session  # noqa: E402
 
 
@@ -17,9 +18,11 @@ class SessionCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(os.path.abspath("tmp-session-test"))
         self.tmp.mkdir(exist_ok=True)
-        self.dir = self.tmp / "sessions"
-        mock.patch.object(session, "SESSION_DIR", self.dir).start()
-        mock.patch.object(session, "TITLES_FILE", self.dir / "titles.json").start()
+        os.environ["HARNESS_SESSIONS_ROOT"] = str(self.tmp / "sessions")
+        self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
+        paths.init(project_root=self.tmp, app_data_dir=self.tmp / "appdata")
+        self.addCleanup(paths.reset)
+        self.dir = paths.session_dir()
         mock.patch.object(session, "CURRENT", "20260101-000000").start()
         mock.patch.object(session, "WRITTEN", 0).start()
         self.old_cwd = os.getcwd()
@@ -31,9 +34,6 @@ class SessionCase(unittest.TestCase):
         import shutil
 
         shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def test_project_name_is_filename_safe(self):
-        self.assertNotRegex(session.PROJECT, r"[:\\\\/]")
 
     def test_save_load_roundtrip(self):
         messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "hello"}]

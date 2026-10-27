@@ -10,11 +10,6 @@ from pathlib import Path
 
 from . import paths
 
-PROJECT = re.sub(r"[^A-Za-z0-9._-]+", "-", str(Path.cwd().resolve())).strip("-")
-SESSION_DIR = Path.home() / ".agents" / "sessions" / PROJECT
-TITLES_FILE = SESSION_DIR / "titles.json"
-_DEFAULT_DIR = Path(SESSION_DIR)
-_DEFAULT_TITLES = Path(TITLES_FILE)
 CURRENT = datetime.now().strftime("%Y%m%d-%H%M%S")
 WRITTEN = 0
 
@@ -75,22 +70,14 @@ def _dir():
     r = _ROOT.get()
     if r is not None:
         return paths.session_dir(r)
-    if Path(SESSION_DIR) != _DEFAULT_DIR:
-        return Path(SESSION_DIR)
-    if paths.is_initialized():
-        return paths.session_dir()
-    return Path(SESSION_DIR)
+    return paths.session_dir()
 
 
 def _titles_path():
     r = _ROOT.get()
     if r is not None:
         return paths.titles_file(r)
-    if Path(TITLES_FILE) != _DEFAULT_TITLES:
-        return Path(TITLES_FILE)
-    if paths.is_initialized():
-        return paths.titles_file()
-    return Path(TITLES_FILE)
+    return paths.titles_file()
 
 
 def migrate_root_sessions():
