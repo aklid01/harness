@@ -268,12 +268,56 @@ try {
     JSON.stringify(panel),
   );
 
+  /* The Storage tab is driven entirely by the Electron main process, so it is
+     checked before the turns: it must pass even when the engine never starts. */
+  await evaluate(ws, `document.getElementById("btnSettings")?.click()`);
+  await sleep(400);
+  await evaluate(
+    ws,
+    `document.querySelector(".settings-nav [data-nav='storage']")?.click()`,
+  );
+  let storage = { rows: 0, labels: [], dataFolder: "", sessions: "" };
+  for (let i = 0; i < 10 && !storage.rows; i++) {
+    await sleep(400);
+    storage = await evaluate(
+      ws,
+      `(() => {
+      const rows = [...document.querySelectorAll("#storageBody .set-row")];
+      const labelOf = (row) => row.querySelector(".set-label")?.textContent ?? "";
+      const sessionsRow = rows.find((r) => labelOf(r).startsWith("Sessions"));
+      return {
+        rows: rows.length,
+        labels: rows.map(labelOf),
+        dataFolder: rows[0]?.querySelector(".set-desc[title]")?.getAttribute("title") ?? "",
+        sessions: sessionsRow?.querySelector(".set-desc[title]")?.getAttribute("title") ?? "",
+        canChange: Boolean(document.getElementById("storageChange")),
+      };
+    })()`,
+    );
+  }
+  verdict(
+    "storage-tab-lists-locations",
+    storage.rows >= 3 &&
+      storage.labels[0]?.startsWith("Data folder") &&
+      storage.dataFolder.length > 0 &&
+      storage.sessions.startsWith(storage.dataFolder) &&
+      storage.canChange,
+    JSON.stringify(storage),
+  );
+  await evaluate(
+    ws,
+    `document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))`,
+  );
+  await sleep(300);
+
   /* Two turns against the dead endpoint: the first one fails hard, the second
-     runs in a second session, so there is something to switch between. */
+     runs in a second session, so there is something to switch between. The
+     final error card lands only after the retry schedule is spent (3+5+15+
+     20+30s), so the poll has to span all of it. */
   await submit(ws, "first turn");
   let ticks = [];
   let final = { errors: [], hints: [] };
-  for (let i = 0; i < 16; i++) {
+  for (let i = 0; i < 90; i++) {
     await sleep(1000);
     const state = await snapshot(ws);
     if (state.retryCards.length)
