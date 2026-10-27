@@ -68,9 +68,9 @@ def workspace_readable():
 
 
 def skills_installed():
-    from .skills import SKILLS
+    from .skills import find_skills
 
-    return bool(SKILLS)
+    return bool(find_skills())
 
 
 def _reason_for(name):
