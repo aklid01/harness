@@ -82,6 +82,9 @@ const ICONS = {
   branch: stroke(
     '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   ),
+  storage: stroke(
+    '<line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/>',
+  ),
 };
 
 /* ---------------- preferences (global, localStorage) ---------------- */
@@ -3720,6 +3723,7 @@ const SETTINGS_TABS = [
   { id: "themes", label: "Themes", icon: ICONS.palette },
   { id: "general", label: "General", icon: ICONS.sliders },
   { id: "workspace", label: "Workspace", icon: ICONS.folder },
+  { id: "storage", label: "Storage", icon: ICONS.storage },
   { id: "interface", label: "Interface", icon: ICONS.layout },
 ];
 function openSettings(tab = settingsLastTab): void {
@@ -3783,6 +3787,7 @@ function settingsPanel(tab: string): [string, () => void] {
   if (tab === "themes") return settingsThemes();
   if (tab === "general") return settingsGeneral();
   if (tab === "workspace") return settingsWorkspace();
+  if (tab === "storage") return settingsStorage();
   if (tab === "interface") return settingsInterface();
   if (tab === "agents") return settingsAgents();
   return settingsModels();
@@ -4085,6 +4090,99 @@ function settingsWorkspace(): [string, () => void] {
           openTab(root, "resume", null);
         };
       });
+  };
+  return [html, wire];
+}
+function settingsStorage(): [string, () => void] {
+  const html =
+    `<p class="sub">Where Harness keeps its data. Changing the data folder applies after a restart; existing data stays where it is.</p>` +
+    `<div id="storageBody"><div class="panel-empty">Loading…</div></div>`;
+  const wire = (): void => {
+    void window.harness?.storageInfo().then((info) => {
+      const body = el<HTMLDivElement>("storageBody");
+      if (!body) return;
+      const restart = `<div class="mig-note" id="storageRestart" style="display:none">${ICONS.info}<span>Restart Harness to use the new data folder.</span><button class="btn small" id="storageRestartNow">Restart now</button></div>`;
+      const row = (
+        label: string,
+        desc: string,
+        value: string,
+        ctl: string,
+      ): string =>
+        `<div class="set-row"><div class="set-info"><div class="set-label">${label}</div><div class="set-desc">${desc}</div><div class="set-desc" title="${escapeHtml(value)}">${escapeHtml(value)}</div></div><div class="set-ctl">${ctl}</div></div>`;
+      const openBtn = (target: string): string =>
+        `<button class="btn small" data-open="${escapeHtml(target)}">Open</button>`;
+      const badge =
+        info.source === "custom"
+          ? " (custom)"
+          : info.source === "env"
+            ? " (set by HARNESS_APP_DATA)"
+            : "";
+      const custom = info.source === "custom";
+      body.innerHTML =
+        restart +
+        row(
+          `Data folder${badge}`,
+          "Transcripts, checkpoints, providers.json, agents.json and the app's AGENTS.md.",
+          info.dataDir,
+          `${openBtn(info.dataDir)}<button class="btn small" id="storageChange">Change…</button>`,
+        ) +
+        row(
+          "Sessions and checkpoints",
+          "One JSONL file per chat, named after the workspace it belongs to.",
+          info.sessionsDir,
+          openBtn(info.sessionsDir),
+        ) +
+        row(
+          "API keys",
+          "Stored in the OS keyring (service: harness), never written to a file.",
+          "",
+          "",
+        ) +
+        row(
+          "Workspace skills",
+          "Each workspace can add its own under .agents/skills; global skills live in ~/.agents/skills.",
+          activeCtx ? `${activeCtx.root}\\.agents\\skills` : "",
+          "",
+        ) +
+        (custom
+          ? row(
+              "Reset data folder",
+              "Go back to the default location. The custom folder is left untouched.",
+              "",
+              `<button class="btn small" id="storageReset">Reset to default</button>`,
+            )
+          : "");
+      body.querySelectorAll("[data-open]").forEach((b) => {
+        (b as HTMLButtonElement).onclick = () => {
+          void window.harness?.openPath(
+            (b as HTMLElement).dataset["open"] ?? "",
+          );
+        };
+      });
+      const showRestart = (): void => {
+        const banner = el<HTMLDivElement>("storageRestart");
+        if (banner) banner.style.display = "";
+      };
+      const change = body.querySelector<HTMLButtonElement>("#storageChange");
+      if (change)
+        change.onclick = () => {
+          void window.harness?.chooseDataDir().then((dir) => {
+            if (dir && dir !== info.dataDir) showRestart();
+          });
+        };
+      const reset = body.querySelector<HTMLButtonElement>("#storageReset");
+      if (reset)
+        reset.onclick = () => {
+          void window.harness?.resetDataDir().then((ok) => {
+            if (ok) showRestart();
+          });
+        };
+      const now = body.querySelector<HTMLButtonElement>("#storageRestartNow");
+      if (now)
+        now.onclick = () => {
+          void window.harness?.restartApp();
+        };
+    });
   };
   return [html, wire];
 }

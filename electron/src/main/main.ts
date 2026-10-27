@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, Menu, dialog, ipcMain, shell } from "electron";
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -111,13 +111,34 @@ function isDir(p: string): boolean {
   }
 }
 
+function defaultDataDir(): string {
+  return path.join(app.getPath("userData"), "harness");
+}
+
+function dataDirFile(): string {
+  return path.join(app.getPath("userData"), "harness", "data-dir.json");
+}
+
+function loadCustomDataDir(): string | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(dataDirFile(), "utf-8"));
+    const dir = (raw as { dataDir?: unknown }).dataDir;
+    if (typeof dir === "string" && dir) return dir;
+  } catch {
+    /* no override yet */
+  }
+  return null;
+}
+
+function currentDataDir(): string {
+  if (process.env.HARNESS_APP_DATA) return process.env.HARNESS_APP_DATA;
+  return loadCustomDataDir() ?? defaultDataDir();
+}
+
 function sidecarPaths(): { projectRoot: string; appDataDir: string } {
   const projectRoot =
     process.env.HARNESS_PROJECT_ROOT ?? loadLastWorkspace() ?? repoRoot();
-  const appDataDir =
-    process.env.HARNESS_APP_DATA ??
-    path.join(app.getPath("userData"), "harness");
-  return { projectRoot, appDataDir };
+  return { projectRoot, appDataDir: currentDataDir() };
 }
 
 function probePort(port: number): Promise<boolean> {
@@ -359,6 +380,61 @@ app.whenReady().then(async () => {
       log("main", `could not clear last workspace: ${String(err)}`);
     }
     return true;
+  });
+
+  ipcMain.handle("get-storage", async () => {
+    const dataDir = currentDataDir();
+    const source = process.env.HARNESS_APP_DATA
+      ? "env"
+      : loadCustomDataDir()
+        ? "custom"
+        : "default";
+    return {
+      dataDir,
+      source,
+      sessionsDir: path.join(dataDir, "sessions"),
+      providersFile: path.join(dataDir, "providers.json"),
+      agentsFile: path.join(dataDir, "agents.json"),
+    };
+  });
+
+  ipcMain.handle("choose-data-dir", async () => {
+    if (!win) return null;
+    const picked = await dialog.showOpenDialog(win, {
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (picked.canceled || !picked.filePaths.length) return null;
+    const dir = picked.filePaths[0];
+    try {
+      fs.mkdirSync(path.dirname(dataDirFile()), { recursive: true });
+      fs.writeFileSync(dataDirFile(), JSON.stringify({ dataDir: dir }));
+    } catch (err) {
+      log("main", `could not save data dir: ${String(err)}`);
+      return null;
+    }
+    return dir;
+  });
+
+  ipcMain.handle("reset-data-dir", async () => {
+    try {
+      fs.unlinkSync(dataDirFile());
+    } catch {
+      /* already gone */
+    }
+    return true;
+  });
+
+  ipcMain.handle("open-path", async (_event, target: string) => {
+    if (typeof target !== "string" || !target) return false;
+    const failure = await shell.openPath(target);
+    if (failure) log("main", `could not open ${target}: ${failure}`);
+    return !failure;
+  });
+
+  ipcMain.handle("restart-app", async () => {
+    killBackend();
+    app.relaunch();
+    app.exit(0);
   });
 
   app.on("activate", () => {
