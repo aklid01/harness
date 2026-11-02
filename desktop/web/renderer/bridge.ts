@@ -52,14 +52,22 @@ const harness: PreloadHarness = {
 
 window.harness = harness;
 
-void invoke<SidecarConfig>("sidecar_config")
-  .then((cfg) => {
+const readConfig = async (tries: number): Promise<void> => {
+  try {
+    const cfg = await invoke<SidecarConfig>("sidecar_config");
     configValue = cfg;
     onConfigHandler?.(cfg);
-  })
-  .catch(() => {
-    /* the renderer falls back to its default port and boots anyway */
-  });
+  } catch {
+    if (tries > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await readConfig(tries - 1);
+      return;
+    }
+    // No silent fallback: the renderer listens for this and parks visibly.
+    document.dispatchEvent(new Event("harness:config-failed"));
+  }
+};
+void readConfig(5);
 
 /* The window is frameless-less but the topbar acts as a title bar. Tauri's
    drag-region attribute handles the empty areas; this covers the rest so a

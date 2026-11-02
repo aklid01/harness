@@ -1098,10 +1098,10 @@ function retryFailedRequest(ctx: Ctx): void {
     setActivity("still busy - press Stop first");
     return;
   }
-  clearRetryCard(ctx);
-  dropFailureCard(ctx);
-  setBusy(ctx, true);
-  showThinking(ctx);
+  // Send first, retire the cards only once the engine accepts: a refused
+  // retry (engine busy) used to null ctx.failure and drop the error card,
+  // which left a thinking bubble for a turn that never started and no way
+  // back to the failure.
   if (
     !send(ctx, {
       op: "retry",
@@ -1110,9 +1110,13 @@ function retryFailedRequest(ctx: Ctx): void {
       mode: ctx.modeVal,
     })
   ) {
-    setBusy(ctx, false);
     setActivity("retry failed - engine busy");
+    return;
   }
+  clearRetryCard(ctx);
+  dropFailureCard(ctx);
+  setBusy(ctx, true);
+  showThinking(ctx);
 }
 /* Switching models after a failure: the session, its history and any unsaved
    composer text stay exactly where they are. */
@@ -1752,7 +1756,7 @@ function openTab(
   activateTab(ctx.id);
   if (connected) issueOpen(ctx);
   else void fetchRecents();
-  persistTabs();
+  persistTabs(root);
 }
 function refreshAllWorkspaceSessions(): void {
   if (!connected) return;
@@ -1774,7 +1778,7 @@ function closeTab(id: string): void {
   } else if (activeCtx === ctx)
     activateTab((tabs[idx] ?? tabs[idx - 1] ?? tabs[0]).id);
   else renderTabs();
-  persistTabs();
+  persistTabs(ctx.root);
 }
 
 /* Tabs are per-workspace state, so they are stored with the other per-workspace
@@ -1793,19 +1797,30 @@ function backUpPrefsOnce(): void {
     /* storage unavailable */
   }
 }
-function persistTabs(): void {
-  if (!activeCtx) return;
-  if (!(activeCtx.root in prefs.tabsByWs)) backUpPrefsOnce();
-  const refs: TabRef[] = tabs.map((t) => ({
-    session_id: t.sessionId,
-    title: t.sessionTitle,
-    mode: t.modeVal,
-    dirty:
-      t === activeCtx
-        ? Boolean(entry.value.trim())
-        : Boolean(t.entryDraft.trim()),
-  }));
-  prefs.tabsByWs[activeCtx.root] = refs;
+function persistTabs(changedRoot?: string): void {
+  /* Store each open tab under ITS OWN workspace root, not under whatever tab
+     is active: writing the active root's list was how closing a background
+     tab of another workspace (or closing the last tab, which nulls activeCtx)
+     left the closed tabs in prefs and resurrected them on restart. The
+     changed root is persisted even when it now has no tabs. */
+  const groups = new Map<string, TabRef[]>();
+  for (const t of tabs) {
+    const refs = groups.get(t.root) ?? [];
+    refs.push({
+      session_id: t.sessionId,
+      title: t.sessionTitle,
+      mode: t.modeVal,
+      dirty:
+        t === activeCtx
+          ? Boolean(entry.value.trim())
+          : Boolean(t.entryDraft.trim()),
+    });
+    groups.set(t.root, refs);
+  }
+  const root = changedRoot ?? activeCtx?.root;
+  if (root && !(root in prefs.tabsByWs)) backUpPrefsOnce();
+  for (const [wsRoot, refs] of groups) prefs.tabsByWs[wsRoot] = refs;
+  if (root && !groups.has(root)) prefs.tabsByWs[root] = [];
   savePrefs();
 }
 /* Reconcile persisted tab references against what actually exists on disk.
@@ -2250,9 +2265,14 @@ function removeWorkspace(ws: WorkspaceRef): void {
   }
   recents = recents.filter((r) => r.root !== ws.root);
   delete sessionsByRoot[ws.root];
+  // Every per-workspace key goes, not just three of five: leaving
+  // modeByWs/tabsByWs behind restored the removed workspace's old tabs and
+  // workflow mode when the same folder was re-added later.
   delete prefs.effortByWs[ws.root];
   delete prefs.providerByWs[ws.root];
   delete prefs.lastSessionByWs[ws.root];
+  delete prefs.modeByWs[ws.root];
+  delete prefs.tabsByWs[ws.root];
   window.harness?.forgetWorkspace(ws.root);
   savePrefs();
   renderTree();
@@ -2722,7 +2742,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         // The tab just became a real session: remember it so a restart brings
         // it back and nothing is left pointing at a session that exists only
         // in memory.
-        if (first) persistTabs();
+        if (first) persistTabs(ctx.root);
         ctx.sessionTitle = "New Session";
         // The failure outlives the session that produced it: it is a message
         // from the engine, and switching sessions keeps it on screen.
@@ -2743,7 +2763,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         if (title) {
           ctx.sessionTitle = title;
           if (ctx === activeCtx) renderTabs();
-          persistTabs();
+          persistTabs(ctx.root);
         }
         break;
       }
@@ -2966,13 +2986,21 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         showFailure(String(msg.error ?? "the model could not be saved"));
       else if (ctx === activeCtx)
         setActivity(`save failed: ${String(msg.error ?? "unknown")}`);
-    } else if (ctx === activeCtx)
-      setActivity(`provider change failed: ${String(msg.error ?? "unknown")}`);
+    } else {
+      // Any failed provider op disarms the pending auto-open: leaving it
+      // armed opened Settings out of nowhere on a later list_providers.
+      settingsRequested = false;
+      if (ctx === activeCtx)
+        setActivity(`provider change failed: ${String(msg.error ?? "unknown")}`);
+    }
   } else if (msg.reply === "retry") {
     if (msg.ok) {
       setBusy(ctx, true);
       showThinking(ctx);
-    } else if (ctx === activeCtx) setActivity("retry failed - engine busy");
+    } else {
+      setBusy(ctx, false);
+      if (ctx === activeCtx) setActivity("retry failed - engine busy");
+    }
   } else if (msg.reply === "git_create_branch") {
     if (msg.ok) {
       send(ctx, { op: "get_context" });
@@ -4257,6 +4285,11 @@ el<HTMLButtonElement>("btnSettings").onclick = () => {
   dlog("boot", "CLICK settings");
   settingsRequested = true;
   settingsLastTab = settingsLastTab || "models";
+  // Open immediately: the Storage tab is pure shell IPC and works even while
+  // the backend is down, and a dead send used to make this click do nothing
+  // at all. Backend-backed tabs render from whatever is cached and refresh
+  // when (and if) the list_providers reply arrives.
+  openSettings(settingsLastTab);
   if (!send(ensureAppCtx(), { op: "list_providers" }))
     settingsRequested = false;
   send(ensureAppCtx(), { op: "get_agents" });
@@ -4343,7 +4376,11 @@ document.addEventListener("keydown", (e) => {
     }
     closeAllMenus();
     hideContextMenu();
-    hideModal();
+    // dismissModal, not hideModal: Escape must ANSWER the dialog (a pick
+    // replies null, a dirty form confirms first), not silently drop it -
+    // the backdrop path was fixed for exactly this and Escape was the
+    // surviving sibling that left the engine's pick gate waiting 300s.
+    dismissModal();
     for (const t of tabs) t.pendingText = null;
     return;
   }
@@ -4432,7 +4469,7 @@ function restoreTabs(root: string): void {
   activateTab(tabs[tabs.length - 1].id);
   if (connected) for (const t of tabs) issueOpen(t);
   else void fetchRecents();
-  persistTabs();
+  persistTabs(root);
 }
 function boot(source: string): void {
   if (booted) return;
@@ -4468,5 +4505,17 @@ window.harness?.onConfig((cfg) => {
   boot("ipc");
 });
 setTimeout(() => {
-  if (!booted) boot("query");
+  if (booted) return;
+  // Only boots with a port in the URL (test/dev hosts) or no bridge at all
+  // may use the 8765 default: a Tauri boot dialing a guessed port would
+  // attach to whatever else answers there - another instance, or the user's
+  // real sidecar. Wait for the bridge instead.
+  if (location.search || !window.harness?.onConfig) boot("query");
 }, 2500);
+document.addEventListener("harness:config-failed", () => {
+  if (booted) return;
+  // The bridge could not read the shell config at all: park on a port
+  // nothing can listen on so the failure is visible instead of silent.
+  bootPort = "1";
+  boot("ipc-failed");
+});
