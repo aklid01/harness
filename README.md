@@ -63,6 +63,23 @@ them.
 The mode control locks while a turn runs: a mode binds a whole turn, so stop
 the turn to switch. Permission levels stay changeable mid-turn by design.
 
+While a turn runs, typing and pressing Enter files the message instead of
+dropping it. A **steer** joins the running conversation at the next
+model-call boundary (the current tool or answer finishes first), so the model
+adapts work in progress; if the turn ends first, the steer auto-sends after
+it. A **queue** waits for the turn to end, then runs as the next turn
+automatically. Pending messages show above the composer with a STEER or
+QUEUE badge and can be edited or removed until they are sent. The default
+(Enter) action is Queue, changeable in Settings > General; the caret next to
+Send picks the other one per message. If the provider fails, queued messages
+are discarded and named in the error card (their text returns to the
+composer); steers stay pending. A manual Stop keeps everything pending.
+
+Models that stream reasoning show it in a collapsible "Thinking" block above
+the answer (toggle next to the effort picker; the control appears only for
+models with reasoning enabled). Reasoning is kept in the transcript but is
+never sent back to the provider.
+
 ## Project rules
 
 Every workspace can keep its instructions in `AGENTS.md`, and they are
