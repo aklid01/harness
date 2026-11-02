@@ -565,5 +565,66 @@ class PlanFindings(RouteBase):
         self.assertTrue(any(u.startswith("<plan>") for u in users))
 
 
+class CancelMidBatch(RouteBase):
+    """A stopped or budget-capped turn must leave NO unanswered tool_call.
+
+    The assistant message is saved with all its tool_calls before any run; a
+    cancel that landed mid-batch used to abandon the rest with no result, and
+    every later request then 400s on the broken call/result pairing - Retry
+    could not heal it, only a manual rewind. The fix synthesizes a stub result
+    per unanswered call; this pins that invariant on the real transcript.
+    """
+
+    def test_cancel_mid_batch_answers_every_call(self):
+        from harness import agent as agent_mod
+
+        batch = reply("working", calls=[
+            ("read_file", {"path": "a.txt"}),
+            ("read_file", {"path": "b.txt"}),
+            ("read_file", {"path": "c.txt"}),
+        ])
+        first = {"n": 0}
+        real_execute = agent_mod.execute
+
+        def fake_call(messages, tools=None, on_delta=None, cancel=None):
+            first["n"] += 1
+            if first["n"] == 1:
+                return batch, USAGE
+            return reply("done"), USAGE
+
+        def spy(tool_call, **kwargs):
+            result = real_execute(tool_call, **kwargs)
+            # The user presses Stop right after the first call lands.
+            self.backend.sessions["s"].cancel.set()
+            return result
+
+        self.llm.side_effect = fake_call
+        with mock.patch("harness.agent.execute", side_effect=spy):
+            self.submit("read those files")
+
+        entries = []
+        sid = self.sid()
+        path = paths_mod.session_dir() / f"{sid}.jsonl"
+        for line in path.read_text(encoding="utf-8").splitlines():
+            entry = json.loads(line)
+            if "rewind_to" in entry:
+                del entries[entry["rewind_to"]:]
+            elif "compacted" not in entry:
+                entries.append(entry)
+
+        asked, answered = set(), set()
+        for m in entries:
+            for call in m.get("tool_calls") or []:
+                asked.add(call["id"])
+            if m.get("role") == "tool":
+                answered.add(m.get("tool_call_id"))
+        self.assertTrue(asked, "the batch was recorded")
+        self.assertEqual(asked, answered,
+                         "every tool_call id needs exactly one tool result")
+
+        # The turn ended cleanly and the session is free for the next request.
+        self.assertFalse(self.backend.sessions["s"].running)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

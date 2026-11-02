@@ -14,6 +14,7 @@ from . import plan as plan_mod
 from . import texttools
 from . import session
 from . import tools
+from . import context as context_mod
 from .context import reminder
 from .errors import ModelError
 from . import errors as errors_mod
@@ -53,9 +54,11 @@ PLAN_HANDOFF = (
 )
 
 # The planner is read-only by construction: these tools are simply not offered
-# to it, so it cannot change the workspace. This is stronger than the read-only
-# instruction in its prompt, mirroring how subagent.py fences a guest.
-PLAN_WITHHELD = {"write_file", "str_replace", "write_todos"}
+# to it, so it cannot change the workspace. `task` is withheld too: a subagent
+# has its own toolset and would open a second path around this fence. This is
+# stronger than the read-only instruction in its prompt, mirroring how
+# subagent.py fences a guest.
+PLAN_WITHHELD = {"write_file", "str_replace", "write_todos", "task"}
 PLAN_MAX_TURNS = 16  # a runaway planner is worse than a missing plan
 PLAN_MAX_TOOLS = 40  # the planner inspects; it is not a search budget
 BUILD_MAX_TOOLS = 200  # bound a runaway build; a healthy build stops on its own
@@ -93,6 +96,7 @@ class Runner:
         self._reviewed_files: set = set()   # files whose first edit this turn was approved
         self._user_approved: set = set()    # fingerprints a human approved this turn
         self._request_prefix = f"r{next(TURN_KEYS)}"
+        self._file_state = None  # git state snapshot taken at each turn start
         self.messages = [{"role": "system", "content": system_prompt(mode)}]
         if resume:
             saved = session.all_sessions()
@@ -469,7 +473,7 @@ class Runner:
         try:
             from . import todos as todos_mod
             if todos_mod.reconcile(name, args, result):
-                events.emit(events.TODOS, {"todos": todos_mod.TODOS})
+                events.emit(events.TODOS, {"todos": todos_mod.current()})
         except Exception:  # noqa: BLE001 - reconciliation is best-effort
             pass
     def _needs_review(self, name, args):
@@ -627,6 +631,22 @@ class Runner:
     def cancelled(self):
         return self.cancel_event is not None and self.cancel_event.is_set()
 
+    def _answer_pending_calls(self, message, start_index, note):
+        """Give every unanswered tool_call a tool result.
+
+        The assistant message is saved with ALL its tool_calls before any of
+        them run. Chat-completions requires one tool message per call id: a
+        call abandoned by a stop/budget exit would 400 every later request,
+        and Retry cannot heal it. Stub results keep the transcript valid.
+        """
+        for call in list(message.tool_calls)[start_index:]:
+            self.messages.append({
+                "role": "tool",
+                "tool_call_id": getattr(call, "id", None),
+                "content": note,
+            })
+        session.save(self.messages)
+
     def _model_label(self):
         caps = providers.active_model_capabilities()
         return caps.get("name") or caps.get("model")
@@ -742,10 +762,16 @@ class Runner:
             if message.get("role") == "user" and not str(message.get("content") or "").startswith("<"):
                 self._turn_text = str(message.get("content") or "")
                 break
+        usage = None  # bound by every call_llm that returns; None on early stop
+        history.begin_turn()  # this turn owns its spill files and no others
+        # Baseline for "changed since your last turn": the state at turn start.
+        # Fixed for the whole turn, so the note is stable across requests and
+        # edits the agent makes this turn surface on the next one.
+        self._file_state = context_mod.git_state()
         while True:
             if self.cancelled():
                 events.emit(events.NOTE, {"text": "stopped"})
-                return
+                break
             if self._stop_turn:
                 # Oversight escalated and already told the coding agent to hand
                 # the decision to the user. Stop the turn safely rather than
@@ -755,7 +781,7 @@ class Runner:
                             "disagreement is above for you to resolve",
                     "kind": "oversight_stopped"})
                 break
-            injection = reminder()
+            injection = reminder(baseline=self._file_state)
             if self.mode == "plan":
                 injection["content"] += (
                     "\n<mode>\nPlan mode: you are read-only. Explore, explain, and "
@@ -785,6 +811,14 @@ class Runner:
             events.emit(events.STATUS, {"active": active_form(), "role": "build"})
             self._step += 1
             request_id = f"{self._request_prefix}:{self._step}"
+            # Plan mode gets the same chokepoint the planner has: the withheld
+            # tools are not offered at all, so read-only does not depend on the
+            # model's cooperation. The post-hoc intercept below stays as the
+            # second fence for a model that emits one anyway.
+            turn_tools = None
+            if self.mode == "plan":
+                turn_tools = [s for s in tools.TOOL_SCHEMAS
+                              if s["function"]["name"] not in PLAN_WITHHELD]
             try:
                 on_delta = None
                 if self.stream:
@@ -792,20 +826,21 @@ class Runner:
                         if self.cancelled():
                             return
                         events.emit(events.MESSAGE_DELTA, {"text": text})
-                message, usage = call_llm(request, on_delta=on_delta,
+                message, usage = call_llm(request, tools=turn_tools,
+                                          on_delta=on_delta,
                                           cancel=self.cancel_event)
             except Exception as failure:  # noqa: BLE001 - report, don't kill the session
                 if self.cancelled():
                     events.emit(events.NOTE, {"text": "stopped"})
-                    return
+                    break
                 self._fail(failure)
-                return
+                break
             events.emit(events.STATUS, {"active": None})
             # A generation the user has moved on from (stop, model switch) is
             # abandoned here: its answer is not appended and its turn is over.
             if self.cancelled():
                 events.emit(events.NOTE, {"text": "stopped"})
-                return
+                break
 
             text_call, narration = (None, None)
             if not message.tool_calls:
@@ -886,12 +921,14 @@ class Runner:
             for index, tool_call in enumerate(message.tool_calls):
                 if self.cancelled():
                     events.emit(events.NOTE, {"text": "stopped"})
-                    return
+                    self._answer_pending_calls(message, index,
+                                               "Stopped by the user before this call ran.")
+                    break
                 name = tool_call.function.name
                 call_id = getattr(tool_call, "id", None)
                 try:
                     args = json.loads(tool_call.function.arguments)
-                except ValueError:
+                except (ValueError, TypeError):
                     args = {}
                 # Build's independent budget and no-progress guard: a runaway or
                 # stuck build stops with a clear status instead of grinding.
@@ -907,6 +944,9 @@ class Runner:
                                    "the request to continue."),
                         "kind": "build_budget"})
                     events.emit(events.PHASE, {"phase": "blocked"})
+                    self._answer_pending_calls(message, index,
+                                               "The turn stopped before this call ran "
+                                               "(budget or a repeated step).")
                     self._stop_turn = True
                     break
                 review_marker = None
@@ -953,10 +993,12 @@ class Runner:
                 if self._stop_turn:
                     # A escalation in this message stops the rest of the batch and
                     # the turn; the remaining calls were never run.
+                    self._answer_pending_calls(message, index + 1,
+                                               "The turn was stopped before this call ran.")
                     break
 
         history.sweep()   # the turn is over: bin its temp files
         history.strip(self.messages)  # ...and shrink the tool output it produced
 
-        if compact.needed(usage, providers.active_context_window()):
+        if usage and compact.needed(usage, providers.active_context_window()):
             self.messages = commands.compact(self.messages, providers.active_context_window())
