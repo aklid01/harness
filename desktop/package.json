@@ -1,0 +1,17 @@
+{
+  "name": "harness-desktop",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Tauri shell for the Harness Python engine",
+  "scripts": {
+    "build:web": "node scripts/build-web.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "npm run build:web && tauri dev",
+    "build": "npm run build:web && tauri build --no-bundle",
+    "bundle": "npm run build:web && tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "typescript": "^5.6.0"
+  }
+}

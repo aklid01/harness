@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Permissions granted to the Harness window",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
+}

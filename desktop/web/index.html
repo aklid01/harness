@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en" data-theme="neon">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Harness</title>
+    <script>
+      // Apply persisted appearance prefs before first paint to avoid a theme flash.
+      (function () {
+        var d = document.documentElement;
+        try {
+          var p = JSON.parse(localStorage.getItem("harness:prefs:v1") || "{}");
+          d.dataset.theme = p.theme || "neon";
+          if (p.fontScale) d.dataset.font = p.fontScale;
+          d.dataset.density = p.density || "comfortable";
+          if (p.reduceMotion) d.dataset.motion = "reduce";
+        } catch (e) {
+          d.dataset.theme = "neon";
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar" data-tauri-drag-region>
+        <div class="brand" data-tauri-drag-region>
+          <span class="brand-mark" aria-hidden="true" data-tauri-drag-region>
+            <svg
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+          </span>
+          <span class="brand-name" data-tauri-drag-region>Harness</span>
+        </div>
+        <div class="topbar-spacer" data-tauri-drag-region></div>
+        <div class="topbar-actions" data-tauri-drag-region>
+          <span
+            id="conn"
+            class="conn-pill connecting"
+            title="Sidecar connection"
+          >
+            <span class="conn-dot"></span>
+            <span id="connText">connecting…</span>
+          </span>
+          <span class="topbar-divider"></span>
+          <button
+            id="toggleLeft"
+            class="icon-btn active"
+            title="Toggle workspaces panel"
+            aria-label="Toggle workspaces panel"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="17"
+              height="17"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <line x1="9" y1="4" x2="9" y2="20" />
+            </svg>
+          </button>
+          <button
+            id="toggleRight"
+            class="icon-btn"
+            title="Toggle context panel"
+            aria-label="Toggle context panel"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="17"
+              height="17"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <line x1="15" y1="4" x2="15" y2="20" />
+            </svg>
+          </button>
+          <button
+            id="toggleLog"
+            class="icon-btn"
+            title="Toggle log drawer"
+            aria-label="Toggle log drawer"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="17"
+              height="17"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+          </button>
+          <button
+            id="btnSettings"
+            class="icon-btn"
+            title="Settings"
+            aria-label="Settings"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="17"
+              height="17"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+              />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="shell" class="hide-right">
+        <aside id="side" class="panel">
+          <div class="side-head">
+            <h2>Workspaces <span id="wsCount" class="count-chip"></span></h2>
+            <button
+              id="btnOpenFolder"
+              class="icon-btn small"
+              title="Open folder…"
+              aria-label="Open folder"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path
+                  d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"
+                />
+                <line x1="12" y1="11" x2="12" y2="17" />
+                <line x1="9" y1="14" x2="15" y2="14" />
+              </svg>
+            </button>
+          </div>
+          <div
+            id="wsTree"
+            class="ws-tree"
+            role="tree"
+            aria-label="Workspaces and sessions"
+          ></div>
+          <div class="side-foot">
+            <button
+              id="btnNew"
+              class="new-btn wide"
+              title="New session in current workspace"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              <span>New session</span>
+            </button>
+          </div>
+        </aside>
+
+        <main id="center">
+          <div id="tabbar" class="tabbar">
+            <div
+              id="tabs"
+              class="tabs"
+              role="tablist"
+              aria-label="Open session contexts"
+            ></div>
+            <button
+              id="newTab"
+              class="tab-new"
+              title="New session in this workspace"
+              aria-label="New session tab"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+          </div>
+          <div class="chat-wrap">
+            <div id="chat" class="chat-scroll" aria-live="polite"></div>
+            <div id="emptyState" class="empty-state">
+              <div class="empty-mark">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="34"
+                  height="34"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+              </div>
+              <h1>How can I help you build today?</h1>
+              <p>
+                Ask anything. Switch to <b>Plan</b> mode to design changes
+                before making them.
+              </p>
+              <div class="empty-chips">
+                <button
+                  class="chip"
+                  data-fill="Summarize what this project does."
+                >
+                  Summarize this project
+                </button>
+                <button class="chip" data-fill="Help me find and fix a bug:">
+                  Help me fix a bug
+                </button>
+                <button class="chip" data-fill="Plan a refactor for">
+                  Plan a refactor
+                </button>
+              </div>
+            </div>
+            <div id="landing" class="landing hidden">
+              <div class="landing-mark">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="34"
+                  height="34"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+              </div>
+              <h1>No sessions open</h1>
+              <p>
+                You closed every session. Start a new one to continue working.
+              </p>
+              <button id="landingNew" class="btn primary">New session</button>
+            </div>
+          </div>
+
+          <div id="activity" class="status-bar" data-state="ready">
+            <span id="statusDot" class="status-dot"></span>
+            <span id="activityText" class="status-text">ready</span>
+            <span class="status-spacer"></span>
+            <span id="statusMode" class="status-mode" title="Current mode"
+              >Build</span
+            >
+          </div>
+
+          <section id="promptZone" class="composer">
+            <div id="editBar" class="edit-bar hidden">
+              <span class="eb-icon"
+                ><svg
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
+                  />
+                  <path
+                    d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
+                  /></svg
+              ></span>
+              <span class="eb-text"
+                >Editing message — <b>Enter</b> resends (rewinds first),
+                <b>Esc</b> cancels</span
+              >
+              <button id="editCancel" class="btn small">Cancel edit</button>
+            </div>
+            <div class="composer-box">
+              <textarea
+                id="entry"
+                rows="1"
+                placeholder="Ask anything…  (Enter to send, Shift+Enter for a newline, /compact /rewind)"
+              ></textarea>
+              <button id="sendstop" class="send-btn" title="Send" disabled>
+                <span class="icon-send"
+                  ><svg
+                    viewBox="0 0 24 24"
+                    width="18"
+                    height="18"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="12" y1="19" x2="12" y2="5" />
+                    <polyline points="5 12 12 5 19 12" /></svg
+                ></span>
+                <span class="icon-stop"
+                  ><svg
+                    viewBox="0 0 24 24"
+                    width="15"
+                    height="15"
+                    fill="currentColor"
+                    stroke="none"
+                  >
+                    <rect x="5" y="5" width="14" height="14" rx="2.5" /></svg
+                ></span>
+                <span class="spin" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div id="controls" class="composer-toolbar">
+              <div class="menu-anchor">
+                <button id="modeBtn" class="ctl-btn">
+                  <span class="ctl-label" id="modeLabel">Build</span>
+                  <span class="ctl-caret"
+                    ><svg
+                      viewBox="0 0 24 24"
+                      width="12"
+                      height="12"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <polyline points="6 9 12 15 18 9" /></svg
+                  ></span>
+                </button>
+                <div id="modeMenu" class="menu hidden"></div>
+              </div>
+              <span class="toolbar-divider"></span>
+              <div class="menu-anchor">
+                <button
+                  id="providerBtn"
+                  class="ctl-btn"
+                  title="Model / provider"
+                >
+                  <span class="ctl-glyph"
+                    ><svg
+                      viewBox="0 0 24 24"
+                      width="14"
+                      height="14"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M12 2 2 7l10 5 10-5-10-5z" />
+                      <path d="M2 17l10 5 10-5" />
+                      <path d="M2 12l10 5 10-5" /></svg
+                  ></span>
+                  <span class="ctl-label" id="providerLabel">No providers</span>
+                  <span class="ctl-caret"
+                    ><svg
+                      viewBox="0 0 24 24"
+                      width="12"
+                      height="12"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <polyline points="6 9 12 15 18 9" /></svg
+                  ></span>
+                </button>
+                <div id="providerMenu" class="menu hidden"></div>
+              </div>
+              <div class="menu-anchor">
+                <button id="effortBtn" class="ctl-btn" title="Reasoning effort">
+                  <span class="ctl-glyph"
+                    ><svg
+                      viewBox="0 0 24 24"
+                      width="14"
+                      height="14"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <polygon
+                        points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"
+                      /></svg
+                  ></span>
+                  <span class="ctl-label" id="effortLabel">default</span>
+                  <span class="ctl-caret"
+                    ><svg
+                      viewBox="0 0 24 24"
+                      width="12"
+                      height="12"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <polyline points="6 9 12 15 18 9" /></svg
+                  ></span>
+                </button>
+                <div id="effortMenu" class="menu hidden"></div>
+              </div>
+              <div class="menu-anchor">
+                <button id="permsBtn" class="ctl-btn" title="Permissions">
+                  <span class="ctl-glyph"
+                    ><svg
+                      viewBox="0 0 24 24"
+                      width="14"
+                      height="14"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path
+                        d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+                      /></svg
+                  ></span>
+                  <span class="ctl-label" id="permsLabel">Default</span>
+                  <span class="ctl-caret"
+                    ><svg
+                      viewBox="0 0 24 24"
+                      width="12"
+                      height="12"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <polyline points="6 9 12 15 18 9" /></svg
+                  ></span>
+                </button>
+                <div id="permsMenu" class="menu hidden"></div>
+              </div>
+              <span class="status-spacer"></span>
+              <button
+                id="usageChip"
+                class="ctl-btn usage-chip"
+                title="Usage & context"
+              >
+                <span class="ctl-glyph"
+                  ><svg
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M12 20a8 8 0 1 1 8-8" />
+                    <path d="M12 12l4-4" /></svg
+                ></span>
+                <span class="usage-chip-text" id="usageChipText">0</span>
+              </button>
+              <button
+                id="expandBtn"
+                class="icon-btn small"
+                title="Expand composer"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="15"
+                  height="15"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="15 3 21 3 21 9" />
+                  <polyline points="9 21 3 21 3 15" />
+                  <line x1="21" y1="3" x2="14" y2="10" />
+                  <line x1="3" y1="21" x2="10" y2="14" />
+                </svg>
+              </button>
+            </div>
+          </section>
+        </main>
+
+        <aside id="right" class="panel">
+          <div class="panel-section">
+            <h2 class="section-title">Context</h2>
+            <div id="context" class="context-card"></div>
+          </div>
+          <div class="panel-section grow">
+            <div class="section-head">
+              <h2 class="section-title">Plan</h2>
+              <span id="planProgress" class="count-chip"></span>
+            </div>
+            <div id="plan" class="plan-list"></div>
+          </div>
+          <div class="panel-section">
+            <h2 class="section-title">Usage</h2>
+            <div id="usage" class="usage-list">no calls yet</div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <div id="logDrawer" class="hidden"></div>
+    <div id="usagePop" class="pop hidden"></div>
+    <div id="contextMenu" class="ctx-menu hidden"></div>
+    <div id="modal" class="hidden">
+      <div id="modalBackdrop" class="modal-backdrop"></div>
+      <div id="modalBox" class="modal-box"></div>
+    </div>
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>
