@@ -424,6 +424,7 @@ from . import paths as paths_mod
 from . import permissions as permissions_mod
 from . import providers as providers_mod
 from . import session as session_mod
+from . import todos as todos_mod
 
 _BACKEND: "Harness | None" = None
 
@@ -507,6 +508,9 @@ class Session:
             stack.enter_context(permissions_mod.moded(self._mode_ref))
             stack.enter_context(providers_mod.scoped(self.active_provider, self.effort))
             stack.enter_context(session_mod.scoped(self.root, self.session_id, self.written))
+            # The plan list is per session: inherit the ambient list at bind
+            # time, then diverge, so concurrent tabs never cross writes.
+            stack.enter_context(todos_mod.scoped())
             yield
 
     @contextlib.contextmanager
@@ -537,12 +541,24 @@ class Session:
 
         The server keeps no other loose threads per session, so this is what a
         shutdown or a test teardown needs before touching the files under it.
+        A worker registered a moment ago may not have started yet (track runs
+        just before start), so wait for it to start instead of raising - and
+        one broken entry must never abandon the rest.
         """
+        import time as _time
+
+        deadline = _time.monotonic() + timeout
         with self.lock:
             workers = list(self._workers)
             self._workers.clear()
         for worker in workers:
-            worker.join(timeout=timeout)
+            try:
+                while worker.ident is None and _time.monotonic() < deadline:
+                    _time.sleep(0.01)
+                if worker.ident is not None:
+                    worker.join(timeout=max(0.0, deadline - _time.monotonic()))
+            except RuntimeError:
+                continue
 
     # ---- actions ----
     def stop(self):
@@ -594,8 +610,12 @@ class Session:
             return new_id
 
     def _turn(self, text, mode):
-        new_id = self._materialise()
         try:
+            # Materialise INSIDE the try: a failing first prompt (read-only
+            # sessions dir, full disk, AV lock) must surface as an error card
+            # and a done event, not a thread that dies before `running` is ever
+            # cleared - that wedged the tab on "already running" forever.
+            new_id = self._materialise()
             with self.bound():
                 if new_id:
                     # Tell the frontend which session this tab now owns, so the
@@ -616,6 +636,12 @@ class Session:
             self._maybe_title()
 
     def open_chat(self, session_id, mode):
+        with self.lock:
+            if self.running:
+                # Opening swaps session_id/written/runner; doing that under a
+                # running turn desynced the append cursor and dropped turns.
+                self.on_event(events.NOTE, {"text": "a turn is running - open the session after it finishes"})
+                return
         self._thread(self._open, session_id, mode)
 
     def _open(self, session_id, mode):
@@ -688,23 +714,35 @@ class Session:
         with self.lock:
             if self.running:
                 return False, None
+            if not self.session_id:
+                # A tab that never opened a session has nothing to rewind, and
+                # the code below would otherwise touch path_for(None) and kill
+                # the shared socket.
+                return False, None
+            # Claim the running flag for the whole mutation: a submit slipping
+            # in between the old check and the rewind ran a turn concurrently
+            # with the truncation.
+            self.running = True
         try:
             count = max(0, int(count))
+            if self.runner is not None:
+                count = min(count, len(self.runner.messages))
+            with self.bound():
+                restored = checkpoints.restore_since(self.session_id, count)
+                session_mod.rewind_to(count)
+                self.written = count
+                if self.runner is not None:
+                    self.runner.messages = self.runner.messages[:count]
+                    messages = self.runner.messages
+                else:
+                    messages = session_mod.load(self.session_id)
+                self.on_event(events.SESSION, {"label": "rewound", "messages": messages, "id": self.session_id})
+            return True, restored
         except (TypeError, ValueError):
             return False, None
-        if self.runner is not None:
-            count = min(count, len(self.runner.messages))
-        with self.bound():
-            restored = checkpoints.restore_since(self.session_id, count)
-            session_mod.rewind_to(count)
-            self.written = count
-            if self.runner is not None:
-                self.runner.messages = self.runner.messages[:count]
-                messages = self.runner.messages
-            else:
-                messages = session_mod.load(self.session_id)
-            self.on_event(events.SESSION, {"label": "rewound", "messages": messages, "id": self.session_id})
-        return True, restored
+        finally:
+            with self.lock:
+                self.running = False
 
     def rewind_preview(self, count):
         if not self.session_id:
@@ -981,7 +1019,18 @@ async def serve(host="127.0.0.1", port=8765):
                     obj = json.loads(raw)
                 except ValueError:
                     continue
-                await loop.run_in_executor(None, backend.dispatch, obj)
+                try:
+                    await loop.run_in_executor(None, backend.dispatch, obj)
+                except Exception as failure:  # noqa: BLE001 - one bad op must
+                    # never take down the shared socket: every tab loses its
+                    # stream and any running turn's output with it.
+                    try:
+                        await ws.send(json.dumps({
+                            "event": "error",
+                            "payload": {"text": f"{type(failure).__name__}: {failure}"},
+                        }))
+                    except Exception:
+                        pass
         finally:
             pass
 
