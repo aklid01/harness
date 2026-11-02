@@ -79,6 +79,10 @@ class E2EHandler(BaseHTTPRequestHandler):
                     "model": model,
                     "stream": bool(body.get("stream")),
                     "has_tools": bool(body.get("tools")),
+                    "tool_names": [
+                        (t.get("function") or {}).get("name")
+                        for t in (body.get("tools") or [])
+                    ],
                     "messages": body.get("messages") or [],
                 }
             )
@@ -200,6 +204,7 @@ class WorkflowE2E(unittest.TestCase):
                 "op": "open",
                 "session": "s",
                 "root": str(self.root),
+                "mode": mode,
                 "req_id": time.time_ns(),
             }
         )
@@ -385,6 +390,109 @@ class WorkflowE2E(unittest.TestCase):
             self.edited.read_text(encoding="utf-8"),
             "the action the reviewer refused never ran",
         )
+
+    def test_ask_mode_refuses_edits_and_mutating_commands(self):
+        """Ask mode over the wire: write tools are withheld from the toolset, an
+        emitted write and a mutating bash command are refused before execution
+        (no approval dialog offers an edit path), a read-only command still
+        runs, and no plan artifact is written."""
+        from harness import plan as plan_mod
+
+        probe = self.root / "probe.txt"
+        mock_state(self.server).scripts["coder-model"] = [
+            {
+                "kind": "tool",
+                "name": "write_file",
+                "arguments": {"path": str(probe), "content": "hacked"},
+            },
+            {
+                "kind": "tool",
+                "name": "bash",
+                "arguments": {"command": f"echo hacked > {probe}"},
+            },
+            {
+                "kind": "tool",
+                "name": "bash",
+                "arguments": {"command": "echo ask-read-only-ok"},
+            },
+            {"kind": "text", "content": "This project builds a coding agent."},
+        ]
+        mock_state(self.server).cursors = {
+            k: 0 for k in mock_state(self.server).scripts
+        }
+        self.run_turn(text="What does this project do?", mode="ask")
+
+        # The ask request on the wire: the session model, the ask identity in
+        # the system prompt, and no withheld tool offered at all.
+        flow = [
+            r
+            for r in mock_state(self.server).requests
+            if r["stream"] and r["model"] == "coder-model"
+        ]
+        ask_req = flow[0]
+        system = str((ask_req["messages"][0] or {}).get("content") or "")
+        self.assertIn("research assistant", system)
+        offered = set(ask_req["tool_names"])
+        leaked = offered & {"write_file", "str_replace", "write_todos", "task"}
+        self.assertEqual(leaked, set(), f"write tools offered in ask mode: {leaked}")
+        self.assertIn("bash", offered)
+        self.assertIn("read_file", offered)
+
+        # Each attempted call got a result: two refusals, one real run.
+        outcomes = [
+            (m["payload"]["name"], str(m["payload"]["result"]))
+            for m in self.sent
+            if m.get("event") == events.TOOL_RESULT
+        ]
+        self.assertEqual(
+            [name for name, _ in outcomes], ["write_file", "bash", "bash"]
+        )
+        self.assertIn("Ask mode", outcomes[0][1])
+        self.assertIn("read-only", outcomes[1][1])
+        self.assertIn("ask-read-only-ok", outcomes[2][1])
+
+        # Nothing landed on disk, the answer arrived, the phase ran.
+        self.assertFalse(probe.exists(), "an edit escaped ask mode")
+        answers = [
+            str(m["payload"].get("content") or "")
+            for m in self.sent
+            if m.get("event") == events.MESSAGE
+            and m["payload"].get("role") == "assistant"
+        ]
+        self.assertTrue(
+            any("coding agent" in a for a in answers), f"answers were {answers}"
+        )
+        phases = [
+            m["payload"].get("phase")
+            for m in self.sent
+            if m.get("event") == events.PHASE
+        ]
+        self.assertIn("researching", phases)
+        self.assertIsNone(plan_mod.load(self.sid()), "ask wrote a plan artifact")
+
+        # A reproducible, checkable artifact of the run.
+        report = {
+            "scenario": (
+                "ask mode: write tools withheld, edit refused, mutating bash "
+                "refused, read-only bash ran"
+            ),
+            "ask_system_prompt_on_wire": "research assistant" in system,
+            "write_tools_offered": sorted(leaked),
+            "probe_file_created": probe.exists(),
+            "mutating_bash_refused": "read-only" in outcomes[1][1],
+            "readonly_bash_ran": "ask-read-only-ok" in outcomes[2][1],
+            "researching_phase_emitted": "researching" in phases,
+        }
+        artifact = Path(self.tmp.name) / "e2e-ask-report.json"
+        artifact.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        reread = json.loads(artifact.read_text(encoding="utf-8"))
+        self.assertTrue(reread["ask_system_prompt_on_wire"])
+        self.assertEqual(reread["write_tools_offered"], [])
+        self.assertFalse(reread["probe_file_created"])
+        self.assertTrue(reread["mutating_bash_refused"])
+        self.assertTrue(reread["readonly_bash_ran"])
+        self.assertTrue(reread["researching_phase_emitted"])
+        print("\n[e2e artifact]", json.dumps(report, indent=2))
 
 
 if __name__ == "__main__":

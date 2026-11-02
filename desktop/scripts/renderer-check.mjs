@@ -178,13 +178,13 @@ function buildIfNeeded() {
     stdio: "inherit",
   });
   if (web.status !== 0) throw new Error("build:web failed");
-  if (!fs.existsSync(EXE)) {
-    const built = spawnSync("cargo", ["build"], {
-      cwd: path.join(ROOT, "desktop", "src-tauri"),
-      stdio: "inherit",
-    });
-    if (built.status !== 0) throw new Error("cargo build failed");
-  }
+  // frontendDist is embedded into the exe at build time, so an existing exe
+  // can be stale. cargo build is incremental, so always run it.
+  const built = spawnSync("cargo", ["build"], {
+    cwd: path.join(ROOT, "desktop", "src-tauri"),
+    stdio: "inherit",
+  });
+  if (built.status !== 0) throw new Error("cargo build failed");
   if (!fs.existsSync(EXE)) throw new Error(`sidecar shell exe missing: ${EXE}`);
 }
 buildIfNeeded();
@@ -287,6 +287,46 @@ try {
     panel.hidden && !panel.toggleActive,
     JSON.stringify(panel),
   );
+
+  /* Item 7: the mode menu offers Ask, and picking it updates the composer
+     label. Build is restored afterwards so later items run in the default
+     workflow. */
+  const pickMode = (name) =>
+    evaluate(
+      ws,
+      `(() => {
+    const btn = [...document.querySelectorAll("#modeMenu button")].find(
+      (b) => b.querySelector(".m-label")?.textContent.trim() === ${JSON.stringify(name)},
+    );
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`,
+    );
+  await evaluate(ws, `document.getElementById("modeBtn")?.click()`);
+  await sleep(200);
+  const menu = await evaluate(
+    ws,
+    `(() => ({
+    labels: [...document.querySelectorAll("#modeMenu button .m-label")].map((s) => s.textContent.trim()),
+    open: !document.getElementById("modeMenu").classList.contains("hidden"),
+  }))()`,
+  );
+  const pickedAsk = await pickMode("Ask");
+  await sleep(200);
+  const askLabel = await evaluate(
+    ws,
+    `document.getElementById("modeLabel")?.textContent ?? ""`,
+  );
+  verdict(
+    "mode-menu-offers-ask",
+    menu.open && menu.labels.includes("Ask") && pickedAsk && askLabel === "Ask",
+    JSON.stringify({ labels: menu.labels, label: askLabel, pickedAsk }),
+  );
+  await evaluate(ws, `document.getElementById("modeBtn")?.click()`);
+  await sleep(150);
+  await pickMode("Build");
+  await sleep(150);
 
   /* The Storage tab is driven entirely by the Electron main process, so it is
      checked before the turns: it must pass even when the engine never starts. */
