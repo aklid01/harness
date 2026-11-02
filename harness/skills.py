@@ -18,6 +18,11 @@ def find_skills():
     up: the engine serves many workspaces from one process, and an import
     snapshot would freeze the first one forever. The scan is a glob plus a
     handful of small frontmatter reads.
+
+    Project skills win over global ones of the same name - the same rule the
+    instruction files follow (workspace first). The later directory used to
+    overwrite, so a global install silently shadowed the workspace's own
+    skill.
     """
     skills = {}
     for directory in _dirs():
@@ -27,7 +32,7 @@ def find_skills():
                 _, frontmatter, _ = text.split("---", 2)
                 meta = yaml.safe_load(frontmatter)
                 description = " ".join(str(meta["description"]).split())
-                skills[meta["name"]] = {"description": description, "path": path}
+                skills.setdefault(meta["name"], {"description": description, "path": path})
             except (ValueError, KeyError, TypeError, yaml.YAMLError, OSError):
                 continue
     return skills

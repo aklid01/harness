@@ -84,9 +84,11 @@ def _pause(host, seconds, cancel, limit=None):
 
     One retry slot per endpoint: whoever gets it sleeps while holding it, so
     anything else failing against the same host waits its turn instead of
-    hammering a provider that is already in trouble. A waiter never blocks
-    past ``limit`` (its remaining retry budget), and the loop checks for
-    cancellation between slices, so Stop stays responsive.
+    hammering a provider that is already in trouble. The holder's own sleep is
+    bounded by its remaining window - oversleeping the deadline is what broke
+    a queued waiter's countdown promise. A waiter never blocks past ``limit``
+    (its remaining retry budget), and the loop checks for cancellation between
+    slices, so Stop stays responsive.
     """
     if seconds <= 0:
         return _stopped(cancel)
@@ -101,12 +103,15 @@ def _pause(host, seconds, cancel, limit=None):
             break
         if gate.acquire(timeout=min(_SLICE, left)):
             try:
-                return _sleep(seconds, cancel)
+                return _sleep(min(seconds, left), cancel)
             finally:
                 gate.release()
         if _stopped(cancel):
             return True
-    return _sleep(0.0, cancel)
+    # The window ran out while queued. Fire, but never instantly: a short
+    # floor keeps a spent waiter from joining the hammering the gate exists
+    # to prevent.
+    return _sleep(MIN_WAIT, cancel)
 
 
 def _wait_for(retry_number, schedule=None):

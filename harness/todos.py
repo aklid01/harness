@@ -1,8 +1,39 @@
-"""The plan. Lives here, not in the transcript, and is re-injected every turn."""
+"""The plan. Lives here, not in the transcript, and is re-injected every turn.
+
+State is scoped per session: one turn thread inherits the ambient list when it
+binds and diverges from there, so two concurrent sessions never see or rewrite
+each other's checklist. Code outside any session (tests, engine-less use)
+shares the module fallback.
+"""
+
+import contextlib
+import contextvars
 
 MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 
-TODOS = []  # [{"content": ..., "activeForm": ..., "status": ...}]
+TODOS: list = []  # [{"content": ..., "activeForm": ..., "status": ...}]
+
+_CURRENT = contextvars.ContextVar("harness_todos", default=None)
+
+
+def _state():
+    ref = _CURRENT.get()
+    return ref if ref is not None else TODOS
+
+
+@contextlib.contextmanager
+def scoped(initial=None):
+    """Isolate the plan for one session/turn; inherits ``initial`` by copy."""
+    token = _CURRENT.set(list(initial if initial is not None else _state()))
+    try:
+        yield
+    finally:
+        _CURRENT.reset(token)
+
+
+def current():
+    """The plan list for the running session."""
+    return _state()
 
 
 def write_todos(todos):
@@ -11,17 +42,17 @@ def write_todos(todos):
     if len(active) > 1:
         return f"Error: {len(active)} tasks are in_progress. Only one may be."
 
-    TODOS[:] = todos
+    _state()[:] = todos
     return todos_prompt() or "Todo list cleared."
 
 
 def todos_prompt():
-    return "\n".join(f"{MARKS[t['status']]} {t['content']}" for t in TODOS)
+    return "\n".join(f"{MARKS[t['status']]} {t['content']}" for t in _state())
 
 
 def active_form():
     """What the agent is doing right now, for the spinner."""
-    for todo in TODOS:
+    for todo in _state():
         if todo["status"] == "in_progress":
             return todo["activeForm"]
     return "thinking"
@@ -51,7 +82,7 @@ def reconcile(tool_name, args, result):
                         "decision review", "timed out", "<system-reminder", "stopped")):
         return False
     changed = False
-    for todo in TODOS:
+    for todo in _state():
         if str(todo.get("status")) in _DONE:
             continue
         text = str(todo.get("content") or "").lower()

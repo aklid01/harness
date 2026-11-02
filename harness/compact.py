@@ -80,16 +80,28 @@ def render(messages):
 
 
 def summarize(messages):
-    """One LLM call, no tools. Returns the handoff note."""
-    response = get_client().chat.completions.create(
-        model=active_model(),
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": render(messages)},
-        ],
-    )
-    return response.choices[0].message.content
+    """One LLM call, no tools. Returns the handoff note text.
 
+    Never returns None: a provider that answers with empty content would
+    otherwise render the literal string "None" into the session's permanent
+    memory and freeze it there. Also bounded by retry.run - compaction fires
+    exactly when the transcript is largest, so a transient failure at the
+    45s read timeout must not waste the one rebuild that was possible.
+    """
+    from . import retry
+
+    def once():
+        response = get_client().chat.completions.create(
+            model=active_model(),
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": render(messages)},
+            ],
+        )
+        return (response.choices[0].message.content or "").strip()
+
+    summary = retry.run(once)
+    return summary or "(the summariser returned nothing; the transcript below is the kept tail)"
 
 def safe_boundary(messages, start):
     """First index at or after `start` where cutting cannot orphan a tool call.
@@ -121,7 +133,10 @@ def compact(messages, window=None):
 
     size = int(window) if window else config.CONTEXT_WINDOW
     cut = tail_start(messages, size * config.COMPACT_TO)
-    if cut <= 1:
+    if cut <= 1 or cut >= len(messages):
+        # Nothing old enough to be worth summarising - or no safe cut exists
+        # at all (the transcript ends in unanswered tool calls), where cutting
+        # at len() would summarise away the ENTIRE conversation.
         return messages  # nothing old enough to be worth summarising
 
     summary = summarize(messages[1:cut])
