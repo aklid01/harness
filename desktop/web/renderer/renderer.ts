@@ -388,15 +388,18 @@ let popHideTimer: number | null = null;
 const EFFORTS = ["default", "low", "medium", "high", "xhigh"];
 const MODE_OPTIONS: Array<{ label: string; value: Mode }> = [
   { label: "Build", value: "build" },
+  { label: "Ask", value: "ask" },
   { label: "Plan", value: "plan" },
   { label: "Plan → Build", value: "plan-build" },
 ];
+const MODE_LABELS: Record<Mode, string> = {
+  build: "Build",
+  ask: "Ask",
+  plan: "Plan",
+  "plan-build": "Plan → Build",
+};
 function modeLabelText(mode: Mode): string {
-  return mode === "plan-build"
-    ? "Plan → Build"
-    : mode === "plan"
-      ? "Plan"
-      : "Build";
+  return MODE_LABELS[mode] ?? "Build";
 }
 const PERMS: Array<{ label: string; value: string }> = [
   { label: "Default", value: "default" },
@@ -1232,6 +1235,7 @@ const ROLE_LABEL: Record<string, string> = {
 const PHASE_LABEL: Record<string, string> = {
   planning: "Planning…",
   replanning: "Replanning…",
+  researching: "Researching…",
   validating: "Validating the plan…",
   handing_off: "Plan ready · handing off to build…",
   building: "Building…",
@@ -1243,6 +1247,7 @@ const PHASE_LABEL: Record<string, string> = {
 const PHASE_SHORT: Record<string, string> = {
   planning: "Planning",
   replanning: "Replanning",
+  researching: "Researching",
   validating: "Validating",
   handing_off: "Handing off",
   building: "Building",

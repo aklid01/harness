@@ -10,6 +10,7 @@ from . import (
     events,
     history,
     oversight,
+    permissions,
     providers,
     session,
     texttools,
@@ -38,6 +39,16 @@ BUILD_NOTICE = (
     "You are no longer read-only. You may edit files, run commands, and use tools.\n"
     "</system-reminder>"
 )
+ASK_NOTICE = (
+    "<system-reminder>\n"
+    "Your operational mode is ASK (read-only).\n"
+    "You are a research assistant right now, not a coding agent. Answer questions "
+    "and explain the codebase, but do NOT call write_file or str_replace, and do "
+    "NOT run commands that modify anything - they are blocked and the call will "
+    "be wasted.\n"
+    "If asked which mode you are in, say ask mode.\n"
+    "</system-reminder>"
+)
 
 # The handoff that carries a plan into the build phase. It is stored in the
 # transcript (so it is inspectable and survives compaction) and lands as real
@@ -53,12 +64,12 @@ PLAN_HANDOFF = (
     "</plan>"
 )
 
-# The planner is read-only by construction: these tools are simply not offered
-# to it, so it cannot change the workspace. `task` is withheld too: a subagent
-# has its own toolset and would open a second path around this fence. This is
-# stronger than the read-only instruction in its prompt, mirroring how
-# subagent.py fences a guest.
-PLAN_WITHHELD = {"write_file", "str_replace", "write_todos", "task"}
+# The planner (and Ask mode) is read-only by construction: these tools are
+# simply not offered, so the workspace cannot be changed. `task` is withheld
+# too: a subagent has its own toolset and would open a second path around this
+# fence. This is stronger than the read-only instruction in a prompt, mirroring
+# how subagent.py fences a guest.
+READONLY_WITHHELD = {"write_file", "str_replace", "write_todos", "task"}
 PLAN_MAX_TURNS = 16  # a runaway planner is worse than a missing plan
 PLAN_MAX_TOOLS = 40  # the planner inspects; it is not a search budget
 BUILD_MAX_TOOLS = 200  # bound a runaway build; a healthy build stops on its own
@@ -132,6 +143,7 @@ class Runner:
         """Run the workflow the selected mode names, in one session/transcript.
 
         * build      - execute directly with the build (or default) agent.
+        * ask        - read-only Q&A turn: answer and research, never change.
         * plan       - read-only planning turn: propose, never implement.
         * plan-build - bounded planning, then a single automatic handoff to
                        Build (respecting any plan-approval gate). Build always
@@ -184,6 +196,11 @@ class Runner:
         self._plan_findings = []
 
         try:
+            if self.mode == "ask":
+                # Read-only Q&A on the session's own model.
+                self._phase("researching")
+                self._turn()
+                return
             if self.mode == "plan":
                 # Normal read-only planning on the session's own model.
                 self._phase("planning")
@@ -397,7 +414,7 @@ class Runner:
         toolset = [
             s
             for s in tools_module.TOOL_SCHEMAS
-            if s["function"]["name"] not in PLAN_WITHHELD
+            if s["function"]["name"] not in READONLY_WITHHELD
         ]
         # The planner's own budget - separate from Build's and Oversight's.
         budget_obj = budget.Budget(turns=PLAN_MAX_TURNS, tool_calls=PLAN_MAX_TOOLS)
@@ -470,7 +487,7 @@ class Runner:
                         args = json.loads(tool_call.function.arguments)
                     except ValueError:
                         args = {}
-                    if name in PLAN_WITHHELD:
+                    if name in READONLY_WITHHELD:
                         result = f"Planning is read-only; {name} is not available here."
                     else:
                         args, result = execute(tool_call, note=(message.content or ""))
@@ -579,7 +596,7 @@ class Runner:
         write_todos: a written file or a passing verification completes the step
         that asked for it, and the UI is told so it can cross it out.
         """
-        if self.mode == "plan":
+        if self.mode in ("plan", "ask"):
             return
         try:
             from . import todos as todos_mod
@@ -590,7 +607,7 @@ class Runner:
             pass
 
     def _needs_review(self, name, args):
-        if not self._oversight or self.mode == "plan":
+        if not self._oversight or self.mode in ("plan", "ask"):
             return False
         probe = args
         if name in ("write_file", "str_replace") and isinstance(args, dict):
@@ -803,14 +820,20 @@ class Runner:
         """Put mode switches in the transcript, where the model will see them.
 
         A fresh build session is the status quo ante, so it stays silent.
-        Anything else - starting in plan, or switching either way - gets an
-        explicit notice appended silently (no GUI event, never rendered).
+        Anything else - starting in plan or ask, or switching either way - gets
+        an explicit notice appended silently (no GUI event, never rendered).
         """
         if self.mode == self._announced_mode:
             return
         previous, self._announced_mode = self._announced_mode, self.mode
-        if self.mode == "plan" or previous is not None:
-            notice = PLAN_NOTICE if self.mode == "plan" else BUILD_NOTICE
+        if self.mode in ("plan", "ask") or previous is not None:
+            notice = (
+                PLAN_NOTICE
+                if self.mode == "plan"
+                else ASK_NOTICE
+                if self.mode == "ask"
+                else BUILD_NOTICE
+            )
             self.messages.append({"role": "user", "content": notice})
 
     def cancelled(self):
@@ -1000,6 +1023,13 @@ class Runner:
                     "propose concrete changes, but do NOT call write_file or "
                     "str_replace - they are blocked and this turn will be wasted.\n</mode>"
                 )
+            elif self.mode == "ask":
+                injection["content"] += (
+                    "\n<mode>\nAsk mode: you are read-only. Answer questions and "
+                    "explain the codebase, but do NOT call write_file or str_replace, "
+                    "and do NOT run commands that modify anything - both are blocked "
+                    "and this turn will be wasted.\n</mode>"
+                )
             if self._role_instructions:
                 injection["content"] += (
                     "\n<task-instructions>\n"
@@ -1024,16 +1054,16 @@ class Runner:
             events.emit(events.STATUS, {"active": active_form(), "role": "build"})
             self._step += 1
             request_id = f"{self._request_prefix}:{self._step}"
-            # Plan mode gets the same chokepoint the planner has: the withheld
+            # Plan and Ask get the same chokepoint the planner has: the withheld
             # tools are not offered at all, so read-only does not depend on the
             # model's cooperation. The post-hoc intercept below stays as the
             # second fence for a model that emits one anyway.
             turn_tools = None
-            if self.mode == "plan":
+            if self.mode in ("plan", "ask"):
                 turn_tools = [
                     s
                     for s in tools.TOOL_SCHEMAS
-                    if s["function"]["name"] not in PLAN_WITHHELD
+                    if s["function"]["name"] not in READONLY_WITHHELD
                 ]
             try:
                 on_delta = None
@@ -1216,8 +1246,29 @@ class Runner:
                 # Fingerprinted before execute() resolves paths, so a re-proposed
                 # identical call fingerprints the same way it did at review time.
                 decision_fp = oversight.fingerprint(name, args)
-                if self.mode == "plan" and name in ("write_file", "str_replace"):
-                    result = f"Plan mode: read-only, no edits made. Describe the change instead of calling {name}."
+                if self.mode in ("plan", "ask") and name in (
+                    "write_file",
+                    "str_replace",
+                ):
+                    verb = (
+                        "Describe the change"
+                        if self.mode == "plan"
+                        else "Answer from what you can read"
+                    )
+                    result = (
+                        f"{self.mode.capitalize()} mode: read-only, no edits made. "
+                        f"{verb} instead of calling {name}."
+                    )
+                elif (
+                    self.mode == "ask"
+                    and name == "bash"
+                    and permissions.decide(str(args.get("command") or "")) != "allow"
+                ):
+                    result = (
+                        "Ask mode is read-only: this command can change the "
+                        "workspace, so it was not run. Answer from what you can "
+                        "read instead."
+                    )
                 else:
                     # Decision oversight runs before, never after: it can hold a
                     # significant action and hand the coding agent the reviewer's

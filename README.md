@@ -32,10 +32,10 @@ uv run python -m harness.server --port 8765 --project-root . --app-data-dir <dat
 
 ## UI tour
 
-- Composer: message box plus Build/Plan mode, provider/model picker, reasoning
-  effort picker, permission level (Default, Strict, Allow All, Autopilot),
-  send/stop button, Settings. Workspace and git branch shown in the context
-  panel.
+- Composer: message box plus Build/Ask/Plan mode, provider/model picker,
+  reasoning effort picker, permission level (Default, Strict, Allow All,
+  Autopilot), send/stop button, Settings. Workspace and git branch shown in
+  the context panel.
 - Left: workspaces, each listing its sessions with LLM-generated titles
   (rename/delete via right-click, current session highlighted). New session
   opens as a tab; tabs, sidebar and the backend stay on one session id.
@@ -44,6 +44,12 @@ uv run python -m harness.server --port 8765 --project-root . --app-data-dir <dat
   activity line narrating each step, thinking indicator, red error cards.
   Each assistant message streams into one bubble and is finalized in place.
 - Right: plan checklist (from `write_todos`) and running token totals.
+
+Ask mode is read-only Q&A: fresh Ask sessions start with a research-identity
+system prompt, the write tools are withheld exactly as in Plan mode, and any
+bash command the permission classifier does not rate as read-only is refused
+outright - no approval dialog offers an edit path. Read-only commands
+(grep, ls, git status/diff/log, ...) still run silently.
 
 Plan mode is read-only: fresh Plan sessions start with a planning-identity
 system prompt, mid-session switches add an explicit mode notice to the

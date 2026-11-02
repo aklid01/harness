@@ -188,7 +188,7 @@ class BypassRegression(unittest.TestCase):
         from harness import agent, subagent, tools
 
         real = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
-        for withheld in (subagent.WITHHELD, agent.PLAN_WITHHELD):
+        for withheld in (subagent.WITHHELD, agent.READONLY_WITHHELD):
             self.assertLessEqual(
                 withheld, real, f"withheld names that are not tools: {withheld - real}"
             )

@@ -1,9 +1,10 @@
-export type Mode = "build" | "plan" | "plan-build";
+export type Mode = "build" | "ask" | "plan" | "plan-build";
 
 /* Workflow phase indicator for the Plan -> Build cycle. */
 export type WorkflowPhase =
   | "planning"
   | "replanning"
+  | "researching"
   | "validating"
   | "handing_off"
   | "building"

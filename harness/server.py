@@ -574,7 +574,7 @@ class Session:
         self._seq = 0
         self._submissions: dict = {}
         self._workers: list = []
-        self.mode = "build"  # workflow: build / plan / plan-build
+        self.mode = "build"  # workflow: build / ask / plan / plan-build
         self.perms = "default"  # permission policy: default/strict/...
         self._mode_ref = permissions_mod.mode_ref(
             self.perms
