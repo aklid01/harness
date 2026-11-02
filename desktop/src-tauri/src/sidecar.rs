@@ -15,6 +15,12 @@ pub struct Sidecar {
 }
 
 impl Sidecar {
+    pub fn try_wait(&mut self) -> std::io::Result<Option<String>> {
+        self.child
+            .try_wait()
+            .map(|status| status.map(|s| s.to_string()))
+    }
+
     pub fn stop(mut self) {
         #[cfg(windows)]
         {

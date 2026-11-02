@@ -44,6 +44,12 @@ fn roaming_dir() -> PathBuf {
 }
 
 pub fn data_root() -> PathBuf {
+    // Isolation hook for tests and the renderer check: redirect ALL shell
+    // state (recents, last workspace, the data-dir override) away from the
+    // user's real profile, the way HARNESS_SESSIONS_ROOT isolates sessions.
+    if let Some(dir) = std::env::var_os("HARNESS_DATA_ROOT") {
+        return PathBuf::from(dir);
+    }
     roaming_dir().join("Harness")
 }
 
@@ -197,9 +203,11 @@ pub fn current_data_dir(root: &Path) -> (PathBuf, &'static str) {
 }
 
 pub fn repo_root() -> PathBuf {
-    if let Some(dir) = std::env::var_os("HARNESS_PROJECT_ROOT") {
-        return PathBuf::from(dir);
-    }
+    // Where the APP CODE lives - never HARNESS_PROJECT_ROOT: that env var is
+    // the agent's workspace (read by bootstrap for project_root), and using
+    // it as the sidecar's cwd spawned `uv run` from a directory with no
+    // pyproject.toml, which made uv pick a foreign interpreter that could not
+    // import harness at all.
     if let Ok(exe) = std::env::current_exe() {
         for dir in exe.ancestors().skip(1).take(8) {
             if dir.join("harness").join("server.py").is_file() {
