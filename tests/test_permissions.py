@@ -129,5 +129,58 @@ class ClassifyBashCase(unittest.TestCase):
         self.assertEqual(permissions.decide("rm -rf /tmp/x"), "deny")
 
 
+class BypassRegression(unittest.TestCase):
+    """The allow-list is a claim about semantics, not prefixes.
+
+    Each case here is a bypass that really ran silently before the fix: the
+    whole command matched one allow prefix while a newline, a substitution or
+    an allow-listed write primitive carried the destructive part.
+    """
+
+    def setUp(self):
+        permissions.set_mode("default")
+        self.addCleanup(permissions.set_mode, "default")
+
+    def verdict(self, command):
+        return permissions.check("bash", {"command": command})[0]
+
+    def test_newline_smuggles_a_second_command(self):
+        # fnmatch's * matches \n, so `echo *` allowed the whole multi-line
+        # command while bash executed every line.
+        self.assertEqual(self.verdict("echo hi\nrm -rf ~"), "deny")
+        self.assertEqual(self.verdict("echo hi\nls"), "allow")
+
+    def test_command_substitution_hides_text_from_the_rules(self):
+        self.assertEqual(self.verdict("echo $(rm -rf ~)"), "ask")
+        self.assertEqual(self.verdict("cat `rm -rf ~`"), "ask")
+        self.assertEqual(self.verdict("diff <(sort a) <(sort b)"), "ask")
+
+    def test_find_and_sort_and_sed_write_primitives(self):
+        self.assertEqual(self.verdict("find . -name '*.tmp' -delete"), "ask")
+        self.assertEqual(self.verdict("find . -name .git -exec rm -rf {} \\;"), "ask")
+        self.assertEqual(self.verdict("sort -o evil.txt in.txt"), "ask")
+        self.assertEqual(self.verdict("sed -n 's/x/y/w out.txt' file"), "ask")
+        # the read-only forms stay allowed
+        self.assertEqual(self.verdict("find . -name '*.py'"), "allow")
+        self.assertEqual(self.verdict("sort in.txt"), "allow")
+        self.assertEqual(self.verdict("sed -n 1,5p file"), "allow")
+
+    def test_unknown_tool_defaults_to_ask(self):
+        # A future mutating tool added to the registry without a check branch
+        # must surface as a prompt, not silently inherit the default-allow.
+        self.assertEqual(permissions.check("mystery_tool", {})[0], "ask")
+        self.assertEqual(permissions.check("read_file", {"path": "x"})[0], "allow")
+
+    def test_withheld_sets_name_real_tools(self):
+        # The read-only guarantees are structural: a set naming a tool that
+        # does not exist (the `write` typo) withholds nothing at all.
+        from harness import agent, subagent, tools
+
+        real = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
+        for withheld in (subagent.WITHHELD, agent.PLAN_WITHHELD):
+            self.assertLessEqual(withheld, real,
+                                 f"withheld names that are not tools: {withheld - real}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

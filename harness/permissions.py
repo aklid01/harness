@@ -142,7 +142,9 @@ def split_command(command):
 
     A naive split on | and ; also cuts inside quotes, so `rg "cap|max"` breaks
     into fragments that match no rule and fall through to "ask". Anything
-    quoted or backslash-escaped is an argument, not a separator.
+    quoted or backslash-escaped is an argument, not a separator. Newlines are
+    separators too: `bash -c` executes every line, so a newline inside one
+    "echo" segment must not hide the second line from the rules.
     """
     parts, current, quote = [], [], None
     index = 0
@@ -159,7 +161,7 @@ def split_command(command):
         elif char in "\"'":
             quote = char
             current.append(char)
-        elif char in "&|;":
+        elif char in "&|;\n\r":
             parts.append("".join(current))
             current = []
             while index + 1 < len(command) and command[index + 1] in "&|":
@@ -170,6 +172,45 @@ def split_command(command):
 
     parts.append("".join(current))
     return [part.strip() for part in parts if part.strip()]
+
+
+# Allow-listed commands that can hide a write or a second command. Checked on
+# the parsed words of a segment, not prefixes, because the dangerous argument
+# can sit anywhere (`find . -name x -delete`, `sort -o out in`, sed's `w`).
+_WRITE_PRIMITIVES = (
+    ("find", ("-delete", "-exec", "-execdir", "-ok", "-okdir")),
+    ("sort", ("-o", "--output")),
+    ("sed", ("w",)),
+)
+
+
+def _hides_write_primitive(segment):
+    """True if an allow-listed "read-only" command carries a write primitive."""
+    words = _shell_words(segment)
+    base = _base_command(words)
+    args = words[1:]
+    for name, primitives in _WRITE_PRIMITIVES:
+        if base != name:
+            continue
+        for primitive in primitives:
+            if primitive == "w":
+                # sed's w command lives inside the script text, after a
+                # delimiter (`s/x/y/w file`) or after space (`x;w file`)
+                if any(_re.search(r"(?<![\w\\])w\s+\S", arg) for arg in args):
+                    return True
+            elif any(arg == primitive or arg.startswith(primitive)
+                     for arg in args):
+                return True
+    return False
+
+
+def _has_substitution(segment):
+    """True if the segment can run hidden text: $(), backticks, or <().
+
+    Conservative by design - single quotes would make these literal, but a
+    false "ask" costs one dialog while a false "allow" runs unseen commands.
+    """
+    return "$(" in segment or "`" in segment or "<(" in segment
 
 
 def decide(command):
@@ -183,6 +224,12 @@ def decide(command):
         # A read-only command that redirects into a real file overwrites data,
         # so an "allow" it earned disappears the moment it writes one.
         if action == "allow" and redirect_writes_file(part):
+            action = "ask"
+        # Same for commands that smuggle a second command or a write primitive
+        # past a prefix rule: the allow was earned by the prefix, not by what
+        # the segment actually does.
+        if action == "allow" and (_has_substitution(part)
+                                  or _hides_write_primitive(part)):
             action = "ask"
         verdicts.append(action)
 
@@ -198,6 +245,12 @@ def inside_project(path):
         return root in Path(path).resolve().parents or Path(path).resolve() == root
     except OSError:
         return False
+
+
+# Tools with no explicit branch in check() that are safe to run unattended.
+# Anything else that is not bash/write/str_replace falls through to "ask", so a
+# future mutating tool can never silently inherit the default-allow.
+_KNOWN_SAFE = ("read_file", "read_skill", "write_todos", "task")
 
 
 def check(name, args):
@@ -216,8 +269,11 @@ def check(name, args):
             return "ask", f"{name} outside {root}: {args['path']}"
         if current_mode() == "strict":
             return "ask", f"{name} inside {root}: {args['path']}"
+        return "allow", None
 
-    return "allow", None
+    if name in _KNOWN_SAFE:
+        return "allow", None
+    return "ask", f"{name} has no permission rule"
 
 
 # Levels are conservative and derived from the command/tool itself. The model's
