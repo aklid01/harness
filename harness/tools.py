@@ -168,16 +168,31 @@ def read_file(path: str) -> str:
 
 
 def write_file(path: str, content: str) -> str:
-    """Create a file, or overwrite it if it already exists."""
-    with open(path, "w", encoding="utf-8") as f:
+    """Create a file, or overwrite it if it already exists.
+
+    Written with LF endings exactly as given: text-mode translation would
+    turn a script the model just wrote into a CRLF file the shell then
+    refuses to run (`$'\\r': command not found`).
+    """
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
     return f"Wrote {path}"
 
 
 def str_replace(path, old_str, new_str, allow_multi_edit=False):
-    """Swap exact text in a file. old_str must match exactly once."""
-    with open(path, encoding="utf-8", errors="replace") as f:
-        content = f.read()
+    """Swap exact text in a file. old_str must match exactly once.
+
+    Byte-preserving: the file must decode as UTF-8, and only the matched span
+    changes. A lossy text-mode round trip would persist U+FFFD for every byte
+    it could not decode and translate every line ending - one small edit in a
+    cp1252 or LF-only file rewrote the whole file.
+    """
+    raw = Path(path).read_bytes()
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return (f"Error: {path} is not valid UTF-8, so a text edit would "
+                "corrupt it. Edit it with bash instead.")
 
     count = content.count(old_str)
     if count == 0:
@@ -189,8 +204,7 @@ def str_replace(path, old_str, new_str, allow_multi_edit=False):
             "or set allow_multi_edit to replace them all."
         )
 
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content.replace(old_str, new_str))
+    Path(path).write_bytes(content.replace(old_str, new_str).encode("utf-8"))
     return f"Replaced {count} match(es) in {path}"
 
 
@@ -225,8 +239,11 @@ def _validate_args(name, args):
     if schema is None:
         return None
     properties = schema.get("properties") or {}
+    # An empty string is a VALUE, not a missing argument: rejecting "" made
+    # `write_file(content="")` (create an empty file) and
+    # `str_replace(new_str="")` (delete text) impossible.
     missing = [key for key in (schema.get("required") or [])
-               if key not in args or args[key] in (None, "")]
+               if key not in args or args[key] is None]
     if missing:
         return (f"{name} is missing required argument(s): {', '.join(missing)}.")
     unknown = [key for key in args if key not in properties]

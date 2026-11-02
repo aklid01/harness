@@ -11,9 +11,13 @@ Safety:
   change at/after the rewind point, so it undoes exactly what the AI did.
 - preview() flags files whose current content differs from what the agent last
   wrote ("dirty") so the UI can warn about later manual edits before restoring.
+- Captured content is stored as base64 of the raw BYTES: a text-mode round
+  trip translated newlines and persisted U+FFFD for undecodable bytes, so a
+  rewind of a cp1252 or LF-only file restored corrupted content.
 - Every function is best-effort and never raises into the caller.
 """
 
+import base64
 import json
 from pathlib import Path
 
@@ -32,9 +36,9 @@ def _index(session_id) -> Path:
 
 
 def read_or_none(path):
+    """The file's raw bytes, base64-encoded; None when it cannot be captured."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            return f.read()
+        return base64.b64encode(Path(path).read_bytes()).decode("ascii")
     except OSError:
         return None
 
@@ -124,9 +128,9 @@ def restore_since(session_id, count):
                 Path(p).unlink(missing_ok=True)
             else:
                 Path(p).parent.mkdir(parents=True, exist_ok=True)
-                Path(p).write_text(before, encoding="utf-8")
+                Path(p).write_bytes(base64.b64decode(before))
             restored.append(p)
-        except OSError:
+        except (OSError, ValueError):
             pass
     return restored
 

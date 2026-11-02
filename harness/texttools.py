@@ -113,7 +113,8 @@ def _validate(name, arguments, schema, available):
         return "'%s' is not available in this session" % name
     properties = schema.get("properties") or {}
     required = schema.get("required") or []
-    missing = [key for key in required if not str(arguments.get(key, "")).strip()]
+    # An empty string is a value, not a missing argument (mirrors tools._validate_args).
+    missing = [key for key in required if arguments.get(key) is None]
     if missing:
         return "%s is missing required argument(s): %s" % (name, ", ".join(missing))
     unknown = [key for key in arguments if key not in properties]
