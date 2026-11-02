@@ -26,16 +26,23 @@ MAX_TURNS = 12  # a runaway explorer is worse than a missing answer
 # --- rule 2 -----------------------------------------------------------------
 # `task` would let a subagent spawn subagents, forever. `write_todos` writes to
 # a module global that belongs to the main agent's plan, and this one is a
-# guest in someone else's session. Everything else it gets.
-#
-# Note this is a *structural* guarantee - those tools are simply not in the
-# list it is offered, so it cannot call them. The "do not edit files" rule in
-# the prompt below is only asking nicely. To make that one structural too, add
-# write_file and str_replace to this set.
-WITHHELD = {"task", "write_todos", "str_replace", "write"}
+# guest in someone else's session. The file-writing tools are withheld too, so
+# the read-only rule below is structural and not just asking nicely.
+WITHHELD = {"task", "write_todos", "str_replace", "write_file"}
 
 
-SYSTEM_PROMPT = f"""
+def _workspace_root() -> str:
+    from . import paths
+    try:
+        if paths.is_initialized():
+            return str(paths.project_root())
+    except Exception:  # noqa: BLE001 - a label, never worth crashing over
+        pass
+    return os.getcwd()
+
+
+def _system_prompt() -> str:
+    return f"""
 You are an exploration subagent. You were given one question by a lead agent
 and you answer it. That is the whole job.
 
@@ -43,8 +50,8 @@ You cannot see the conversation that spawned you, and the lead agent cannot
 see anything you do here. Only your final message crosses back, so it has to
 stand on its own.
 
-You are working in {os.getcwd()}. Search inside it. Never search from / or
-from the home directory - that scans the whole machine and will time out.
+You are working in {_workspace_root()}. Search inside it. Never search from /
+or from the home directory - that scans the whole machine and will time out.
 
 How to work:
 - Use bash, read_file and read_skill to find out what is actually true.
@@ -85,7 +92,7 @@ def task(description: str) -> str:
     # version of it, and not whatever the last subagent left behind - this
     # list is born here and dies at the return statement.
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": _system_prompt()},
         {"role": "user", "content": description},
     ]
     events.emit(events.SUBAGENT, {"description": description})
