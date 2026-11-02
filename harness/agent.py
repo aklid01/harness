@@ -979,11 +979,7 @@ class Runner:
         # whole turn, so one label at the top is the truth for all of them -
         # the UI shows it verbatim on tool entries and the activity line.
         role = (
-            "plan"
-            if self.mode == "plan"
-            else "ask"
-            if self.mode == "ask"
-            else "build"
+            "plan" if self.mode == "plan" else "ask" if self.mode == "ask" else "build"
         )
         # The user message that opened this turn, so a retry resumes from it
         # instead of appending a second copy.

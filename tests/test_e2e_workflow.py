@@ -452,9 +452,7 @@ class WorkflowE2E(unittest.TestCase):
             for m in self.sent
             if m.get("event") == events.TOOL_RESULT
         ]
-        self.assertEqual(
-            [name for name, _ in outcomes], ["write_file", "bash", "bash"]
-        )
+        self.assertEqual([name for name, _ in outcomes], ["write_file", "bash", "bash"])
         self.assertIn("Ask mode", outcomes[0][1])
         self.assertIn("read-only", outcomes[1][1])
         self.assertIn("ask-read-only-ok", outcomes[2][1])

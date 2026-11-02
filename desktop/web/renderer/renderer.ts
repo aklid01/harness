@@ -59,6 +59,9 @@ const ICONS = {
   done: stroke(
     '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
   ),
+  plug: stroke(
+    '<path d="M9 3v4"/><path d="M15 3v4"/><path d="M7 7h10v3a5 5 0 0 1-10 0z"/><path d="M10.3 8.3l3.4 3.4"/><path d="M13.7 8.3l-3.4 3.4"/><path d="M12 15v3"/>',
+  ),
   folder: stroke(
     '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   ),
@@ -999,26 +1002,27 @@ function dropFailureCard(ctx: Ctx): void {
     .forEach((card) => card.remove());
 }
 interface RetryTick {
-  attempt: number;
-  total: number;
   wait: number;
   shownAt: number;
   subEl: HTMLDivElement;
+  fillEl: HTMLElement | null;
   line: string;
 }
-/* The card is built once per retry process and only its text is repainted,
-   so the spinner animates continuously instead of restarting on every tick.
-   The attempt in flight has no events of its own, so the countdown the card
-   promised ticks locally until the next retry event, an error or a new turn
-   replaces the card. */
+/* The card is built once per retry process and only its text and segment
+   fill are repainted, so the countdown fill advances continuously instead of
+   restarting on every tick. The attempt in flight has no events of its own,
+   so the countdown the card promised ticks locally until the next retry
+   event, an error or a new turn replaces the card. */
 function paintRetryCard(ctx: Ctx): void {
   const tick = ctx.retryTick;
   if (!tick) return;
   const waited = (Date.now() - tick.shownAt) / 1000;
   const left = Math.max(0, tick.wait - waited);
-  const phase =
-    left > 0 ? `trying again in ${Math.ceil(left)}s` : "attempt in flight…";
-  const line = `Retry ${tick.attempt} of ${tick.total} · ${phase}`;
+  if (tick.fillEl)
+    tick.fillEl.style.width = `${
+      tick.wait > 0 ? Math.min(100, (waited / tick.wait) * 100) : 100
+    }%`;
+  const line = left > 0 ? `Retrying in ${Math.ceil(left)}s` : "Retrying…";
   if (line !== tick.line) {
     tick.subEl.textContent = line;
     tick.line = line;
@@ -1029,20 +1033,29 @@ function showRetry(ctx: Ctx, progress: RetryProgress): void {
     clearRetryCard(ctx);
     const card = document.createElement("div");
     card.className = "retry";
-    const spin = document.createElement("span");
-    spin.className = "r-spin";
-    const body = document.createElement("div");
-    body.className = "r-body";
+    const head = document.createElement("div");
+    head.className = "r-head";
+    const ico = document.createElement("span");
+    ico.className = "r-ico";
+    ico.setAttribute("aria-hidden", "true");
+    ico.innerHTML = ICONS.plug;
     const title = document.createElement("div");
     title.className = "r-title";
+    const badge = document.createElement("span");
+    badge.className = "r-badge";
+    const headline = document.createElement("div");
+    headline.className = "r-headline";
     const detail = document.createElement("div");
     detail.className = "r-detail";
     const hint = document.createElement("div");
     hint.className = "r-hint";
+    const segs = document.createElement("div");
+    segs.className = "r-segs";
+    segs.setAttribute("aria-hidden", "true");
     const sub = document.createElement("div");
     sub.className = "r-sub";
-    body.append(title, detail, hint, sub);
-    card.append(spin, body);
+    head.append(ico, title, badge);
+    card.append(head, headline, detail, hint, segs, sub);
     ctx.chatBody.appendChild(card);
     ctx.retryCard = card;
   }
@@ -1050,22 +1063,28 @@ function showRetry(ctx: Ctx, progress: RetryProgress): void {
   if (!card) return;
   const model = String(progress.model ?? ctx.failure?.model ?? "the model");
   const title = card.querySelector<HTMLDivElement>(".r-title");
+  const badge = card.querySelector<HTMLSpanElement>(".r-badge");
+  const headline = card.querySelector<HTMLDivElement>(".r-headline");
   const detail = card.querySelector<HTMLDivElement>(".r-detail");
   const hint = card.querySelector<HTMLDivElement>(".r-hint");
+  const segs = card.querySelector<HTMLDivElement>(".r-segs");
   const sub = card.querySelector<HTMLDivElement>(".r-sub");
-  if (!title || !detail || !hint || !sub) return;
+  if (!title || !badge || !headline || !detail || !hint || !segs || !sub)
+    return;
   title.textContent = model;
   /* The upstream's own words: what it said failed and the status it said it
      with. textContent keeps a provider message from being read as HTML. */
-  const headline = String(
+  const headlineText = String(
     progress.headline ?? progress.kind ?? "the request failed",
   );
+  headline.textContent = headlineText;
   const said = String(progress.detail ?? "").trim();
   const status =
-    typeof progress.status === "number" ? ` (HTTP ${progress.status})` : "";
-  detail.textContent = `${headline}${
-    said && said !== headline ? `: ${said}` : ""
-  }${status}`;
+    typeof progress.status === "number" ? `(HTTP ${progress.status})` : "";
+  detail.textContent = [said && said !== headlineText ? said : "", status]
+    .filter(Boolean)
+    .join(" ");
+  detail.hidden = !detail.textContent;
   const todo = String(progress.hint ?? "").trim();
   hint.textContent = todo ? `Things to do: ${todo}` : "";
   hint.hidden = !todo;
@@ -1074,18 +1093,36 @@ function showRetry(ctx: Ctx, progress: RetryProgress): void {
   const attempt = Math.max(1, Number(progress.attempt ?? 2) - 1);
   const total = Math.max(1, Number(progress.retries_total ?? 5));
   const wait = Math.max(0, Number(progress.wait ?? 0));
+  badge.textContent = `Retry ${attempt} of ${total}`;
+  // One segment per scheduled retry: spent attempts stay lit, the attempt in
+  // flight fills with the countdown, the rest stay dark.
+  const at = Math.min(attempt, total) - 1;
+  if (segs.childElementCount !== total) {
+    segs.replaceChildren();
+    for (let i = 0; i < total; i++) {
+      const seg = document.createElement("span");
+      seg.className = "r-seg";
+      const fill = document.createElement("span");
+      fill.className = "r-seg-fill";
+      seg.appendChild(fill);
+      segs.appendChild(seg);
+    }
+  }
+  Array.from(segs.children).forEach((seg, i) => {
+    seg.className = i < at ? "r-seg done" : i === at ? "r-seg now" : "r-seg";
+  });
+  const fillEl = segs.children[at]?.firstElementChild as HTMLElement | null;
   ctx.retryTick = {
-    attempt,
-    total,
     wait,
     shownAt: Date.now(),
     subEl: sub,
+    fillEl,
     line: "",
   };
   paintRetryCard(ctx);
   if (ctx === activeCtx) {
     setActivity(
-      `${model} - ${headline}. Retry ${attempt} of ${total} in ${Math.ceil(wait)}s…`,
+      `${model} - ${headlineText}. Retry ${attempt} of ${total} in ${Math.ceil(wait)}s…`,
     );
   }
   scrollBottom(ctx);

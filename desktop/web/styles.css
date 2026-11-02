@@ -1246,13 +1246,10 @@ button {
   margin-right: 6px;
 }
 .retry {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  background: var(--warn-soft);
-  border: 1px solid var(--warn-soft);
-  border-radius: var(--r);
-  padding: 10px 12px;
+  background: var(--raised);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
   margin: 8px 0;
   animation: retry-in 0.18s ease;
 }
@@ -1266,43 +1263,87 @@ button {
     transform: none;
   }
 }
-.retry .r-spin {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--warn);
-  animation: spin 0.7s linear infinite;
-  flex: none;
-  margin-top: 3px;
+.retry .r-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-.retry .r-body {
-  min-width: 0;
-  flex: 1;
+.retry .r-ico {
+  display: inline-flex;
+  flex: none;
+  color: var(--warn);
+}
+.retry .r-ico svg {
+  width: 16px;
+  height: 16px;
 }
 .retry .r-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text);
-  font-weight: 600;
-  font-size: var(--t-body);
+  font-weight: 500;
+  font-size: var(--t-lg);
 }
-.retry .r-detail {
+.retry .r-badge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
   color: var(--warn);
   font-size: var(--t-caption);
+}
+.retry .r-headline {
+  color: var(--text);
+  font-weight: 500;
+  font-size: var(--t-mid);
+  margin-top: 10px;
+  word-break: break-word;
+}
+.retry .r-detail {
+  color: var(--text-2);
+  font-size: var(--t-base);
+  line-height: 1.5;
   margin-top: 1px;
   word-break: break-word;
 }
 .retry .r-hint {
   color: var(--text-3);
   font-size: var(--t-caption);
-  margin-top: 4px;
+  margin-top: 6px;
   padding-left: 8px;
   border-left: 2px solid var(--warn-line);
+}
+.retry .r-segs {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0 8px;
+}
+.retry .r-seg {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  overflow: hidden;
+}
+.retry .r-seg.done {
+  background: var(--warn);
+}
+.retry .r-seg-fill {
+  position: absolute;
+  inset: 0;
+  width: 0%;
+  background: var(--warn);
+  transition: width 0.25s linear;
 }
 .retry .r-sub {
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: var(--t-micro);
-  margin-top: 3px;
+  font-size: var(--t-caption);
+  margin-top: 2px;
 }
 
 /* ---------- status bar ---------- */
