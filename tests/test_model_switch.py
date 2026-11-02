@@ -138,7 +138,7 @@ class SwitchCase(unittest.TestCase):
     def test_failed_request_then_retry_on_another_model(self):
         seen = []
 
-        def fake_call(messages, tools=None, on_delta=None, cancel=None):
+        def fake_call(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
             model = providers.active_config()[2]
             seen.append(model)
             if model == "glm-5.3-flash":
@@ -188,7 +188,7 @@ class SwitchCase(unittest.TestCase):
         release = threading.Event()
         started = threading.Event()
 
-        def slow(messages, tools=None, on_delta=None, cancel=None):
+        def slow(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
             started.set()
             release.wait(5)
             return message("late answer"), USAGE

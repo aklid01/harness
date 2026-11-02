@@ -1,0 +1,9 @@
+{
+  "pending_edit_and_remove": true,
+  "queue_auto_runs_after_success": true,
+  "steer_joins_running_turn": true,
+  "stop_keeps_pending": true,
+  "error_discards_queues_steers_reach_next_turn": true,
+  "steer_survives_provider_error": true,
+  "thinking_captured_and_stripped": true
+}

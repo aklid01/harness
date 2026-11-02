@@ -153,7 +153,7 @@ class ReviewerContextCase(unittest.TestCase):
     def _capture(self):
         captured = {}
 
-        def fake(messages, tools=None, on_delta=None, cancel=None):
+        def fake(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
             captured["model"] = providers.active_config()[2]
             captured["messages"] = messages
             captured["tools"] = tools
@@ -215,7 +215,7 @@ class ReviewerContextCase(unittest.TestCase):
         )
 
     def test_a_failed_review_is_a_verdict_not_a_crash(self):
-        def boom(messages, tools=None, on_delta=None, cancel=None):
+        def boom(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
             raise RuntimeError("reviewer timed out")
 
         with mock.patch("harness.oversight.call_llm", side_effect=boom):
@@ -304,7 +304,7 @@ class GateCase(unittest.TestCase):
         for s in list(self.backend.sessions.values()):
             s.join_background(timeout=10)
 
-    def _code(self, messages, tools=None, on_delta=None, cancel=None):
+    def _code(self, messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
         if self._ci < len(self.coding):
             msg = self.coding[self._ci]
         else:

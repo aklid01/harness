@@ -61,6 +61,7 @@ def _tool_call(step):
 
 def _payload(model, step, index):
     """Build the chat completion object for one step."""
+    reasoning = step.get("reasoning")
     if step.get("kind") == "tool":
         message = {
             "role": "assistant",
@@ -75,6 +76,8 @@ def _payload(model, step, index):
         }
     else:
         message = {"role": "assistant", "content": step.get("content", "ok")}
+    if reasoning:
+        message["reasoning_content"] = reasoning
     return {
         "id": f"chatcmpl-mock-{index}",
         "object": "chat.completion",
@@ -93,6 +96,7 @@ def _payload(model, step, index):
 def _stream(model, step, index):
     """SSE chunks for one step, matching OpenAI's streaming shape."""
     done_id = f"chatcmpl-mock-{index}"
+    reasoning = step.get("reasoning")
     if step.get("kind") == "tool":
         call = _tool_call(step)
         chunks = [
@@ -118,6 +122,22 @@ def _stream(model, step, index):
                 ]
             },
         ]
+        # reasoning tokens arrive before the call when the model exposes them
+        if reasoning:
+            thought_chunks = [
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "reasoning_content": reasoning[start : start + 11]
+                            },
+                        }
+                    ]
+                }
+                for start in range(0, len(reasoning), 11)
+            ]
+            chunks[1:1] = thought_chunks
         arguments = call["function"]["arguments"]
         for start in range(0, len(arguments), 7):
             chunks.append(
@@ -141,11 +161,24 @@ def _stream(model, step, index):
             )
     else:
         text = step.get("content", "ok")
-        # reasoning models pause between tokens; chunking exercises the reader
-        for start in range(0, len(text), 9):
-            chunks = [{"choices": [{"index": 0, "delta": {"role": "assistant"}}]}]
-            break
         chunks = []
+        # reasoning tokens arrive before the answer when the model exposes them
+        if reasoning:
+            for start in range(0, len(reasoning), 11):
+                chunks.append(
+                    {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "reasoning_content": reasoning[
+                                        start : start + 11
+                                    ]
+                                },
+                            }
+                        ]
+                    }
+                )
         for start in range(0, len(text), 9):
             chunks.append(
                 {

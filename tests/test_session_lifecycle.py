@@ -69,7 +69,7 @@ class SessionCase(unittest.TestCase):
         for session in list(self.backend.sessions.values()):
             session.join_background(timeout=10)
 
-    def answer(self, messages, tools=None, on_delta=None, cancel=None):
+    def answer(self, messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
         self.calls.append([m for m in messages if m.get("role") == "user"])
         return reply("Hi! How can I help you today?"), USAGE
 
@@ -277,7 +277,7 @@ class SessionCase(unittest.TestCase):
         )
 
     def test_retry_after_a_failure_keeps_the_session(self):
-        def boom(messages, tools=None, on_delta=None, cancel=None):
+        def boom(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
             self.calls.append("attempt")
             raise RuntimeError("upstream exploded")
 
@@ -383,7 +383,7 @@ class SessionCase(unittest.TestCase):
     def test_interrupted_generation_leaves_the_session_intact(self):
         release = threading.Event()
 
-        def slow(messages, tools=None, on_delta=None, cancel=None):
+        def slow(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
             release.wait(5)
             return reply("late"), USAGE
 

@@ -53,7 +53,14 @@ def _params(messages, tools, caps):
     """Request body for the active model - only what it actually supports."""
     from . import tools as tools_mod
 
-    params = {"model": caps["model"], "messages": messages}
+    # Reasoning is display-only: kept for the transcript, never sent back.
+    wire = [
+        {k: v for k, v in message.items() if k != "reasoning"}
+        if isinstance(message, dict)
+        else message
+        for message in messages
+    ]
+    params = {"model": caps["model"], "messages": wire}
     if caps.get("supports_tools", True):
         # Only advertise what this session can actually run, and only from the
         # set the caller asked for. A tool that would fail on arrival is noise
@@ -103,6 +110,49 @@ def _close(handle):
             return
 
 
+def _reasoning_of(raw):
+    """Reasoning text a provider may attach to a message, in either spelling."""
+    for field in ("reasoning", "reasoning_content"):
+        value = getattr(raw, field, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _assistant_message(content, tool_calls, reasoning=None):
+    """Duck-typed assistant message shared by both call paths.
+
+    ``model_dump`` produces exactly the dict stored in the transcript, so the
+    streamed and blocking paths stay indistinguishable downstream.
+    """
+    message = SimpleNamespace(
+        content=content or None, tool_calls=tool_calls, reasoning=reasoning or None
+    )
+
+    def dump(exclude_none=True):
+        body = {"role": "assistant"}
+        if content:
+            body["content"] = content
+        if reasoning:
+            body["reasoning"] = reasoning
+        if tool_calls:
+            body["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments,
+                    },
+                }
+                for call in tool_calls
+            ]
+        return body
+
+    message.model_dump = dump
+    return message
+
+
 def _progress(caps):
     def emit(state):
         payload = {
@@ -122,8 +172,13 @@ def _progress(caps):
     return emit
 
 
-def call_llm(messages, tools=None, on_delta=None, cancel=None):
+def call_llm(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
     """One chat call. With on_delta, streams content tokens as they arrive.
+
+    on_reasoning, when given, receives reasoning tokens as they stream in
+    (only when on_delta streams - the blocking path attaches reasoning to the
+    returned message instead). Reasoning never goes back to the provider:
+    _params strips it from every request.
 
     The streamed path assembles the same message shape as the blocking path,
     so the turn logic cannot tell the difference. Tool calls still arrive as
@@ -147,11 +202,25 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
 
         def attempt():
             response = client.chat.completions.create(**params)
-            return response.choices[0].message, _usage_from(response.usage)
+            raw = response.choices[0].message
+            calls = [
+                SimpleNamespace(
+                    id=call.id,
+                    function=SimpleNamespace(
+                        name=call.function.name, arguments=call.function.arguments
+                    ),
+                )
+                for call in (raw.tool_calls or [])
+            ]
+            return (
+                _assistant_message(raw.content, calls, _reasoning_of(raw)),
+                _usage_from(response.usage),
+            )
     else:
 
         def attempt():
             content, calls, usage, streamed = [], {}, None, []
+            thoughts: list = []
             stream = client.chat.completions.create(
                 **params,
                 stream=True,
@@ -168,6 +237,11 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
                     delta = chunk.choices[0].delta if chunk.choices else None
                     if delta is None:
                         continue
+                    thought = _reasoning_of(delta)
+                    if thought:
+                        thoughts.append(thought)
+                        if on_reasoning is not None:
+                            on_reasoning(thought)
                     if delta.content:
                         content.append(delta.content)
                         streamed.append(delta.content)
@@ -205,29 +279,11 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
                 for slot in calls.values()
             ]
             text = "".join(content)
-            message = SimpleNamespace(content=text or None, tool_calls=tool_calls)
-            message.model_dump = lambda exclude_none=True: {
-                "role": "assistant",
-                **({"content": text} if text else {}),
-                **(
-                    {
-                        "tool_calls": [
-                            {
-                                "id": c.id,
-                                "type": "function",
-                                "function": {
-                                    "name": c.function.name,
-                                    "arguments": c.function.arguments,
-                                },
-                            }
-                            for c in tool_calls
-                        ]
-                    }
-                    if tool_calls
-                    else {}
-                ),
-            }
-            return message, _usage_from(usage)
+            reasoning = "".join(thoughts)
+            return (
+                _assistant_message(text, tool_calls, reasoning),
+                _usage_from(usage),
+            )
 
     return retry_mod.run(
         attempt,

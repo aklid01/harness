@@ -7,6 +7,7 @@ localhost. The engine itself is unchanged - this file puts the event bus
 
 import argparse
 import asyncio
+import itertools
 import json
 import threading
 from pathlib import Path
@@ -549,6 +550,90 @@ from . import todos as todos_mod
 _BACKEND: "Harness | None" = None
 
 
+class Mailbox:
+    """Pending steer/queue messages a user filed while a turn was running.
+
+    Lives on the Session. The runner drains steers at each model-call
+    boundary; the Session drains whatever is left when a turn ends well.
+    Every mutation fires ``on_change`` from any thread so the UI strip and
+    the engine never disagree about what is pending.
+    """
+
+    MAX_ITEMS = 10
+
+    def __init__(self):
+        self._items: list = []
+        self._ids = itertools.count(1)
+        self._lock = threading.Lock()
+        self.on_change = None
+
+    def _notify(self):
+        if self.on_change is not None:
+            self.on_change(self.items())
+
+    def add(self, text, kind):
+        """File one message; None when the mailbox is full."""
+        with self._lock:
+            if len(self._items) >= self.MAX_ITEMS:
+                return None
+            item = {"id": f"m{next(self._ids)}", "kind": kind, "text": text}
+            self._items.append(item)
+        self._notify()
+        return item["id"]
+
+    def edit(self, item_id, text):
+        with self._lock:
+            for item in self._items:
+                if item["id"] == item_id:
+                    item["text"] = text
+                    break
+            else:
+                return False
+        self._notify()
+        return True
+
+    def remove(self, item_id):
+        with self._lock:
+            remaining = [i for i in self._items if i["id"] != item_id]
+            if len(remaining) == len(self._items):
+                return False
+            self._items = remaining
+        self._notify()
+        return True
+
+    def take_steers(self):
+        """Pop every pending steer, oldest first (the runner's drain point)."""
+        with self._lock:
+            steers = [i for i in self._items if i["kind"] == "steer"]
+            if steers:
+                self._items = [i for i in self._items if i["kind"] != "steer"]
+        if steers:
+            self._notify()
+        return steers
+
+    def take_next(self):
+        """Pop the oldest pending message - the next turn to auto-run."""
+        with self._lock:
+            item = self._items.pop(0) if self._items else None
+        if item is not None:
+            self._notify()
+        return item
+
+    def discard_queues(self):
+        """Drop every queue item (a failed turn cannot run them); steers stay."""
+        with self._lock:
+            discarded = [i for i in self._items if i["kind"] == "queue"]
+            if discarded:
+                self._items = [i for i in self._items if i["kind"] != "queue"]
+        if discarded:
+            self._notify()
+        return discarded
+
+    def items(self):
+        with self._lock:
+            return [dict(i) for i in self._items]
+
+
 class Session:
     """One logical chat: a workspace root + an active session on disk.
 
@@ -581,6 +666,11 @@ class Session:
         )  # live, changeable mid-turn
         self.effort = "default"
         self.active_provider: str | None = None
+        self.mailbox = Mailbox()
+        self.mailbox.on_change = self._notify_pending
+
+    def _notify_pending(self, items):
+        self.on_event(events.PENDING, {"items": items})
 
     # ---- transport ----
     def _send(self, body):
@@ -715,6 +805,45 @@ class Session:
         self._thread(self._turn, text, mode)
         return True
 
+    def enqueue(self, text, kind, submission_id=None):
+        """File a message against the running turn.
+
+        A steer joins the conversation at the next model-call boundary; a
+        queue item auto-runs when the turn ends well. Only exists while a
+        turn is running - the idle path is a plain submit.
+        """
+        text = str(text or "").strip()
+        kind = kind if kind in ("steer", "queue") else None
+        with self.lock:
+            if self._seen_submission(submission_id):
+                self.on_event(events.NOTE, {"text": "that submission was already sent"})
+                return False
+            if not self.running:
+                self.on_event(
+                    events.NOTE, {"text": "nothing is running - send it normally"}
+                )
+                return False
+            if not text or kind is None:
+                self.on_event(events.NOTE, {"text": "empty message or unknown kind"})
+                return False
+            if self.mailbox.add(text, kind) is None:
+                self.on_event(
+                    events.NOTE,
+                    {"text": "too many pending messages - remove one first"},
+                )
+                return False
+        return True
+
+    def edit_pending(self, item_id, text):
+        """Edit a pending message before it is sent; fails once it is gone."""
+        text = str(text or "").strip()
+        if not text:
+            return False
+        return self.mailbox.edit(str(item_id), text)
+
+    def remove_pending(self, item_id):
+        return self.mailbox.remove(str(item_id))
+
     def _materialise(self):
         """Create this tab's session once, and hand back the new id.
 
@@ -736,7 +865,8 @@ class Session:
             self.written = 0
             return new_id
 
-    def _turn(self, text, mode):
+    def _turn(self, text, mode, via=None):
+        crashed = None
         try:
             # Materialise INSIDE the try: a failing first prompt (read-only
             # sessions dir, full disk, AV lock) must surface as an error card
@@ -748,21 +878,57 @@ class Session:
                     # Tell the frontend which session this tab now owns, so the
                     # tab, the sidebar and the stored metadata all agree.
                     self.on_event(
-                        events.SESSION, {"label": "new", "messages": [], "id": new_id}
+                        events.SESSION,
+                        {
+                            "label": "new",
+                            "messages": [],
+                            "id": new_id,
+                            "pending": self.mailbox.items(),
+                        },
                     )
                 self.ensure_runner(mode)
-                self.runner.handle_input(text)
+                self.runner.mailbox = self.mailbox
+                self.runner.handle_input(text, via=via)
                 # Keep the append cursor in step with what was just written.
                 # Losing it made the next turn re-save the whole prefix, which
                 # is how a transcript ended up holding its opening turn twice.
                 self.written = session_mod.written()
         except Exception as failure:  # noqa: BLE001 - report, don't kill the session
+            crashed = failure
             self.on_event(
                 events.ERROR, {"text": f"{type(failure).__name__}: {failure}"}
             )
-        finally:
-            with self.lock:
+        self._end_turn(mode, crashed)
+
+    def _end_turn(self, mode, crashed=None):
+        """Shared tail of a worker turn: classify the outcome, then either
+        chain the next pending message or go idle.
+
+        A provider error discards queued messages (steers stay pending); a
+        manual stop keeps everything; success hands the mailbox's oldest
+        message a fresh turn. `done` fires only when nothing follows, so a
+        queue chain looks like one continuous busy spell to the UI. The whole
+        decision runs under the session lock so an enqueue racing the turn's
+        last moment either chains or is refused - never stranded idle.
+        """
+        with self.lock:
+            if crashed is not None or getattr(self.runner, "turn_failed", False):
+                self.mailbox.discard_queues()
                 self.running = False
+                idle = True
+            elif self.cancel.is_set():
+                self.running = False
+                idle = True
+            else:
+                follow = self.mailbox.take_next()
+                if follow is not None:
+                    self.cancel.clear()
+                    self._thread(self._turn, follow["text"], mode, follow["kind"])
+                    idle = False
+                else:
+                    self.running = False
+                    idle = True
+        if idle:
             self._send({"event": "done", "payload": {}})
             self._maybe_title()
 
@@ -809,6 +975,7 @@ class Session:
                     "label": label,
                     "messages": self.runner.messages,
                     "id": self.session_id,
+                    "pending": self.mailbox.items(),
                 },
             )
         self._maybe_title()
@@ -831,9 +998,11 @@ class Session:
         return True
 
     def _resend(self, count, text, mode, restore_files=True):
+        crashed = None
         try:
             with self.bound():
                 self.ensure_runner(mode)
+                self.runner.mailbox = self.mailbox
                 try:
                     count = max(0, min(int(count), len(self.runner.messages)))
                 except (TypeError, ValueError):
@@ -849,20 +1018,18 @@ class Session:
                         "label": "rewound",
                         "messages": self.runner.messages,
                         "id": self.session_id,
+                        "pending": self.mailbox.items(),
                     },
                 )
             with self.bound():
                 self.runner.handle_input(text)
                 self.written = session_mod.written()
         except Exception as failure:  # noqa: BLE001
+            crashed = failure
             self.on_event(
                 events.ERROR, {"text": f"{type(failure).__name__}: {failure}"}
             )
-        finally:
-            with self.lock:
-                self.running = False
-            self._send({"event": "done", "payload": {}})
-            self._maybe_title()
+        self._end_turn(mode, crashed)
 
     def rewind_to(self, count):
         with self.lock:
@@ -892,7 +1059,12 @@ class Session:
                     messages = session_mod.load(self.session_id)
                 self.on_event(
                     events.SESSION,
-                    {"label": "rewound", "messages": messages, "id": self.session_id},
+                    {
+                        "label": "rewound",
+                        "messages": messages,
+                        "id": self.session_id,
+                        "pending": self.mailbox.items(),
+                    },
                 )
             return True, restored
         except (TypeError, ValueError):
@@ -1033,6 +1205,28 @@ class Harness:
                         submission_id=obj.get("submission_id"),
                     ),
                 }
+            )
+        if op == "enqueue":
+            return R(
+                {
+                    "reply": "enqueue",
+                    "ok": s.enqueue(
+                        obj.get("text", ""),
+                        obj.get("kind", "queue"),
+                        submission_id=obj.get("submission_id"),
+                    ),
+                }
+            )
+        if op == "pending_edit":
+            return R(
+                {
+                    "reply": "pending_edit",
+                    "ok": s.edit_pending(obj.get("id", ""), obj.get("text", "")),
+                }
+            )
+        if op == "pending_remove":
+            return R(
+                {"reply": "pending_remove", "ok": s.remove_pending(obj.get("id", ""))}
             )
         if op == "stop":
             s.stop()

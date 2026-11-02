@@ -41,6 +41,8 @@ RETRY = "retry"
 PLAN = "plan"
 DECISION = "decision"
 PHASE = "phase"
+PENDING = "pending"
+THINKING = "thinking"
 
 APPROVAL = "approval"
 PICK = "pick"

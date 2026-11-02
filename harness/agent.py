@@ -112,6 +112,8 @@ class Runner:
         self._user_approved: set = set()  # fingerprints a human approved this turn
         self._request_prefix = f"r{next(TURN_KEYS)}"
         self._file_state = None  # git state snapshot taken at each turn start
+        self.mailbox = None  # Session-owned pending steer/queue messages
+        self.turn_failed = False  # the current turn ended in a provider error
         self.messages = [{"role": "system", "content": system_prompt(mode)}]
         if resume:
             saved = session.all_sessions()
@@ -127,17 +129,28 @@ class Runner:
                     },
                 )
 
-    def handle_input(self, user_text):
+    def handle_input(self, user_text, via=None):
         if user_text.startswith("/"):
             self.messages = commands.handle(user_text, self.messages)
             session.save(self.messages)
             return
 
-        self.messages.append({"role": "user", "content": user_text})
+        self._receive_user_text(user_text, via=via)
+        self._run_workflow(user_text)
+
+    def _receive_user_text(self, text, via=None):
+        """Append a user message, save it, and tell the UI.
+
+        Shared by the opening submission and by steered messages drained
+        mid-turn, so both are on disk before the model can act on them.
+        """
+        self.messages.append({"role": "user", "content": text})
         # Saved before the call, so a failed request never loses what was asked.
         session.save(self.messages)
-        events.emit(events.MESSAGE, {"role": "user", "content": user_text})
-        self._run_workflow(user_text)
+        payload = {"role": "user", "content": text}
+        if via:
+            payload["via"] = via
+        events.emit(events.MESSAGE, payload)
 
     def _run_workflow(self, user_text):
         """Run the workflow the selected mode names, in one session/transcript.
@@ -876,11 +889,18 @@ class Runner:
         if error.kind == "cancelled":
             events.emit(events.NOTE, {"text": "stopped"})
             return
+        self.turn_failed = True
         events.emit(events.STATUS, {"active": None})
         payload = error.payload()
         payload["text"] = error.text()
         if error.kind != "stream_interrupted":
             payload["retry"] = self._retry_info()
+        if self.mailbox is not None:
+            # A dead conversation cannot run what was queued for after it:
+            # hand the texts back so the UI can name them and restore them.
+            discarded = self.mailbox.discard_queues()
+            if discarded:
+                payload["discarded_queue"] = [item["text"] for item in discarded]
         events.emit(events.ERROR, payload)
 
     def _text_call(self, message):
@@ -990,6 +1010,7 @@ class Runner:
         self._reviewed_files = set()
         self._user_approved = set()
         self._stop_turn = False
+        self.turn_failed = False
         # Build's own budget, independent of the plan and review phases.
         self._build_budget = budget.Budget(tool_calls=BUILD_MAX_TOOLS)
         self._build_progress = budget.Progress(limit=4)
@@ -1022,6 +1043,11 @@ class Runner:
                     },
                 )
                 break
+            if self.mailbox is not None:
+                # Steers wait for the current step to finish, then join the
+                # conversation here, before the next request is assembled.
+                for steer in self.mailbox.take_steers():
+                    self._receive_user_text(steer["text"], via="steer")
             injection = reminder(baseline=self._file_state)
             if self.mode == "plan":
                 injection["content"] += (
@@ -1080,10 +1106,16 @@ class Runner:
                             return
                         events.emit(events.MESSAGE_DELTA, {"text": text})
 
+                    def on_reasoning(text):
+                        if self.cancelled():
+                            return
+                        events.emit(events.THINKING, {"text": text})
+
                 message, usage = call_llm(
                     request,
                     tools=turn_tools,
                     on_delta=on_delta,
+                    on_reasoning=on_reasoning if self.stream else None,
                     cancel=self.cancel_event,
                 )
             except Exception as failure:  # noqa: BLE001 - report, don't kill the session
