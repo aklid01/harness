@@ -1,7 +1,7 @@
 # Harness
 
 A minimal desktop coding agent (personal educational build).
-Electron shell + Python agent engine: the UI is TypeScript/HTML, the engine
+Tauri 2 shell + Python agent engine: the UI is TypeScript/HTML, the engine
 stays Python, and the two talk over a local WebSocket.
 Inspired by the [Neural Code walkthrough](https://youtu.be/Lu1UWqVTbQg) - renamed to `harness` for personal use.
 
@@ -9,22 +9,25 @@ Inspired by the [Neural Code walkthrough](https://youtu.be/Lu1UWqVTbQg) - rename
 
 ```powershell
 uv sync
-cd electron
+cd desktop
 npm install
-npm start
+npm run dev          # build:web + tauri dev
+npm run build        # release build without the installer bundle
 ```
 
-Electron spawns the Python sidecar itself (`uv run python -m harness.server`),
-picks a free localhost port and loads the renderer against it. The window opens
-with the last active workspace and provider. Type a message, Enter sends it
-(Shift+Enter for a newline). The round send/stop button shows an arrow when
-idle and an animated spinner while the agent works; clicking it stops the turn
-between steps (the in-flight model call finishes first).
+The Tauri shell spawns the Python sidecar itself (`uv run python -m harness.server`,
+falling back to the project venv interpreter), picks a free localhost port and
+loads the renderer against it, and kills the whole sidecar process tree on
+exit. The window opens with the last active workspace and provider. Type a
+message, Enter sends it (Shift+Enter for a newline). The round send/stop
+button shows an arrow when idle and an animated spinner while the agent works;
+clicking it stops the turn between steps (the in-flight model call finishes
+first).
 
 The engine can also be run on its own, with no UI at all:
 
 ```powershell
-uv run harness --port 8765 --project-root . --app-data-dir ~/.agents
+uv run python -m harness.server --port 8765 --project-root . --app-data-dir <data-dir>
 ```
 
 ## UI tour
@@ -59,9 +62,9 @@ first then global, each capped at 20,000 characters:
 
 1. `<workspace>\AGENTS.md` - the project's own rules
 2. `~\.agents\AGENTS.md` - the engine's global rules
-3. `%APPDATA%\harness-electron\harness\AGENTS.md` - the app profile's global
-   rules (created on first launch, alongside `providers.json` and
-   `recent-workspaces.json`)
+3. `<app-data>\AGENTS.md` - the app profile's global rules (`%APPDATA%\Harness`
+   by default, alongside `providers.json`; the old `harness-electron` tree is
+   adopted on first launch)
 
 The prompt says outright that where the project rules disagree with the app's
 own defaults, the project rules win. Skills are listed the same way but by
@@ -138,8 +141,10 @@ recover from an upstream failure.
 
 ## Sessions
 
-Chats live under `~/.agents/sessions/<project>/` as one JSONL file each, with
-a `titles.json` sidecar. New sessions get an LLM-generated title after the
+Chats live under the app data dir (`%APPDATA%\Harness\sessions\<project>\`
+by default; change it in Settings > Storage) as one JSONL file each, with a
+`titles.json` sidecar. A legacy `~/.agents/sessions` tree is migrated on
+startup. New sessions get an LLM-generated title after the
 first turn; rename or delete any session by right-clicking it - the workspace
 does not have to be open, the op carries its own root - and it disappears
 from the sidebar at once, closing any tab that had it. Workspaces themselves
@@ -151,11 +156,14 @@ those into place on startup.
 ## Architecture
 
 ```text
-Electron renderer  <-- WebSocket -->  harness/server.py  <-- events -->  agent engine (Runner)
+Tauri webview (renderer)  <-- WebSocket -->  harness/server.py  <-- events -->  agent engine (Runner)
 ```
 
-- `electron/`: main process (spawns the sidecar, picks the port, window and
-  workspace plumbing) and the renderer (tabs, chat, composer, Settings).
+- `desktop/`: the Tauri 2 shell. `src-tauri/src/` (Rust) spawns and tree-kills
+  the sidecar, picks the port, owns workspace and storage plumbing over IPC;
+  `web/` holds the renderer (tabs, chat, composer, Settings) and the
+  `window.harness` bridge over Tauri IPC. Build: `npm run build:web`,
+  typecheck: `npm run typecheck`.
 - `harness/server.py`: the sidecar. One WebSocket, one `Session` per client
   key, so many tabs and workspaces share one engine process.
 - `harness/events.py`: bus (`message`, `message_delta`, `tool_call/result`,
@@ -176,6 +184,15 @@ Possible future API clients can attach to the same event layer; none is built.
 
 ## Tests
 
+One entrypoint runs the whole engine suite (19 modules) and its exit code is
+the verdict:
+
+```powershell
+python scripts/run_tests.py                  # or: uv run python scripts/run_tests.py
+```
+
+Single files run the same way:
+
 ```powershell
 uv run python tests/test_engine_headless.py   # engine with no UI attached
 uv run python tests/test_providers.py         # registry, masking, fallback
@@ -189,13 +206,21 @@ uv run python tests/test_text_tools.py        # XML text tool calls: parse, vali
 uv run python tests/test_sessions.py          # storage, migration, LLM titles
 uv run python tests/test_permissions.py       # policy modes, deny-list supremacy
 uv run python tests/test_llm_params.py        # effort/temperature forwarding
+uv run python tests/test_agents.py            # plan/build agent routing
+uv run python tests/test_e2e_workflow.py      # plan -> build -> oversight, end to end
+uv run python tests/test_instructions.py      # AGENTS.md injection, 20k cap
+uv run python tests/test_oversight.py         # decision review gate
+uv run python tests/test_paths.py             # workspace/app-data resolution
+uv run python tests/test_sandbox.py           # sandbox wrap/run
+uv run python tests/test_server_protocol.py   # sidecar ops and replies
 ```
 
 The renderer has no unit harness, so its rules are checked end to end:
-`node electron/scripts/renderer-check.mjs` launches the app against a
-provider whose endpoint is dead, drives the composer and the sidebar over
-the DevTools Protocol, and writes a pass/fail report to
-`tests/renderer-check.txt`: the retry card ticking, the error card offering a
+`node desktop/scripts/renderer-check.mjs` builds the web assets, launches the
+real Tauri window against a provider whose endpoint is dead, drives the
+composer and the sidebar over the DevTools Protocol (WebView2 remote
+debugging), and writes a pass/fail report to `tests/renderer-check.txt`: the
+retry card ticking, the error card offering a
 next step and surviving both the post-turn reconcile and a session switch,
 a deleted session leaving the sidebar at once (tab or no tab, workspace open
 or not), the workspace removal, and the plan panel starting closed.
