@@ -202,7 +202,7 @@ class LlmCase(unittest.TestCase):
                     served["chunks"] = 1
                     return SimpleNamespace(usage=None, choices=[SimpleNamespace(
                         delta=SimpleNamespace(content="first", tool_calls=None))])
-                release.wait(5)
+                release.wait(2)  # < join timeout: the worker must unblock first
                 raise ConnectionResetError("should have been abandoned")
 
         completions = FakeCompletions([Hanging()])
@@ -218,7 +218,14 @@ class LlmCase(unittest.TestCase):
 
         thread = threading.Thread(target=worker)
         thread.start()
-        time.sleep(0.1)
+        # Wait for the first DELTA, not a blind sleep: the 0.1s window assumed
+        # thread start + request build + create + chunk 1 all fit inside it,
+        # which a cold cache on a loaded machine does not - the cancel then
+        # fired before the attempt and the test failed with seen == [].
+        deadline = time.monotonic() + 5
+        while not seen and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertTrue(seen, "the first chunk never arrived")
         cancel.set()
         thread.join(timeout=5)
         self.assertFalse(thread.is_alive())

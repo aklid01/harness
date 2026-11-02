@@ -137,6 +137,10 @@ class WorkflowE2E(unittest.TestCase):
                                 "content": '{"verdict":"approve","reasoning":"matches the plan"}'}],
         }
         self.server, base = start_mock(self.scripts)
+        # shutdown BEFORE server_close: closing the socket while serve_forever
+        # is still selecting on it crashed the loop with WinError 10038 and
+        # littered the suite output with tracebacks that masked real failures.
+        self.addCleanup(self.server.shutdown)
         self.addCleanup(self.server.server_close)
 
         providers.save_group({"id": "grp-1", "name": "One", "base_url": base})
