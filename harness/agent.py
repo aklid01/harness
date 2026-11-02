@@ -975,6 +975,16 @@ class Runner:
 
     def _turn(self):
         self._announce_mode()
+        # The role this turn reports on its events. The mode is locked for the
+        # whole turn, so one label at the top is the truth for all of them -
+        # the UI shows it verbatim on tool entries and the activity line.
+        role = (
+            "plan"
+            if self.mode == "plan"
+            else "ask"
+            if self.mode == "ask"
+            else "build"
+        )
         # The user message that opened this turn, so a retry resumes from it
         # instead of appending a second copy.
         self._turn_index = len(self.messages) - 1
@@ -1051,7 +1061,7 @@ class Runner:
             if trimmed:
                 events.emit(events.NOTE, {"text": trimmed})
 
-            events.emit(events.STATUS, {"active": active_form(), "role": "build"})
+            events.emit(events.STATUS, {"active": active_form(), "role": role})
             self._step += 1
             request_id = f"{self._request_prefix}:{self._step}"
             # Plan and Ask get the same chokepoint the planner has: the withheld
@@ -1191,7 +1201,7 @@ class Runner:
             if message.content:
                 events.emit(
                     events.MESSAGE,
-                    {"role": "assistant", "content": message.content, "agent": "build"},
+                    {"role": "assistant", "content": message.content, "agent": role},
                 )
 
             if not message.tool_calls:
@@ -1305,7 +1315,7 @@ class Runner:
                         "name": name,
                         "args": args,
                         "nested": False,
-                        "agent": "build",
+                        "agent": role,
                         **extra,
                     },
                 )
@@ -1317,7 +1327,7 @@ class Runner:
                         "args": args,
                         "result": result,
                         "nested": False,
-                        "agent": "build",
+                        "agent": role,
                         **extra,
                     },
                 )

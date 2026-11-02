@@ -1228,6 +1228,7 @@ function addToolLine(
 }
 const ROLE_LABEL: Record<string, string> = {
   plan: "plan",
+  ask: "ask",
   build: "build",
   checker: "review",
 };

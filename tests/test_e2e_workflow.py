@@ -438,7 +438,15 @@ class WorkflowE2E(unittest.TestCase):
         self.assertIn("bash", offered)
         self.assertIn("read_file", offered)
 
-        # Each attempted call got a result: two refusals, one real run.
+        # Each attempted call got a result: two refusals, one real run. The
+        # events name the mode they ran under, so the UI labels the work
+        # "ask", not "build".
+        callers = [
+            m["payload"].get("agent")
+            for m in self.sent
+            if m.get("event") == events.TOOL_CALL
+        ]
+        self.assertTrue(callers and set(callers) == {"ask"}, f"roles were {callers}")
         outcomes = [
             (m["payload"]["name"], str(m["payload"]["result"]))
             for m in self.sent
@@ -481,6 +489,7 @@ class WorkflowE2E(unittest.TestCase):
             "probe_file_created": probe.exists(),
             "mutating_bash_refused": "read-only" in outcomes[1][1],
             "readonly_bash_ran": "ask-read-only-ok" in outcomes[2][1],
+            "tool_events_say_ask": set(callers) == {"ask"},
             "researching_phase_emitted": "researching" in phases,
         }
         artifact = Path(self.tmp.name) / "e2e-ask-report.json"
@@ -491,6 +500,7 @@ class WorkflowE2E(unittest.TestCase):
         self.assertFalse(reread["probe_file_created"])
         self.assertTrue(reread["mutating_bash_refused"])
         self.assertTrue(reread["readonly_bash_ran"])
+        self.assertTrue(reread["tool_events_say_ask"])
         self.assertTrue(reread["researching_phase_emitted"])
         print("\n[e2e artifact]", json.dumps(report, indent=2))
 
