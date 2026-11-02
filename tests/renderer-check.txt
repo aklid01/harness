@@ -1,8 +1,10 @@
 VERDICT plan-panel-closed-by-default: true ({"hidden":true,"toggleActive":false})
 VERDICT mode-menu-offers-ask: true ({"labels":["Build","Ask","Plan","Plan ? Build"],"label":"Ask","pickedAsk":true})
 VERDICT storage-tab-lists-locations: true ({"rows":4,"labels":["Data folder (set by HARNESS_APP_DATA)","Sessions and checkpoints","API keys","Workspace skills"],"dataFolder":"C:\\Users\\ISHAND~1\\AppData\\Local\\Temp\\harness-renderer-check\\app","sessions":"C:\\Users\\ISHAND~1\\AppData\\Local\\Temp\\harness-renderer-check\\app\\sessions","canChange":true})
+VERDICT mode-control-locks-mid-turn: true ({"disabled":true,"title":"Locked while the agent works - stop the turn to switch modes","menuHidden":true,"stillHidden":true})
 VERDICT retry-card-ticks: true (["Retry 5 of 5 - attempt in flight...","Retry 5 of 5 - attempt in flight..."])
 VERDICT engine-is-the-fixture: true (["could not reach the providercould not reach the provider (Dead Local): Connection error. - still failing after 5 retriesThings to do: Check the base URL and your connection, then press Retry.RetrySwit"])
+VERDICT mode-control-releases-after-the-turn: true
 VERDICT error-card-shown: true (could not reach the providercould not reach the provider (Dead Local): Connection error. -)
 VERDICT error-suggests-next-step: true (["Things to do: Check the base URL and your connection, then press Retry."])
 VERDICT error-card-survives-session-switch: true (other=0 back=1)
@@ -13,4 +15,4 @@ VERDICT closing-every-tab-lands: true ({"tabs":[],"landingVisible":true})
 VERDICT session-deletable-without-opening: true (before=1 after=0)
 VERDICT workspace-removable: true (rows=1->0)
 VERDICT folder-still-on-disk: true
-RESULT: PASS (15/15)
+RESULT: PASS (17/17)

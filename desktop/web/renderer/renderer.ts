@@ -722,6 +722,10 @@ function setBusy(ctx: Ctx, value: boolean): void {
     updateSendState();
     setStatusState(value ? "working" : "ready");
     renderTabs();
+    // The mode control locks for the whole turn; an open menu would keep
+    // offering options the guard below refuses, so close it now.
+    if (value && !modeMenu.classList.contains("hidden")) closeAllMenus();
+    refreshModeIndicator();
   }
 }
 function updateSendState(): void {
@@ -3132,23 +3136,34 @@ function applyMode(ctx: Ctx, mode: Mode): void {
   prefs.modeByWs[ctx.root] = mode;
   savePrefs();
   if (ctx === activeCtx) {
-    modeLabel.textContent = modeLabelText(mode);
-    statusMode.textContent = modeLabelText(mode);
+    refreshModeIndicator();
     renderMenu(modeMenu, MODE_OPTIONS, mode, (v) => pickMode(ctx, v));
     refreshModelButton(); // the model control reflects the newly selected workflow
   }
 }
 function pickMode(ctx: Ctx, value: string): void {
+  if (ctx.busy) {
+    closeAllMenus();
+    setActivity("the mode is locked while the agent works - stop the turn first");
+    return;
+  }
   applyMode(ctx, value as Mode);
 }
 /* The composer's mode control always shows the ACTUAL selected workflow, so its
    label and its menu checkmark can never disagree. It is the single place to
-   choose the workflow; the status bar above shows the live phase during a run. */
+   choose the workflow; the status bar above shows the live phase during a run.
+   The control locks while a turn runs: the mode binds a whole turn, so a
+   mid-turn switch could never reach the engine anyway (submit/retry/resend all
+   refuse while busy) - the lock just makes that honest instead of silent. */
+const MODE_LOCKED_TITLE = "Locked while the agent works - stop the turn to switch modes";
 function refreshModeIndicator(): void {
   const mode = activeCtx?.modeVal ?? prefs.defaultMode;
+  const locked = !!activeCtx?.busy;
   modeLabel.textContent = modeLabelText(mode);
-  modeLabel.title = "Workflow: " + modeLabelText(mode);
+  modeLabel.title = locked ? MODE_LOCKED_TITLE : "Workflow: " + modeLabelText(mode);
+  modeBtn.title = modeLabel.title;
   statusMode.textContent = modeLabelText(mode);
+  modeBtn.disabled = locked;
   modeBtn.classList.toggle("workflow", mode === "plan-build");
 }
 function pickEffort(ctx: Ctx, value: string): void {

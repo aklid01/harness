@@ -60,6 +60,9 @@ or a mid-session switch notice. Reasoning effort and temperature are per-model
 settings, forwarded to the API only when set, and only to models that support
 them.
 
+The mode control locks while a turn runs: a mode binds a whole turn, so stop
+the turn to switch. Permission levels stay changeable mid-turn by design.
+
 ## Project rules
 
 Every workspace can keep its instructions in `AGENTS.md`, and they are

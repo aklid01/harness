@@ -375,6 +375,33 @@ try {
      final error card lands only after the retry schedule is spent (3+5+15+
      20+30s), so the poll has to span all of it. */
   await submit(ws, "first turn");
+
+  /* The mode control locks while the turn runs: disabled, with the reason on
+     hover, and a forced click cannot open the menu. */
+  await sleep(600);
+  const locked = await evaluate(
+    ws,
+    `(() => ({
+    disabled: document.getElementById("modeBtn").disabled,
+    title: document.getElementById("modeBtn").title,
+    menuHidden: document.getElementById("modeMenu").classList.contains("hidden"),
+  }))()`,
+  );
+  await evaluate(ws, `document.getElementById("modeBtn").click()`);
+  await sleep(150);
+  const stillHidden = await evaluate(
+    ws,
+    `document.getElementById("modeMenu").classList.contains("hidden")`,
+  );
+  verdict(
+    "mode-control-locks-mid-turn",
+    locked.disabled &&
+      locked.menuHidden &&
+      stillHidden &&
+      locked.title.includes("Locked"),
+    JSON.stringify({ ...locked, stillHidden }),
+  );
+
   let ticks = [];
   let final = { errors: [], hints: [] };
   for (let i = 0; i < 90; i++) {
@@ -396,6 +423,17 @@ try {
     final.errors.some((e) => e.includes("Dead Local")),
     JSON.stringify(final.errors.slice(0, 1)),
   );
+  /* The lock releases once the turn is over (here: failed), so the next
+     message can start in a different mode. */
+  let released = false;
+  for (let i = 0; i < 12 && !released; i++) {
+    await sleep(500);
+    released = await evaluate(
+      ws,
+      `!document.getElementById("modeBtn").disabled`,
+    );
+  }
+  verdict("mode-control-releases-after-the-turn", released, "");
   verdict(
     "error-card-shown",
     final.errors.length > 0,
