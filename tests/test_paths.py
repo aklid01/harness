@@ -11,9 +11,11 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import paths  # noqa: E402
-from harness import providers  # noqa: E402
-from harness import session  # noqa: E402
+from harness import (
+    paths,
+    providers,
+    session,
+)
 
 
 class PathsCase(unittest.TestCase):
@@ -31,7 +33,9 @@ class PathsCase(unittest.TestCase):
         self.assertTrue(paths.slug_for(self.project))
 
     def test_providers_file_lives_in_app_data(self):
-        self.assertEqual(paths.providers_file(), self.appdata.resolve() / "providers.json")
+        self.assertEqual(
+            paths.providers_file(), self.appdata.resolve() / "providers.json"
+        )
 
     def test_session_dir_uses_explicit_root(self):
         expected = self.appdata.resolve() / "sessions" / paths.slug_for(self.project)
@@ -54,21 +58,33 @@ class PathsCase(unittest.TestCase):
         self.assertIsNone(paths.migrate_providers())
 
     def test_providers_crud_uses_new_location(self):
-        providers.save_provider({"id": "p1", "name": "P1", "base_url": "https://x/v1",
-                                 "model": "m", "headers": {}, "disabled": False})
+        providers.save_provider(
+            {
+                "id": "p1",
+                "name": "P1",
+                "base_url": "https://x/v1",
+                "model": "m",
+                "headers": {},
+                "disabled": False,
+            }
+        )
         self.assertTrue(paths.providers_file().exists())
         self.assertEqual(providers.get_active_id(), "p1")
 
     def test_env_and_skill_dirs_follow_root(self):
         self.assertEqual(paths.env_files()[0], self.project.resolve() / ".env")
-        self.assertEqual(paths.skill_dirs()[0], self.project.resolve() / ".agents" / "skills")
+        self.assertEqual(
+            paths.skill_dirs()[0], self.project.resolve() / ".agents" / "skills"
+        )
 
     def test_cwd_independence(self):
         other = Path(self.tmp.name) / "other"
         other.mkdir()
         paths.init(project_root=other, app_data_dir=self.appdata)
-        self.assertNotEqual(paths.session_dir(),
-                            self.appdata.resolve() / "sessions" / paths.slug_for(self.project))
+        self.assertNotEqual(
+            paths.session_dir(),
+            self.appdata.resolve() / "sessions" / paths.slug_for(self.project),
+        )
 
     def test_migrate_sessions_moves_legacy_home_tree(self):
         home = Path(self.tmp.name) / "home"
@@ -79,7 +95,9 @@ class PathsCase(unittest.TestCase):
         with mock.patch.object(Path, "home", return_value=home):
             moved = paths.migrate_sessions()
         self.assertEqual(moved, legacy)
-        self.assertTrue((paths.sessions_root() / slug / "20260101-000000.jsonl").exists())
+        self.assertTrue(
+            (paths.sessions_root() / slug / "20260101-000000.jsonl").exists()
+        )
         self.assertFalse(legacy.exists())
 
     def test_migrate_sessions_refuses_a_data_dir_in_use(self):

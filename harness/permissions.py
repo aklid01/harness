@@ -20,6 +20,7 @@ def project_root():
         return paths.project_root()
     return PROJECT
 
+
 MODES = ("default", "strict", "allow-all", "autopilot")
 MODE = "default"
 _ACTIVE_MODE = contextvars.ContextVar("harness_perm_mode", default=None)
@@ -77,6 +78,7 @@ def current_mode():
     if ref in MODES:
         return ref
     return MODE
+
 
 # Last matching rule wins, so put the catch-all first.
 BASH_RULES = {
@@ -136,6 +138,7 @@ BASH_RULES = {
     "git reset*": "deny",
     "git clean*": "deny",
 }
+
 
 def split_command(command):
     """Split a compound command on the separators that actually separate.
@@ -198,8 +201,7 @@ def _hides_write_primitive(segment):
                 # delimiter (`s/x/y/w file`) or after space (`x;w file`)
                 if any(_re.search(r"(?<![\w\\])w\s+\S", arg) for arg in args):
                     return True
-            elif any(arg == primitive or arg.startswith(primitive)
-                     for arg in args):
+            elif any(arg == primitive or arg.startswith(primitive) for arg in args):
                 return True
     return False
 
@@ -228,8 +230,9 @@ def decide(command):
         # Same for commands that smuggle a second command or a write primitive
         # past a prefix rule: the allow was earned by the prefix, not by what
         # the segment actually does.
-        if action == "allow" and (_has_substitution(part)
-                                  or _hides_write_primitive(part)):
+        if action == "allow" and (
+            _has_substitution(part) or _hides_write_primitive(part)
+        ):
             action = "ask"
         verdicts.append(action)
 
@@ -292,31 +295,150 @@ import re as _re
 
 # Commands that only read, when their arguments do not redirect or edit.
 _READONLY_TOOLS = {
-    "ls", "dir", "cat", "type", "head", "tail", "more", "less", "grep", "egrep",
-    "fgrep", "findstr", "select-string", "rg", "ag", "wc", "sort", "uniq", "cut",
-    "stat", "file", "du", "df", "echo", "printf", "pwd", "whoami", "hostname",
-    "date", "env", "printenv", "which", "where", "where.exe", "tree", "basename",
-    "dirname", "realpath", "md5sum", "sha1sum", "sha256sum", "diff", "cmp",
-    "nl", "tac", "rev", "true", "false", "test", "comm", "find", "find.exe",
-    "gci", "get-childitem", "cd", "pwd", "ls.exe", "cat.exe", "grep.exe",
+    "ls",
+    "dir",
+    "cat",
+    "type",
+    "head",
+    "tail",
+    "more",
+    "less",
+    "grep",
+    "egrep",
+    "fgrep",
+    "findstr",
+    "select-string",
+    "rg",
+    "ag",
+    "wc",
+    "sort",
+    "uniq",
+    "cut",
+    "stat",
+    "file",
+    "du",
+    "df",
+    "echo",
+    "printf",
+    "pwd",
+    "whoami",
+    "hostname",
+    "date",
+    "env",
+    "printenv",
+    "which",
+    "where",
+    "where.exe",
+    "tree",
+    "basename",
+    "dirname",
+    "realpath",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "diff",
+    "cmp",
+    "nl",
+    "tac",
+    "rev",
+    "true",
+    "false",
+    "test",
+    "comm",
+    "find",
+    "find.exe",
+    "gci",
+    "get-childitem",
+    "cd",
+    "ls.exe",
+    "cat.exe",
+    "grep.exe",
 }
 # Commands that install, fetch, build or execute code: real side effects, but
 # not inherently destructive on their own.
 _ACTION_TOOLS = {
-    "pip", "pip3", "python", "python3", "py", "node", "npm", "npx", "yarn",
-    "pnpm", "apt", "apt-get", "brew", "cargo", "gem", "composer", "gradle",
-    "mvn", "go", "dotnet", "make", "cmake", "tsc", "pytest", "py.test",
-    "uv", "poetry", "virtualenv", "conda", "ruff", "flake8", "mypy", "docker",
+    "pip",
+    "pip3",
+    "python",
+    "python3",
+    "py",
+    "node",
+    "npm",
+    "npx",
+    "yarn",
+    "pnpm",
+    "apt",
+    "apt-get",
+    "brew",
+    "cargo",
+    "gem",
+    "composer",
+    "gradle",
+    "mvn",
+    "go",
+    "dotnet",
+    "make",
+    "cmake",
+    "tsc",
+    "pytest",
+    "py.test",
+    "uv",
+    "poetry",
+    "virtualenv",
+    "conda",
+    "ruff",
+    "flake8",
+    "mypy",
+    "docker",
 }
 # Commands that remove, overwrite, move or change permissions / config.
 _DESTRUCTIVE_TOOLS = {
-    "rm", "rmdir", "del", "erase", "shred", "mv", "move", "cp", "copy", "tee",
-    "chmod", "chown", "chflags", "ln", "install", "curl", "wget", "scp", "sftp",
-    "dd", "nc", "ncat", "kill", "killall", "mkfs", "fsck", "format", "renice",
+    "rm",
+    "rmdir",
+    "del",
+    "erase",
+    "shred",
+    "mv",
+    "move",
+    "cp",
+    "copy",
+    "tee",
+    "chmod",
+    "chown",
+    "chflags",
+    "ln",
+    "install",
+    "curl",
+    "wget",
+    "scp",
+    "sftp",
+    "dd",
+    "nc",
+    "ncat",
+    "kill",
+    "killall",
+    "mkfs",
+    "fsck",
+    "format",
+    "renice",
 }
-_SHELL_CONSUMERS = ("sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh",
-                    "python", "python3", "perl", "ruby", "node", "powershell",
-                    "pwsh", "cmd")
+_SHELL_CONSUMERS = (
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "csh",
+    "tcsh",
+    "python",
+    "python3",
+    "perl",
+    "ruby",
+    "node",
+    "powershell",
+    "pwsh",
+    "cmd",
+)
 
 
 def _shell_words(segment):
@@ -381,7 +503,7 @@ def redirect_writes_file(command):
                 j += 1
             while j < n and seg[j] in " \t":
                 j += 1
-            if j < n and seg[j] == "&":        # 2>&1  /  >&2 : duplicate fd
+            if j < n and seg[j] == "&":  # 2>&1  /  >&2 : duplicate fd
                 i = j + 1
                 continue
             target = []
@@ -408,21 +530,43 @@ def _classify_segment(segment):
     if base == "sed":
         return "high" if any(a.startswith("-i") for a in args) else "low"
     if base == "find":
-        return "high" if ("-delete" in args or "-exec" in args or "-execdir" in args or "-ok" in args) else "low"
+        return (
+            "high"
+            if (
+                "-delete" in args
+                or "-exec" in args
+                or "-execdir" in args
+                or "-ok" in args
+            )
+            else "low"
+        )
     if base in ("black", "isort", "autopep8", "gofmt", "rustfmt", "prettier"):
-        return "medium"   # rewrites source in place
+        return "medium"  # rewrites source in place
     if base in ("mkdir", "touch"):
-        return "low"      # creating a dir/bumping mtime cannot destroy data
+        return "low"  # creating a dir/bumping mtime cannot destroy data
     if base == "git":
         sub = next((a for a in args if not a.startswith("-")), "")
         if sub in ("reset", "clean", "push", "rebase", "filter-branch"):
             return "high"
-        if sub == "checkout" and any(a == "--" or a == "." or a.startswith("HEAD") for a in args):
+        if sub == "checkout" and any(
+            a == "--" or a == "." or a.startswith("HEAD") for a in args
+        ):
             return "high"
         if sub == "restore" and args:
             return "high"
-        if sub in ("log", "status", "diff", "show", "ls-files", "branch",
-                   "rev-parse", "remote", "config", "describe", "shortlog"):
+        if sub in (
+            "log",
+            "status",
+            "diff",
+            "show",
+            "ls-files",
+            "branch",
+            "rev-parse",
+            "remote",
+            "config",
+            "describe",
+            "shortlog",
+        ):
             return "low"
         return "medium"
     if base in _DESTRUCTIVE_TOOLS:
@@ -433,14 +577,28 @@ def _classify_segment(segment):
         return "medium"
     if base in _SHELL_CONSUMERS or base in ("eval", "exec", "xargs", "source", "."):
         return "high"
-    return "medium"   # unknown executable: conservative
+    return "medium"  # unknown executable: conservative
 
 
 def _is_catastrophic(command):
     low = command.lower()
-    return any(m in low for m in ("rm -rf /", "rm -fr /", "mkfs", ":(){", "dd if=",
-                                  "--no-preserve-root", "shutdown", "reboot",
-                                  "poweroff", "> /dev/sd", "format c:", "halt"))
+    return any(
+        m in low
+        for m in (
+            "rm -rf /",
+            "rm -fr /",
+            "mkfs",
+            ":(){",
+            "dd if=",
+            "--no-preserve-root",
+            "shutdown",
+            "reboot",
+            "poweroff",
+            "> /dev/sd",
+            "format c:",
+            "halt",
+        )
+    )
 
 
 def _strip_redirects(command):
@@ -452,10 +610,10 @@ def _strip_redirects(command):
     separately on the original text by redirect_writes_file.
     """
     s = str(command)
-    s = _re.sub(r"\d*>&\d", " ", s)                        # 2>&1, 1>&2 (fd dup)
+    s = _re.sub(r"\d*>&\d", " ", s)  # 2>&1, 1>&2 (fd dup)
     s = _re.sub(r"\d*>>?\s*[\"']?[^\"'\s;&|<>]+[\"']?", " ", s)  # > file, 2>nul
-    s = _re.sub(r"\d*>>?", " ", s)                         # any leftover > / >>
-    s = _re.sub(r"<\s*\S+", " ", s)                        # stdin redirects
+    s = _re.sub(r"\d*>>?", " ", s)  # any leftover > / >>
+    s = _re.sub(r"<\s*\S+", " ", s)  # stdin redirects
     return s
 
 
@@ -468,7 +626,9 @@ def classify_bash(command):
     """
     text = str(command or "")
     low = text.lower()
-    if _re.search(r"\|\s*(sudo\s+)?(sh|bash|zsh|dash|ksh)\b", low) and _re.search(r"\b(curl|wget|nc|ncat)\b", low):
+    if _re.search(r"\|\s*(sudo\s+)?(sh|bash|zsh|dash|ksh)\b", low) and _re.search(
+        r"\b(curl|wget|nc|ncat)\b", low
+    ):
         return "critical", "downloads a remote script and pipes it into a shell"
     if _is_catastrophic(text):
         return "critical", "can wipe data or take the machine down"
@@ -478,7 +638,10 @@ def classify_bash(command):
         levels.append("high")
     for part in split_command(_strip_redirects(text)):
         levels.append(_classify_segment(part))
-    if _re.search(r"\|\s*(sudo\s+)?(sh|bash|zsh|dash|python[\d.]*|perl|ruby|node|powershell|pwsh)\b", low):
+    if _re.search(
+        r"\|\s*(sudo\s+)?(sh|bash|zsh|dash|python[\d.]*|perl|ruby|node|powershell|pwsh)\b",
+        low,
+    ):
         levels.append("high")
 
     order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
@@ -511,7 +674,11 @@ def approval_info(name, args, reason, note=""):
     """Rich payload for the approval dialog: validated risk + short context."""
     level, risk_reason = assess_risk(name, args)
     command = str(args.get("command", "")) if name == "bash" else ""
-    target = str(args.get("path", "")) if name in ("write_file", "str_replace", "read_file") else ""
+    target = (
+        str(args.get("path", ""))
+        if name in ("write_file", "str_replace", "read_file")
+        else ""
+    )
     why = (note or "").strip()
     if len(why) > 280:
         why = why[:280].rstrip() + "…"

@@ -6,7 +6,6 @@ the SDK raised onto a ModelError carrying kind, transient-ness, the HTTP status,
 any Retry-After the provider sent, and a message that never leaks the key.
 """
 
-import json
 import re
 
 TRANSIENT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504, 507, 509, 529})
@@ -29,7 +28,9 @@ HEADLINES = {
     "unknown": "the request failed",
 }
 
-TRANSIENT_KINDS = frozenset({"network", "timeout", "rate_limited", "server", "malformed"})
+TRANSIENT_KINDS = frozenset(
+    {"network", "timeout", "rate_limited", "server", "malformed"}
+)
 
 # What the user can actually do about it. A status the provider named
 # outranks the generic kind, because 401 and 403 reach us the same way and
@@ -92,9 +93,21 @@ def scrub(text, secrets=()):
 class ModelError(Exception):
     """A model request failed, with enough context to explain what to do."""
 
-    def __init__(self, kind, detail="", *, status=None, retry_after=None,
-                 model=None, model_id=None, partial=None, transient=None,
-                 exhausted=False, retries=None, cause=None):
+    def __init__(
+        self,
+        kind,
+        detail="",
+        *,
+        status=None,
+        retry_after=None,
+        model=None,
+        model_id=None,
+        partial=None,
+        transient=None,
+        exhausted=False,
+        retries=None,
+        cause=None,
+    ):
         self.kind = kind
         self.detail = scrub(detail)
         self.status = status
@@ -194,7 +207,9 @@ def _err_detail(exc, status):
             if error.get("param"):
                 named.append(f"parameter {error['param']}")
             if named:
-                detail = f"{detail} ({', '.join(named)})" if detail else ", ".join(named)
+                detail = (
+                    f"{detail} ({', '.join(named)})" if detail else ", ".join(named)
+                )
         elif error:
             detail = str(error)
         if not detail:
@@ -215,8 +230,12 @@ def classify(exc, api_key=None, model=None, model_id=None, kind=None):
     if isinstance(exc, ModelError):
         return exc
     if isinstance(exc, Cancelled):
-        return ModelError("cancelled", "stopped before the request finished",
-                         model=model, model_id=model_id)
+        return ModelError(
+            "cancelled",
+            "stopped before the request finished",
+            model=model,
+            model_id=model_id,
+        )
     name = type(exc).__name__
     status = _status_of(exc)
     text = str(exc).lower()
@@ -234,15 +253,36 @@ def classify(exc, api_key=None, model=None, model_id=None, kind=None):
             # it is worth another try instead of ending the turn on the spot.
             mapped = "server"
     if mapped == "stream_interrupted":
-        return ModelError("stream_interrupted", detail, status=status,
-                          retry_after=retry_after, model=model, model_id=model_id,
-                          transient=False, cause=exc)
+        return ModelError(
+            "stream_interrupted",
+            detail,
+            status=status,
+            retry_after=retry_after,
+            model=model,
+            model_id=model_id,
+            transient=False,
+            cause=exc,
+        )
     if mapped in HEADLINES and mapped != "unknown":
-        return ModelError(mapped, detail, status=status, retry_after=retry_after,
-                          model=model, model_id=model_id, cause=exc)
-    return ModelError("unknown", f"{name}: {detail}", status=status,
-                      retry_after=retry_after, model=model, model_id=model_id,
-                      transient=False, cause=exc)
+        return ModelError(
+            mapped,
+            detail,
+            status=status,
+            retry_after=retry_after,
+            model=model,
+            model_id=model_id,
+            cause=exc,
+        )
+    return ModelError(
+        "unknown",
+        f"{name}: {detail}",
+        status=status,
+        retry_after=retry_after,
+        model=model,
+        model_id=model_id,
+        transient=False,
+        cause=exc,
+    )
 
 
 def _by_name(name):
@@ -294,16 +334,34 @@ def _by_status(status):
 def _by_text(text):
     if _matches(text, ("timed out", "timeout", "deadline exceeded")):
         return "timeout"
-    if _matches(text, ("connection error", "connection refused", "connection reset",
-                       "name or service not known", "temporary failure in name resolution",
-                       "getaddrinfo", "nodename nor servname", "network is unreachable",
-                       "peer closed connection", "ssl", "certificate verify",
-                       "cannot connect", "unreachable", "connection aborted",
-                       "broken pipe", "eof occurred", "server disconnected")):
+    if _matches(
+        text,
+        (
+            "connection error",
+            "connection refused",
+            "connection reset",
+            "name or service not known",
+            "temporary failure in name resolution",
+            "getaddrinfo",
+            "nodename nor servname",
+            "network is unreachable",
+            "peer closed connection",
+            "ssl",
+            "certificate verify",
+            "cannot connect",
+            "unreachable",
+            "connection aborted",
+            "broken pipe",
+            "eof occurred",
+            "server disconnected",
+        ),
+    ):
         return "network"
     if _matches(text, ("rate limit", "too many requests", "quota")):
         return "rate_limited"
-    if _matches(text, ("expecting value", "invalid json", "not valid json", "json decode")):
+    if _matches(
+        text, ("expecting value", "invalid json", "not valid json", "json decode")
+    ):
         return "malformed"
     return None
 
@@ -311,10 +369,14 @@ def _by_text(text):
 def no_key(model=None, provider=None):
     """No credential for the selected model. Permanent: a configuration issue."""
     where = " on ".join(x for x in (provider, model) if x) or "the selected model"
-    return ModelError("no_key", f"add an API key for {where}", model=model, transient=False)
+    return ModelError(
+        "no_key", f"add an API key for {where}", model=model, transient=False
+    )
 
 
-def stream_interrupted(failure=None, partial="", api_key=None, model=None, model_id=None):
+def stream_interrupted(
+    failure=None, partial="", api_key=None, model=None, model_id=None
+):
     """The response broke after it started streaming.
 
     The streamed text is already on screen, so retrying would duplicate it.
@@ -323,13 +385,25 @@ def stream_interrupted(failure=None, partial="", api_key=None, model=None, model
     detail = scrub(str(cause)) if cause else "connection lost mid-stream"
     if partial:
         detail = f"{detail} after {len(partial)} characters"
-    return ModelError("stream_interrupted", detail, model=model, model_id=model_id,
-                      partial=partial, transient=False, cause=cause)
+    return ModelError(
+        "stream_interrupted",
+        detail,
+        model=model,
+        model_id=model_id,
+        partial=partial,
+        transient=False,
+        cause=cause,
+    )
 
 
 def cancelled(model=None, model_id=None):
-    return ModelError("cancelled", "stopped before the request finished",
-                      model=model, model_id=model_id, transient=False)
+    return ModelError(
+        "cancelled",
+        "stopped before the request finished",
+        model=model,
+        model_id=model_id,
+        transient=False,
+    )
 
 
 def explain(exc, api_key=None, model=None, model_id=None):

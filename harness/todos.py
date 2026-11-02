@@ -61,9 +61,23 @@ def active_form():
 # Words that, in a todo, mean "this is a verification/validation step". A bash
 # command that actually runs one marks the step done - from evidence, not from
 # the agent claiming it.
-_COMPLETION_WORDS = ("py_compile", "py_test", "pytest", "unittest", "test",
-                    "tests", "lint", "flake8", "ruff", "mypy", "typecheck",
-                    "compile", "build", "validate", "check")
+_COMPLETION_WORDS = (
+    "py_compile",
+    "py_test",
+    "pytest",
+    "unittest",
+    "test",
+    "tests",
+    "lint",
+    "flake8",
+    "ruff",
+    "mypy",
+    "typecheck",
+    "compile",
+    "build",
+    "validate",
+    "check",
+)
 _DONE = {"done", "completed"}
 
 
@@ -78,8 +92,18 @@ def reconcile(tool_name, args, result):
     if not isinstance(result, str) or not result.strip():
         return False
     head = result.lstrip().lower()
-    if head.startswith(("error", "blocked", "plan mode", "the user denied",
-                        "decision review", "timed out", "<system-reminder", "stopped")):
+    if head.startswith(
+        (
+            "error",
+            "blocked",
+            "plan mode",
+            "the user denied",
+            "decision review",
+            "timed out",
+            "<system-reminder",
+            "stopped",
+        )
+    ):
         return False
     changed = False
     for todo in _state():

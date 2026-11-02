@@ -72,9 +72,10 @@ def prepare(messages, window=None, tail=TAIL):
     caller keeps its own copy, so what is stored stays exactly as it was - the
     note is what gets shown to the user instead of pretending it all fit.
     """
-    from . import config
 
-    limit = (int(window) if int(window or 0) > 0 else config.CONTEXT_WINDOW) * config.COMPACT_AT
+    limit = (
+        int(window) if int(window or 0) > 0 else config.CONTEXT_WINDOW
+    ) * config.COMPACT_AT
     if estimate(messages) <= limit:
         return list(messages), ""
 
@@ -82,8 +83,9 @@ def prepare(messages, window=None, tail=TAIL):
     # Protect by object identity, not position: the second pass deletes from
     # the request, so positional indices shift and the live tail would lose
     # its protection (the current question could be deleted out of a request).
-    protected = {id(message)
-                 for message in messages[max(frozen, len(messages) - tail):]}
+    protected = {
+        id(message) for message in messages[max(frozen, len(messages) - tail) :]
+    }
     request, omitted, stubbed = [], 0, 0
     for index, message in enumerate(messages):
         if index < frozen or index == 0 or id(message) in protected:
@@ -113,11 +115,12 @@ def prepare(messages, window=None, tail=TAIL):
 
     if not (omitted or stubbed):
         return request, ""
-    note = (f"trimmed the request to fit this model's context window: "
-            f"{omitted} older message(s) left out, {stubbed} tool result(s) stubbed. "
-            "The stored history is unchanged.")
+    note = (
+        f"trimmed the request to fit this model's context window: "
+        f"{omitted} older message(s) left out, {stubbed} tool result(s) stubbed. "
+        "The stored history is unchanged."
+    )
     return request, note
-
 
 
 # ------------------------------------------------------------------- 1. cap
@@ -126,7 +129,10 @@ def prepare(messages, window=None, tail=TAIL):
 def spill(text):
     """Park the full output on disk for the rest of this turn."""
     handle = tempfile.NamedTemporaryFile(
-        mode="w", prefix="harness-", suffix=".txt", delete=False,
+        mode="w",
+        prefix="harness-",
+        suffix=".txt",
+        delete=False,
         encoding="utf-8",
     )
     handle.write(text)
@@ -145,7 +151,10 @@ def cap(text):
     except OSError:
         # No temp file (read-only /tmp, no space). Still better to trim and
         # say so than to fail the tool call outright.
-        return text[:CAP] + f"\n\n{CAPPED} {len(text) - CAP} chars cut and the rest could not be saved.]"
+        return (
+            text[:CAP]
+            + f"\n\n{CAPPED} {len(text) - CAP} chars cut and the rest could not be saved.]"
+        )
     return (
         text[:CAP] + f"\n\n{CAPPED} {len(text) - CAP} of {len(text)} chars cut. "
         f"The whole output is at {path} - page through it with "
@@ -192,7 +201,7 @@ def strip(messages):
     the point, its full text is gone with the spill file anyway.
     """
     shrunk = 0
-    for message in messages[locked(messages):]:
+    for message in messages[locked(messages) :]:
         content = message.get("content") or ""
         if message["role"] != "tool" or TRIMMED in content or len(content) <= STUB:
             continue

@@ -7,7 +7,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import permissions  # noqa: E402
+from harness import permissions
 
 
 class PermissionCase(unittest.TestCase):
@@ -57,10 +57,15 @@ class PermissionCase(unittest.TestCase):
         ref = permissions.mode_ref("default")
         with permissions.moded(ref):
             self.assertEqual(permissions.current_mode(), "default")
-            self.assertEqual(permissions.check("bash", {"command": "python -c 'print(1)'"})[0], "ask")
+            self.assertEqual(
+                permissions.check("bash", {"command": "python -c 'print(1)'"})[0], "ask"
+            )
             ref.value = "autopilot"  # user switches policy mid-work
             self.assertEqual(permissions.current_mode(), "autopilot")
-            self.assertEqual(permissions.check("bash", {"command": "python -c 'print(1)'"})[0], "allow")
+            self.assertEqual(
+                permissions.check("bash", {"command": "python -c 'print(1)'"})[0],
+                "allow",
+            )
 
     def test_plain_string_mode_is_still_supported(self):
         with permissions.moded("strict"):
@@ -75,18 +80,22 @@ class ClassifyBashCase(unittest.TestCase):
 
     def test_read_only_listings_and_reads_are_low(self):
         for cmd in [
-            "ls", "ls -la", "dir /b", "dir",
-            "ls src tests && ls docs",           # several directories
-            "cat a.py b.py c.py",                # several files
-            'grep -rn "def foo" src/',           # quoted pattern
-            'findstr /n /c:"a b" README.md',     # quoted with a space
-            "sed -n '1,20p' README.md",          # read-only sed
-            "git log --oneline -5", "git status",
+            "ls",
+            "ls -la",
+            "dir /b",
+            "dir",
+            "ls src tests && ls docs",  # several directories
+            "cat a.py b.py c.py",  # several files
+            'grep -rn "def foo" src/',  # quoted pattern
+            'findstr /n /c:"a b" README.md',  # quoted with a space
+            "sed -n '1,20p' README.md",  # read-only sed
+            "git log --oneline -5",
+            "git status",
             "find . -name '*.py'",
             "type README.md 2>nul | findstr .",  # stderr to null, not a write
             "ls -la /a 2>/dev/null || ls -la /b",
             "cd /d D:/x && dir /b",
-            "mkdir scratch/foo 2>/dev/null",     # benign create
+            "mkdir scratch/foo 2>/dev/null",  # benign create
         ]:
             self.assertEqual(self.level(cmd), "low", cmd)
 
@@ -103,7 +112,9 @@ class ClassifyBashCase(unittest.TestCase):
         self.assertEqual(self.level("sed -i s/a/b/ config.ini"), "high")
 
     def test_destructive_is_high_or_critical(self):
-        self.assertGreaterEqual(permissions.RISK_LEVELS.index(self.level("rm -rf build")), 2)
+        self.assertGreaterEqual(
+            permissions.RISK_LEVELS.index(self.level("rm -rf build")), 2
+        )
         self.assertEqual(self.level("git reset --hard HEAD"), "high")
 
     def test_download_into_shell_is_critical(self):
@@ -178,8 +189,9 @@ class BypassRegression(unittest.TestCase):
 
         real = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
         for withheld in (subagent.WITHHELD, agent.PLAN_WITHHELD):
-            self.assertLessEqual(withheld, real,
-                                 f"withheld names that are not tools: {withheld - real}")
+            self.assertLessEqual(
+                withheld, real, f"withheld names that are not tools: {withheld - real}"
+            )
 
 
 if __name__ == "__main__":

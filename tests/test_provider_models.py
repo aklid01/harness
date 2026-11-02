@@ -12,7 +12,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import providers  # noqa: E402
+from harness import providers
 
 
 class FakeKeyring:
@@ -32,10 +32,23 @@ class FakeKeyring:
 LEGACY = {
     "active_id": "https://a.example/v1",
     "providers": [
-        {"id": "https://a.example/v1", "name": "A - Flash", "base_url": "https://a.example/v1",
-         "model": "flash-1", "headers": {}, "disabled": False, "reasoning_effort": "high"},
-        {"id": "https://b.example/v1", "name": "B - Flash", "base_url": "https://b.example/v1",
-         "model": "flash-2", "headers": {"X-Test": "1"}, "disabled": False},
+        {
+            "id": "https://a.example/v1",
+            "name": "A - Flash",
+            "base_url": "https://a.example/v1",
+            "model": "flash-1",
+            "headers": {},
+            "disabled": False,
+            "reasoning_effort": "high",
+        },
+        {
+            "id": "https://b.example/v1",
+            "name": "B - Flash",
+            "base_url": "https://b.example/v1",
+            "model": "flash-2",
+            "headers": {"X-Test": "1"},
+            "disabled": False,
+        },
     ],
 }
 
@@ -55,7 +68,13 @@ class ModelCase(unittest.TestCase):
         providers._CACHE.clear()
 
     def group(self, gid="grp-1", name="NVIDIA", base="https://nvidia.example/v1"):
-        return {"id": gid, "name": name, "base_url": base, "headers": {}, "disabled": False}
+        return {
+            "id": gid,
+            "name": name,
+            "base_url": base,
+            "headers": {},
+            "disabled": False,
+        }
 
     def model(self, mid, name, model, gid="grp-1", **extra):
         payload = {"id": mid, "name": name, "model": model, **extra}
@@ -68,8 +87,12 @@ class ModelCase(unittest.TestCase):
 
         models = providers.list_models("grp-1")
         self.assertEqual([m["id"] for m in models], ["mdl-a", "mdl-b"])
-        self.assertEqual([m["name"] for m in models], ["GLM 5.3 Flash", "DeepSeek V4.1 Flash"])
-        self.assertEqual([m["model"] for m in models], ["glm-5.3-flash", "deepseek-v4.1-flash"])
+        self.assertEqual(
+            [m["name"] for m in models], ["GLM 5.3 Flash", "DeepSeek V4.1 Flash"]
+        )
+        self.assertEqual(
+            [m["model"] for m in models], ["glm-5.3-flash", "deepseek-v4.1-flash"]
+        )
 
     def test_models_survive_a_reload(self):
         providers.save_group(self.group())
@@ -78,7 +101,9 @@ class ModelCase(unittest.TestCase):
 
         providers._CACHE.clear()
         again = providers.list_models("grp-1")
-        self.assertEqual([m["model"] for m in again], ["glm-5.3-flash", "deepseek-v4.1-flash"])
+        self.assertEqual(
+            [m["model"] for m in again], ["glm-5.3-flash", "deepseek-v4.1-flash"]
+        )
         raw = json.loads(self.file.read_text())
         self.assertEqual(len(raw["providers"]), 1)
 
@@ -87,8 +112,15 @@ class ModelCase(unittest.TestCase):
         self.model("mdl-a", "GLM 5.3 Flash", "glm-5.3-flash", reasoning_effort="high")
         self.model("mdl-b", "DeepSeek V4.1 Flash", "deepseek-v4.1-flash")
 
-        providers.save_model({"id": "mdl-b", "name": "DeepSeek V4.1 Flash",
-                              "model": "deepseek-v4.1-flash:free", "temperature": "0.4"}, "grp-1")
+        providers.save_model(
+            {
+                "id": "mdl-b",
+                "name": "DeepSeek V4.1 Flash",
+                "model": "deepseek-v4.1-flash:free",
+                "temperature": "0.4",
+            },
+            "grp-1",
+        )
 
         a, b = providers.list_models("grp-1")
         self.assertEqual(a["model"], "glm-5.3-flash")
@@ -100,7 +132,9 @@ class ModelCase(unittest.TestCase):
     def test_rename_keeps_identity(self):
         providers.save_group(self.group())
         self.model("mdl-a", "Old name", "glm-5.3-flash")
-        providers.save_model({"id": "mdl-a", "name": "New name", "model": "glm-5.3-flash"}, "grp-1")
+        providers.save_model(
+            {"id": "mdl-a", "name": "New name", "model": "glm-5.3-flash"}, "grp-1"
+        )
 
         entry = providers.get_provider("mdl-a")
         self.assertEqual(entry["name"], "New name")
@@ -137,21 +171,37 @@ class ModelCase(unittest.TestCase):
         self.assertEqual(providers.provider_status("mdl-b")["key"], "keyring")
         providers.set_active("mdl-a")
         base, key, model, source = providers.active_config()
-        self.assertEqual((base, key, model, source), ("https://nvidia.example/v1", "sk-shared",
-                                                      "glm-5.3-flash", "keyring"))
+        self.assertEqual(
+            (base, key, model, source),
+            ("https://nvidia.example/v1", "sk-shared", "glm-5.3-flash", "keyring"),
+        )
         providers.set_active("mdl-b")
         self.assertEqual(providers.active_config()[2], "deepseek-v4.1-flash")
 
     def test_each_model_keeps_its_own_settings(self):
         providers.save_group(self.group())
-        self.model("mdl-a", "GLM 5.3 Flash", "glm-5.3-flash", reasoning_effort="xhigh",
-                   context_window=8_000, max_output_tokens=512, temperature="0.1")
-        self.model("mdl-b", "DeepSeek V4.1 Flash", "deepseek-v4.1-flash",
-                   supports_tools=False, extra_params={"top_p": 0.9})
+        self.model(
+            "mdl-a",
+            "GLM 5.3 Flash",
+            "glm-5.3-flash",
+            reasoning_effort="xhigh",
+            context_window=8_000,
+            max_output_tokens=512,
+            temperature="0.1",
+        )
+        self.model(
+            "mdl-b",
+            "DeepSeek V4.1 Flash",
+            "deepseek-v4.1-flash",
+            supports_tools=False,
+            extra_params={"top_p": 0.9},
+        )
 
         providers.set_active("mdl-a")
-        self.assertEqual(providers.active_model_params(),
-                         {"reasoning_effort": "xhigh", "temperature": 0.1, "max_tokens": 512})
+        self.assertEqual(
+            providers.active_model_params(),
+            {"reasoning_effort": "xhigh", "temperature": 0.1, "max_tokens": 512},
+        )
         self.assertEqual(providers.active_context_window(), 8_000)
         self.assertTrue(providers.active_model_capabilities()["supports_tools"])
 
@@ -171,13 +221,17 @@ class ModelCase(unittest.TestCase):
 
     def test_same_provider_name_or_host_is_not_an_identity(self):
         providers.save_group(self.group())
-        providers.save_group({"id": "grp-2", "name": "NVIDIA", "base_url": "https://nvidia.example/v1"})
+        providers.save_group(
+            {"id": "grp-2", "name": "NVIDIA", "base_url": "https://nvidia.example/v1"}
+        )
         self.model("mdl-a", "GLM 5.3 Flash", "glm-5.3-flash", gid="grp-1")
         self.model("mdl-b", "DeepSeek V4.1 Flash", "deepseek-v4.1-flash", gid="grp-2")
 
         self.assertEqual(len(providers.list_groups()), 2)
         self.assertEqual(len(providers.list_models()), 2)
-        self.assertNotEqual(providers.get_model("mdl-a")["id"], providers.get_model("mdl-b")["id"])
+        self.assertNotEqual(
+            providers.get_model("mdl-a")["id"], providers.get_model("mdl-b")["id"]
+        )
 
     def test_legacy_file_migrates_without_losing_entries(self):
         self.write(LEGACY)
@@ -185,8 +239,12 @@ class ModelCase(unittest.TestCase):
         self.assertEqual([m["model"] for m in models], ["flash-1", "flash-2"])
         self.assertEqual(len(providers.list_groups()), 2)
         self.assertEqual(providers.get_active_id(), models[0]["id"])
-        self.assertEqual(providers.get_provider(models[0]["id"])["reasoning_effort"], "high")
-        self.assertEqual(providers.get_provider(models[1]["id"])["headers"], {"X-Test": "1"})
+        self.assertEqual(
+            providers.get_provider(models[0]["id"])["reasoning_effort"], "high"
+        )
+        self.assertEqual(
+            providers.get_provider(models[1]["id"])["headers"], {"X-Test": "1"}
+        )
         self.assertEqual(providers.get_active_provider_id(), "https://a.example/v1")
 
         # the first write keeps the original file next to the new one
@@ -195,7 +253,9 @@ class ModelCase(unittest.TestCase):
         self.assertTrue(backup.exists())
         raw = json.loads(self.file.read_text())
         self.assertEqual(raw["version"], providers.FORMAT_VERSION)
-        self.assertEqual([m["model"] for m in providers.list_providers()], ["flash-1", "flash-2"])
+        self.assertEqual(
+            [m["model"] for m in providers.list_providers()], ["flash-1", "flash-2"]
+        )
 
     def test_legacy_colliding_entries_become_siblings(self):
         data = json.loads(json.dumps(LEGACY))
@@ -211,13 +271,18 @@ class ModelCase(unittest.TestCase):
     def test_legacy_ids_keep_their_keyring_entry(self):
         self.write(LEGACY)
         self.fake.set_password(providers.SERVICE, "https://b.example/v1", "sk-legacy")
-        self.assertEqual(providers.provider_status("https://b.example/v1")["key"], "keyring")
+        self.assertEqual(
+            providers.provider_status("https://b.example/v1")["key"], "keyring"
+        )
         providers.set_active("https://b.example/v1")
         self.assertEqual(providers.active_config()[1], "sk-legacy")
 
     def test_migrated_active_id_lands_on_its_model(self):
         self.write(LEGACY)
-        self.assertEqual(providers.get_active_id(), providers.get_provider("https://a.example/v1")["id"])
+        self.assertEqual(
+            providers.get_active_id(),
+            providers.get_provider("https://a.example/v1")["id"],
+        )
 
     def test_migration_never_stamps_settings_the_entry_never_had(self):
         """Identical chips in the UI must be stored values, not invented ones."""
@@ -244,26 +309,36 @@ class ModelCase(unittest.TestCase):
     def test_migration_report_counts_the_migration_not_the_live_registry(self):
         self.write(LEGACY)
         providers.list_providers()
-        providers.set_active(providers.list_providers()[1]["id"])   # writes the backup
+        providers.set_active(providers.list_providers()[1]["id"])  # writes the backup
         first = providers.migration_report()[0]
-        self.assertIn("moved 2 legacy entries into 2 model(s) under 2 provider(s)", first)
+        self.assertIn(
+            "moved 2 legacy entries into 2 model(s) under 2 provider(s)", first
+        )
 
     def test_migration_report_is_shown_once(self):
         self.write(LEGACY)
         providers.list_providers()
         providers.set_active(providers.list_providers()[1]["id"])
         self.assertTrue(providers.migration_report(), "the first read shows the note")
-        self.assertEqual(providers.migration_report(), [], "it must not reappear on every launch")
+        self.assertEqual(
+            providers.migration_report(), [], "it must not reappear on every launch"
+        )
 
     def test_adding_models_after_migration_does_not_inflate_the_report(self):
         self.write(LEGACY)
         providers.list_providers()
         providers.set_active(providers.list_providers()[1]["id"])
         group = providers.list_groups()[0]["id"]
-        providers.save_model({"id": "mdl-new", "name": "New", "model": "new-model"}, group)
-        providers.save_model({"id": "mdl-new2", "name": "New 2", "model": "new-model-2"}, group)
+        providers.save_model(
+            {"id": "mdl-new", "name": "New", "model": "new-model"}, group
+        )
+        providers.save_model(
+            {"id": "mdl-new2", "name": "New 2", "model": "new-model-2"}, group
+        )
         report = providers.migration_report()[0]
-        self.assertIn("moved 2 legacy entries into 2 model(s) under 2 provider(s)", report)
+        self.assertIn(
+            "moved 2 legacy entries into 2 model(s) under 2 provider(s)", report
+        )
 
     def test_a_duplicate_model_id_in_one_provider_is_refused(self):
         providers.save_group(self.group())
@@ -286,17 +361,23 @@ class ModelCase(unittest.TestCase):
         self.model("mdl-a", "One", "model-one")
         self.model("mdl-b", "Two", "model-two")
         with self.assertRaises(ValueError):
-            providers.save_model({"id": "mdl-b", "name": "Two", "model": "model-one"}, "grp-1")
+            providers.save_model(
+                {"id": "mdl-b", "name": "Two", "model": "model-one"}, "grp-1"
+            )
         self.assertEqual(providers.get_model("mdl-b")["model"], "model-two")
 
     def test_editing_a_model_keeping_its_own_id_is_fine(self):
         providers.save_group(self.group())
         self.model("mdl-a", "One", "model-one")
-        providers.save_model({"id": "mdl-a", "name": "One renamed", "model": "model-one"}, "grp-1")
+        providers.save_model(
+            {"id": "mdl-a", "name": "One renamed", "model": "model-one"}, "grp-1"
+        )
         self.assertEqual(providers.get_model("mdl-a")["name"], "One renamed")
 
     def test_flat_save_still_works_like_the_old_format(self):
-        providers.save_provider({"id": "p1", "name": "P1", "base_url": "https://x/v1", "model": "m"})
+        providers.save_provider(
+            {"id": "p1", "name": "P1", "base_url": "https://x/v1", "model": "m"}
+        )
         self.assertEqual(providers.get_active_id(), "p1")
         entry = providers.get_provider("p1")
         self.assertEqual((entry["base_url"], entry["model"]), ("https://x/v1", "m"))
@@ -310,20 +391,31 @@ class ModelCase(unittest.TestCase):
         providers.save_model({"id": "mdl-a", "disabled": True}, "grp-1")
 
         self.assertEqual(providers.active_config()[2], "deepseek-v4.1-flash")
-        self.assertEqual(providers.active_model_capabilities()["model"], "deepseek-v4.1-flash")
+        self.assertEqual(
+            providers.active_model_capabilities()["model"], "deepseek-v4.1-flash"
+        )
 
     def test_a_model_without_the_reasoning_knob_never_sends_effort(self):
         providers.save_group(self.group())
-        self.model("mdl-a", "Plain model", "plain-1", reasoning_effort="high",
-                   supports_reasoning=False)
+        self.model(
+            "mdl-a",
+            "Plain model",
+            "plain-1",
+            reasoning_effort="high",
+            supports_reasoning=False,
+        )
         providers.set_active("mdl-a")
         self.assertNotIn("reasoning_effort", providers.active_model_params())
 
     def test_deleting_a_model_keeps_the_other_models_settings(self):
         providers.save_group(self.group())
         self.model("mdl-a", "GLM 5.3 Flash", "glm-5.3-flash", reasoning_effort="high")
-        self.model("mdl-b", "DeepSeek V4.1 Flash", "deepseek-v4.1-flash",
-                   extra_params={"top_p": 0.9})
+        self.model(
+            "mdl-b",
+            "DeepSeek V4.1 Flash",
+            "deepseek-v4.1-flash",
+            extra_params={"top_p": 0.9},
+        )
         providers.save_model({"id": "mdl-c", "model": "third"}, "grp-1")
         providers.delete_model("mdl-b")
 
@@ -339,8 +431,14 @@ class ModelCase(unittest.TestCase):
 
         def add(index):
             try:
-                providers.save_model({"id": f"mdl-{index}", "name": f"m{index}",
-                                      "model": f"model-{index}"}, "grp-1")
+                providers.save_model(
+                    {
+                        "id": f"mdl-{index}",
+                        "name": f"m{index}",
+                        "model": f"model-{index}",
+                    },
+                    "grp-1",
+                )
             except Exception as failure:  # pragma: no cover - reported below
                 errors.append(failure)
 
@@ -354,7 +452,9 @@ class ModelCase(unittest.TestCase):
 
     def test_a_model_can_be_moved_to_another_provider(self):
         providers.save_group(self.group("grp-1", "NVIDIA", "https://nvidia.example/v1"))
-        providers.save_group(self.group("grp-2", "OpenRouter", "https://openrouter.ai/api/v1"))
+        providers.save_group(
+            self.group("grp-2", "OpenRouter", "https://openrouter.ai/api/v1")
+        )
         self.model("mdl-a", "GLM 5.3 Flash", "glm-5.3-flash", gid="grp-1")
 
         providers.save_model({"id": "mdl-a", "provider_id": "grp-2"}, "grp-2")
@@ -367,9 +467,19 @@ class ModelCase(unittest.TestCase):
 
     def test_extra_params_are_whitelisted(self):
         providers.save_group(self.group())
-        providers.save_model({"id": "mdl-a", "model": "m", "extra_params":
-                              {"top_p": 0.5, "extra_body": {"x": 1}, "messages": "nope",
-                               "ok": True}}, "grp-1")
+        providers.save_model(
+            {
+                "id": "mdl-a",
+                "model": "m",
+                "extra_params": {
+                    "top_p": 0.5,
+                    "extra_body": {"x": 1},
+                    "messages": "nope",
+                    "ok": True,
+                },
+            },
+            "grp-1",
+        )
         model = providers.get_model("mdl-a")
         self.assertEqual(model["extra_params"], {"top_p": 0.5, "ok": True})
 

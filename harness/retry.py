@@ -59,8 +59,12 @@ def timeouts():
     """Connect/read budget for one attempt. Overriding openai means WE decide."""
     import openai
 
-    return openai.Timeout(connect=CONNECT_TIMEOUT, read=READ_TIMEOUT,
-                          write=READ_TIMEOUT, pool=POOL_TIMEOUT)
+    return openai.Timeout(
+        connect=CONNECT_TIMEOUT,
+        read=READ_TIMEOUT,
+        write=READ_TIMEOUT,
+        pool=POOL_TIMEOUT,
+    )
 
 
 def _gate(host):
@@ -133,9 +137,19 @@ def _next_wait(attempt, err, remaining, schedule=None):
     return min(_wait_for(attempt, schedule), max(MIN_WAIT, remaining - MIN_WAIT))
 
 
-def run(request, *, window=RETRY_WINDOW, cancel=None, on_attempt=None,
-        model=None, model_id=None, api_key=None, host="", attempts=MAX_ATTEMPTS,
-        schedule=None):
+def run(
+    request,
+    *,
+    window=RETRY_WINDOW,
+    cancel=None,
+    on_attempt=None,
+    model=None,
+    model_id=None,
+    api_key=None,
+    host="",
+    attempts=MAX_ATTEMPTS,
+    schedule=None,
+):
     """Run request() until it succeeds, gives up, or runs out of budget.
 
     The budget is the attempt count first and the shared window second: one
@@ -156,8 +170,9 @@ def run(request, *, window=RETRY_WINDOW, cancel=None, on_attempt=None,
         try:
             return request()
         except Exception as failure:
-            err = errors_mod.classify(failure, api_key=api_key, model=model,
-                                      model_id=model_id)
+            err = errors_mod.classify(
+                failure, api_key=api_key, model=model, model_id=model_id
+            )
             if _stopped(cancel):
                 raise errors_mod.cancelled(model=model, model_id=model_id)
             if not err.transient:
@@ -175,14 +190,18 @@ def run(request, *, window=RETRY_WINDOW, cancel=None, on_attempt=None,
                 err.retries = attempt - 1
                 raise err
             if on_attempt is not None:
-                on_attempt({
-                    "attempt": attempt + 1,
-                    "retries_total": len(table),
-                    "wait": round(wait, 1),
-                    "error": err,
-                    "model": model,
-                    "elapsed": round(time.monotonic() - (deadline - float(window)), 1),
-                    "window": float(window),
-                })
+                on_attempt(
+                    {
+                        "attempt": attempt + 1,
+                        "retries_total": len(table),
+                        "wait": round(wait, 1),
+                        "error": err,
+                        "model": model,
+                        "elapsed": round(
+                            time.monotonic() - (deadline - float(window)), 1
+                        ),
+                        "window": float(window),
+                    }
+                )
             if _pause(host, wait, cancel, limit=remaining):
                 raise errors_mod.cancelled(model=model, model_id=model_id)

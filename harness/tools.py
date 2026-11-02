@@ -20,12 +20,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import history
-from . import paths
-from . import sandbox
+from . import history, paths, sandbox
 from .permissions import approval_info, check
-from .subagent import TASK_SCHEMA, task
 from .skills import read_skill
+from .subagent import TASK_SCHEMA, task
 from .todos import TODO_SCHEMA, write_todos
 
 # What each tool needs before it can be offered at all. The question is "can
@@ -84,7 +82,11 @@ def _reason_for(name):
         return False, f"the workspace ({paths.project_root()}) is not readable"
     if needs.get("skills") and not skills_installed():
         return False, "no skills are installed"
-    if needs.get("approval") and not approval_channel_ready() and permissions.current_mode() not in ("allow-all", "autopilot"):
+    if (
+        needs.get("approval")
+        and not approval_channel_ready()
+        and permissions.current_mode() not in ("allow-all", "autopilot")
+    ):
         return False, "an approval prompt cannot be shown in this session"
     return True, ""
 
@@ -92,8 +94,13 @@ def _reason_for(name):
 def _cache_key():
     from . import permissions
 
-    return (str(paths.project_root()), approval_channel_ready(), shell_available(),
-            skills_installed(), permissions.current_mode())
+    return (
+        str(paths.project_root()),
+        approval_channel_ready(),
+        shell_available(),
+        skills_installed(),
+        permissions.current_mode(),
+    )
 
 
 def availability(refresh=False):
@@ -123,14 +130,20 @@ def available_tool_names():
 
 def tool_schemas():
     """Schemas for the tools this session can actually run."""
-    return [schema for schema in TOOL_SCHEMAS
-            if availability().get(schema["function"]["name"], {}).get("available")]
+    return [
+        schema
+        for schema in TOOL_SCHEMAS
+        if availability().get(schema["function"]["name"], {}).get("available")
+    ]
 
 
 def unavailable_summary():
     """What the model should be told when it cannot be given any tools."""
-    missing = [f"{name}: {state['reason']}" for name, state in availability().items()
-               if not state["available"]]
+    missing = [
+        f"{name}: {state['reason']}"
+        for name, state in availability().items()
+        if not state["available"]
+    ]
     return "; ".join(missing) if missing else ""
 
 
@@ -191,8 +204,10 @@ def str_replace(path, old_str, new_str, allow_multi_edit=False):
     try:
         content = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return (f"Error: {path} is not valid UTF-8, so a text edit would "
-                "corrupt it. Edit it with bash instead.")
+        return (
+            f"Error: {path} is not valid UTF-8, so a text edit would "
+            "corrupt it. Edit it with bash instead."
+        )
 
     count = content.count(old_str)
     if count == 0:
@@ -210,8 +225,7 @@ def str_replace(path, old_str, new_str, allow_multi_edit=False):
 
 def _tracked_write(name, args):
     """Write a file and journal before/after so rewind can restore it."""
-    from . import checkpoints
-    from . import session
+    from . import checkpoints, session
 
     path = args["path"]
     before = checkpoints.read_or_none(path)
@@ -219,7 +233,9 @@ def _tracked_write(name, args):
     if not isinstance(result, str) or result.startswith("Error"):
         return result
     after = checkpoints.read_or_none(path)
-    checkpoints.record(session.current_id(), session.written() or 0, path, before, after)
+    checkpoints.record(
+        session.current_id(), session.written() or 0, path, before, after
+    )
     return result
 
 
@@ -242,17 +258,24 @@ def _validate_args(name, args):
     # An empty string is a VALUE, not a missing argument: rejecting "" made
     # `write_file(content="")` (create an empty file) and
     # `str_replace(new_str="")` (delete text) impossible.
-    missing = [key for key in (schema.get("required") or [])
-               if key not in args or args[key] is None]
+    missing = [
+        key
+        for key in (schema.get("required") or [])
+        if key not in args or args[key] is None
+    ]
     if missing:
-        return (f"{name} is missing required argument(s): {', '.join(missing)}.")
+        return f"{name} is missing required argument(s): {', '.join(missing)}."
     unknown = [key for key in args if key not in properties]
     if unknown:
         return f"{name} got argument(s) it does not accept: {', '.join(unknown)}."
     for key, value in args.items():
         kind = (properties.get(key) or {}).get("type")
-        expected = {"string": str, "integer": int, "number": (int, float),
-                    "boolean": bool}.get(kind)
+        expected = {
+            "string": str,
+            "integer": int,
+            "number": (int, float),
+            "boolean": bool,
+        }.get(kind)
         if not expected or isinstance(value, expected):
             # bool is an int subclass: a boolean where a number is wanted is
             # a wrong type, the other way round is fine.
@@ -438,7 +461,10 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "path": {"type": "string", "description": "File to edit"},
                     "old_str": {"type": "string", "description": "Exact text to find"},
-                    "new_str": {"type": "string", "description": "Text to put in its place"},
+                    "new_str": {
+                        "type": "string",
+                        "description": "Text to put in its place",
+                    },
                     "allow_multi_edit": {
                         "type": "boolean",
                         "description": "Replace every match instead of failing",

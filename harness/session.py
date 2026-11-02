@@ -115,7 +115,9 @@ def set_title(session_id, title):
     titles[session_id] = title
     try:
         _dir().mkdir(parents=True, exist_ok=True)
-        _titles_path().write_text(json.dumps(titles, ensure_ascii=False, indent=1), encoding="utf-8")
+        _titles_path().write_text(
+            json.dumps(titles, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
     except OSError:
         pass
 
@@ -129,7 +131,9 @@ def delete_session(session_id):
     if session_id in titles:
         del titles[session_id]
         try:
-            _titles_path().write_text(json.dumps(titles, ensure_ascii=False, indent=1), encoding="utf-8")
+            _titles_path().write_text(
+                json.dumps(titles, ensure_ascii=False, indent=1), encoding="utf-8"
+            )
         except OSError:
             pass
 
@@ -212,7 +216,9 @@ def compacted(messages):
 def load(session_id):
     """Replay the log: messages accumulate, rewinds cut them back."""
     messages = []
-    for line in path_for(session_id).read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in (
+        path_for(session_id).read_text(encoding="utf-8", errors="replace").splitlines()
+    ):
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:
@@ -221,7 +227,7 @@ def load(session_id):
             # chat in the project, because listing them all calls load().
             continue
         if "rewind_to" in entry:
-            del messages[entry["rewind_to"]:]
+            del messages[entry["rewind_to"] :]
         elif "compacted" in entry:
             messages = list(entry["compacted"])
         else:

@@ -11,8 +11,7 @@ import json
 import threading
 from pathlib import Path
 
-from . import checkpoints
-from . import events
+from . import checkpoints, events
 
 
 class EngineService:
@@ -70,7 +69,9 @@ class EngineService:
 
     def _ensure_runner(self, mode="build"):
         if self.runner is None:
-            self.runner = self._runner_cls(stream=True, cancel_event=self.cancel, mode=mode)
+            self.runner = self._runner_cls(
+                stream=True, cancel_event=self.cancel, mode=mode
+            )
         else:
             self.runner.mode = mode
 
@@ -88,10 +89,20 @@ class EngineService:
     def submit(self, text, mode="build", submission_id=None):
         with self._lock:
             if self._seen_submission(submission_id):
-                self._send({"event": events.NOTE, "payload": {"text": "that submission was already sent"}})
+                self._send(
+                    {
+                        "event": events.NOTE,
+                        "payload": {"text": "that submission was already sent"},
+                    }
+                )
                 return False
             if self.running:
-                self._send({"event": events.NOTE, "payload": {"text": "already running - press Stop first"}})
+                self._send(
+                    {
+                        "event": events.NOTE,
+                        "payload": {"text": "already running - press Stop first"},
+                    }
+                )
                 return False
             self.running = True
         self.cancel.clear()
@@ -156,7 +167,9 @@ class EngineService:
                 return False
             self.running = True
         self.cancel.clear()
-        threading.Thread(target=self._open, args=(session_id, mode), daemon=True).start()
+        threading.Thread(
+            target=self._open, args=(session_id, mode), daemon=True
+        ).start()
         return True
 
     def _open(self, session_id, mode):
@@ -171,15 +184,21 @@ class EngineService:
                 self.runner.messages = messages
                 label = "opened"
             else:
-                from datetime import datetime
-
                 session_mod.CURRENT = session_mod.fresh_id()
                 session_mod.WRITTEN = 0
                 session_mod.blank(session_mod.CURRENT)
-                self.runner = self._runner_cls(stream=True, cancel_event=self.cancel, mode=mode or "build")
+                self.runner = self._runner_cls(
+                    stream=True, cancel_event=self.cancel, mode=mode or "build"
+                )
                 label = "new"
-            events.emit(events.SESSION, {"label": label, "messages": self.runner.messages,
-                                         "id": session_mod.CURRENT})
+            events.emit(
+                events.SESSION,
+                {
+                    "label": label,
+                    "messages": self.runner.messages,
+                    "id": session_mod.CURRENT,
+                },
+            )
         finally:
             with self._lock:
                 self.running = False
@@ -206,18 +225,27 @@ class EngineService:
                     messages = session_mod.load(session_mod.CURRENT)
                 except OSError:
                     messages = []
-            events.emit(events.SESSION, {"label": "rewound", "messages": messages,
-                                         "id": session_mod.CURRENT})
+            events.emit(
+                events.SESSION,
+                {"label": "rewound", "messages": messages, "id": session_mod.CURRENT},
+            )
             return True
 
     def resubmit(self, count, text, mode="build", restore_files=True):
         with self._lock:
             if self.running:
-                self._send({"event": events.NOTE, "payload": {"text": "already running - press Stop first"}})
+                self._send(
+                    {
+                        "event": events.NOTE,
+                        "payload": {"text": "already running - press Stop first"},
+                    }
+                )
                 return False
             self.running = True
         self.cancel.clear()
-        threading.Thread(target=self._resend, args=(count, text, mode, restore_files), daemon=True).start()
+        threading.Thread(
+            target=self._resend, args=(count, text, mode, restore_files), daemon=True
+        ).start()
         return True
 
     def _resend(self, count, text, mode, restore_files=True):
@@ -233,8 +261,14 @@ class EngineService:
                 checkpoints.restore_since(session_mod.CURRENT, count)
             session_mod.rewind_to(count)
             self.runner.messages = self.runner.messages[:count]
-            events.emit(events.SESSION, {"label": "rewound", "messages": self.runner.messages,
-                                         "id": session_mod.CURRENT})
+            events.emit(
+                events.SESSION,
+                {
+                    "label": "rewound",
+                    "messages": self.runner.messages,
+                    "id": session_mod.CURRENT,
+                },
+            )
             self.runner.handle_input(text)
         finally:
             with self._lock:
@@ -260,8 +294,12 @@ def _git_run(root, *args, timeout=10):
     import subprocess
 
     try:
-        result = subprocess.run(["git", "-C", str(root), *args],
-                                capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            ["git", "-C", str(root), *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
     except Exception:
         return None
     return result.stdout.strip() if result.returncode == 0 else None
@@ -269,7 +307,12 @@ def _git_run(root, *args, timeout=10):
 
 def git_status(root):
     if _git_run(root, "rev-parse", "--is-inside-work-tree") != "true":
-        return {"has_git": False, "branch": "", "default_branch": "", "is_protected": False}
+        return {
+            "has_git": False,
+            "branch": "",
+            "default_branch": "",
+            "is_protected": False,
+        }
     branch = _git_run(root, "branch", "--show-current") or ""
     default = ""
     head_ref = _git_run(root, "symbolic-ref", "refs/remotes/origin/HEAD")
@@ -277,13 +320,20 @@ def git_status(root):
         default = head_ref.rsplit("/", 1)[-1]
     if not default:
         for candidate in ("main", "master"):
-            if _git_run(root, "show-ref", "--verify", f"refs/heads/{candidate}") is not None:
+            if (
+                _git_run(root, "show-ref", "--verify", f"refs/heads/{candidate}")
+                is not None
+            ):
                 default = candidate
                 break
     if not default:
         default = branch
-    return {"has_git": True, "branch": branch, "default_branch": default,
-            "is_protected": bool(branch) and branch == default}
+    return {
+        "has_git": True,
+        "branch": branch,
+        "default_branch": default,
+        "is_protected": bool(branch) and branch == default,
+    }
 
 
 def git_create_branch(root, name):
@@ -291,12 +341,20 @@ def git_create_branch(root, name):
     import subprocess
 
     name = (name or "").strip()
-    if (not re.fullmatch(r"[A-Za-z0-9._/-]+", name) or name.startswith(("-", ".", "/"))
-            or ".." in name or name.endswith(("/", ".", ".lock"))):
+    if (
+        not re.fullmatch(r"[A-Za-z0-9._/-]+", name)
+        or name.startswith(("-", ".", "/"))
+        or ".." in name
+        or name.endswith(("/", ".", ".lock"))
+    ):
         return False, "invalid branch name"
     try:
-        result = subprocess.run(["git", "-C", str(root), "checkout", "-b", name],
-                                capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            ["git", "-C", str(root), "checkout", "-b", name],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
     except Exception as failure:
         return False, f"{type(failure).__name__}: {failure}"
     if result.returncode != 0:
@@ -305,19 +363,25 @@ def git_create_branch(root, name):
 
 
 def handle_op(service, obj):
+    from . import paths as paths_mod
     from . import permissions
     from . import providers as providers_mod
     from . import session as session_mod
-    from . import paths as paths_mod
 
     op = obj.get("op")
     req_id = obj.get("req_id")
     if op in ("approval_reply", "pick_reply"):
-        ok = service.reply(obj.get("id"), obj.get("allow") if op == "approval_reply" else obj.get("index"))
+        ok = service.reply(
+            obj.get("id"),
+            obj.get("allow") if op == "approval_reply" else obj.get("index"),
+        )
         return {"reply": op, "req_id": req_id, "ok": ok}
     if op == "submit":
-        ok = service.submit(obj.get("text", ""), obj.get("mode", "build"),
-                            submission_id=obj.get("submission_id"))
+        ok = service.submit(
+            obj.get("text", ""),
+            obj.get("mode", "build"),
+            submission_id=obj.get("submission_id"),
+        )
         return {"reply": "submit", "req_id": req_id, "ok": ok}
     if op == "open":
         ok = service.open_session(obj.get("id", ""), obj.get("mode", "build"))
@@ -325,26 +389,51 @@ def handle_op(service, obj):
     if op == "rewind_to":
         count = obj.get("count", 0)
         if service.running:
-            return {"reply": op, "req_id": req_id, "ok": False, "error": "busy or invalid position"}
+            return {
+                "reply": op,
+                "req_id": req_id,
+                "ok": False,
+                "error": "busy or invalid position",
+            }
         restored = checkpoints.restore_since(session_mod.CURRENT, count)
         ok = service.rewind_to(count)
         if ok:
             return {"reply": op, "req_id": req_id, "ok": True, "data": restored}
-        return {"reply": op, "req_id": req_id, "ok": False, "error": "busy or invalid position"}
+        return {
+            "reply": op,
+            "req_id": req_id,
+            "ok": False,
+            "error": "busy or invalid position",
+        }
     if op == "rewind_preview":
         count = obj.get("count", 0)
         changes = checkpoints.preview(session_mod.CURRENT, count)
-        return {"reply": op, "req_id": req_id, "ok": True, "data": {"count": count, "changes": changes}}
+        return {
+            "reply": op,
+            "req_id": req_id,
+            "ok": True,
+            "data": {"count": count, "changes": changes},
+        }
     if op == "resend":
-        ok = service.resubmit(obj.get("count", 0), obj.get("text", ""), obj.get("mode", "build"))
+        ok = service.resubmit(
+            obj.get("count", 0), obj.get("text", ""), obj.get("mode", "build")
+        )
         return {"reply": "resend", "req_id": req_id, "ok": ok}
     if op == "retry":
-        ok = service.resubmit(obj.get("count", 0), obj.get("text", ""),
-                              obj.get("mode", "build"), restore_files=False)
+        ok = service.resubmit(
+            obj.get("count", 0),
+            obj.get("text", ""),
+            obj.get("mode", "build"),
+            restore_files=False,
+        )
         return {"reply": "retry", "req_id": req_id, "ok": ok}
     if op == "git_status":
-        return {"reply": op, "req_id": req_id, "ok": True,
-                "data": git_status(paths_mod.project_root())}
+        return {
+            "reply": op,
+            "req_id": req_id,
+            "ok": True,
+            "data": git_status(paths_mod.project_root()),
+        }
     if op == "git_create_branch":
         ok, detail = git_create_branch(paths_mod.project_root(), obj.get("name", ""))
         if ok:
@@ -354,7 +443,12 @@ def handle_op(service, obj):
         service.stop()
         return {"reply": "stop", "req_id": req_id, "ok": True}
     if op == "list_sessions":
-        return {"reply": op, "req_id": req_id, "ok": True, "data": session_mod.all_sessions()}
+        return {
+            "reply": op,
+            "req_id": req_id,
+            "ok": True,
+            "data": session_mod.all_sessions(),
+        }
     if op == "get_transcript":
         try:
             messages = session_mod.load(obj.get("id", ""))
@@ -372,14 +466,25 @@ def handle_op(service, obj):
     if op == "list_providers":
         entries = providers_mod.list_providers()
         statuses = {e["id"]: providers_mod.provider_status(e["id"]) for e in entries}
-        return {"reply": op, "req_id": req_id, "ok": True,
-                "data": {"providers": entries, "active_id": providers_mod.get_active_id(),
-                         "statuses": statuses,
-                         "groups": providers_mod.list_groups(),
-                         "active_provider_id": providers_mod.get_active_provider_id(),
-                         "active_model_id": providers_mod.get_active_id()}}
+        return {
+            "reply": op,
+            "req_id": req_id,
+            "ok": True,
+            "data": {
+                "providers": entries,
+                "active_id": providers_mod.get_active_id(),
+                "statuses": statuses,
+                "groups": providers_mod.list_groups(),
+                "active_provider_id": providers_mod.get_active_provider_id(),
+                "active_model_id": providers_mod.get_active_id(),
+            },
+        }
     if op == "set_active":
-        return {"reply": op, "req_id": req_id, "ok": providers_mod.set_active(obj.get("id"))}
+        return {
+            "reply": op,
+            "req_id": req_id,
+            "ok": providers_mod.set_active(obj.get("id")),
+        }
     if op == "set_effort":
         providers_mod.set_effort(obj.get("id"), obj.get("effort") or None)
         return {"reply": op, "req_id": req_id, "ok": True}
@@ -393,11 +498,19 @@ def handle_op(service, obj):
                 providers_mod.set_key(stored["id"], obj["key"])
             if not providers_mod.get_active_id():
                 providers_mod.set_active(stored["id"])
-            return {"reply": op, "req_id": req_id, "ok": True,
-                    "data": providers_mod.get_provider(stored["id"])}
+            return {
+                "reply": op,
+                "req_id": req_id,
+                "ok": True,
+                "data": providers_mod.get_provider(stored["id"]),
+            }
     if op == "delete_provider":
         target = obj.get("id", "")
-        ok = providers_mod.delete_group(target) if obj.get("scope") == "provider" else providers_mod.delete_provider(target)
+        ok = (
+            providers_mod.delete_group(target)
+            if obj.get("scope") == "provider"
+            else providers_mod.delete_provider(target)
+        )
         return {"reply": op, "req_id": req_id, "ok": True, "data": bool(ok)}
     if op == "test_provider":
         ok, detail = providers_mod.test_provider(obj.get("id", ""))
@@ -407,18 +520,25 @@ def handle_op(service, obj):
             count = providers_mod.migrate_from_settings()
             return {"reply": op, "req_id": req_id, "ok": True, "data": count}
         except Exception as failure:
-            return {"reply": op, "req_id": req_id, "ok": False, "error": f"{type(failure).__name__}: {failure}"}
+            return {
+                "reply": op,
+                "req_id": req_id,
+                "ok": False,
+                "error": f"{type(failure).__name__}: {failure}",
+            }
     if op == "get_context":
         info = git_status(paths_mod.project_root())
-        info.update({"project": paths_mod.project_name(),
-                     "project_root": str(paths_mod.project_root())})
+        info.update(
+            {
+                "project": paths_mod.project_name(),
+                "project_root": str(paths_mod.project_root()),
+            }
+        )
         return {"reply": op, "req_id": req_id, "ok": True, "data": info}
     return {"reply": op, "req_id": req_id, "ok": False, "error": f"unknown op: {op}"}
 
 
 import contextlib
-import contextvars
-from pathlib import Path as _Path
 
 from . import paths as paths_mod
 from . import permissions as permissions_mod
@@ -454,9 +574,11 @@ class Session:
         self._seq = 0
         self._submissions: dict = {}
         self._workers: list = []
-        self.mode = "build"                 # workflow: build / plan / plan-build
-        self.perms = "default"              # permission policy: default/strict/...
-        self._mode_ref = permissions_mod.mode_ref(self.perms)  # live, changeable mid-turn
+        self.mode = "build"  # workflow: build / plan / plan-build
+        self.perms = "default"  # permission policy: default/strict/...
+        self._mode_ref = permissions_mod.mode_ref(
+            self.perms
+        )  # live, changeable mid-turn
         self.effort = "default"
         self.active_provider: str | None = None
 
@@ -507,7 +629,9 @@ class Session:
                 stack.enter_context(paths_mod.rooted(self.root))
             stack.enter_context(permissions_mod.moded(self._mode_ref))
             stack.enter_context(providers_mod.scoped(self.active_provider, self.effort))
-            stack.enter_context(session_mod.scoped(self.root, self.session_id, self.written))
+            stack.enter_context(
+                session_mod.scoped(self.root, self.session_id, self.written)
+            )
             # The plan list is per session: inherit the ambient list at bind
             # time, then diverge, so concurrent tabs never cross writes.
             stack.enter_context(todos_mod.scoped())
@@ -523,6 +647,7 @@ class Session:
 
     def ensure_runner(self, mode):
         from .agent import Runner
+
         if self.runner is None:
             self.runner = Runner(stream=True, cancel_event=self.cancel, mode=mode)
         else:
@@ -581,7 +706,9 @@ class Session:
                 self.on_event(events.NOTE, {"text": "that submission was already sent"})
                 return False
             if self.running:
-                self.on_event(events.NOTE, {"text": "already running - press Stop first"})
+                self.on_event(
+                    events.NOTE, {"text": "already running - press Stop first"}
+                )
                 return False
             self.running = True
         self.cancel.clear()
@@ -620,7 +747,9 @@ class Session:
                 if new_id:
                     # Tell the frontend which session this tab now owns, so the
                     # tab, the sidebar and the stored metadata all agree.
-                    self.on_event(events.SESSION, {"label": "new", "messages": [], "id": new_id})
+                    self.on_event(
+                        events.SESSION, {"label": "new", "messages": [], "id": new_id}
+                    )
                 self.ensure_runner(mode)
                 self.runner.handle_input(text)
                 # Keep the append cursor in step with what was just written.
@@ -628,7 +757,9 @@ class Session:
                 # is how a transcript ended up holding its opening turn twice.
                 self.written = session_mod.written()
         except Exception as failure:  # noqa: BLE001 - report, don't kill the session
-            self.on_event(events.ERROR, {"text": f"{type(failure).__name__}: {failure}"})
+            self.on_event(
+                events.ERROR, {"text": f"{type(failure).__name__}: {failure}"}
+            )
         finally:
             with self.lock:
                 self.running = False
@@ -640,12 +771,16 @@ class Session:
             if self.running:
                 # Opening swaps session_id/written/runner; doing that under a
                 # running turn desynced the append cursor and dropped turns.
-                self.on_event(events.NOTE, {"text": "a turn is running - open the session after it finishes"})
+                self.on_event(
+                    events.NOTE,
+                    {"text": "a turn is running - open the session after it finishes"},
+                )
                 return
         self._thread(self._open, session_id, mode)
 
     def _open(self, session_id, mode):
         from . import history
+
         with self.bound():
             if session_id and session_mod.path_for(session_id).exists():
                 messages = session_mod.open_session(session_id)
@@ -668,17 +803,27 @@ class Session:
                 self.written = 0
                 self.runner = self._new_runner(mode=mode or "build")
                 label = "new"
-            self.on_event(events.SESSION, {"label": label, "messages": self.runner.messages, "id": self.session_id})
+            self.on_event(
+                events.SESSION,
+                {
+                    "label": label,
+                    "messages": self.runner.messages,
+                    "id": self.session_id,
+                },
+            )
         self._maybe_title()
 
     def _new_runner(self, mode="build"):
         from .agent import Runner
+
         return Runner(stream=True, cancel_event=self.cancel, mode=mode)
 
     def resubmit(self, count, text, mode, restore_files=True):
         with self.lock:
             if self.running:
-                self.on_event(events.NOTE, {"text": "already running - press Stop first"})
+                self.on_event(
+                    events.NOTE, {"text": "already running - press Stop first"}
+                )
                 return False
             self.running = True
         self.cancel.clear()
@@ -698,12 +843,21 @@ class Session:
                 session_mod.rewind_to(count)
                 self.written = count
                 self.runner.messages = self.runner.messages[:count]
-                self.on_event(events.SESSION, {"label": "rewound", "messages": self.runner.messages, "id": self.session_id})
+                self.on_event(
+                    events.SESSION,
+                    {
+                        "label": "rewound",
+                        "messages": self.runner.messages,
+                        "id": self.session_id,
+                    },
+                )
             with self.bound():
                 self.runner.handle_input(text)
                 self.written = session_mod.written()
         except Exception as failure:  # noqa: BLE001
-            self.on_event(events.ERROR, {"text": f"{type(failure).__name__}: {failure}"})
+            self.on_event(
+                events.ERROR, {"text": f"{type(failure).__name__}: {failure}"}
+            )
         finally:
             with self.lock:
                 self.running = False
@@ -736,7 +890,10 @@ class Session:
                     messages = self.runner.messages
                 else:
                     messages = session_mod.load(self.session_id)
-                self.on_event(events.SESSION, {"label": "rewound", "messages": messages, "id": self.session_id})
+                self.on_event(
+                    events.SESSION,
+                    {"label": "rewound", "messages": messages, "id": self.session_id},
+                )
             return True, restored
         except (TypeError, ValueError):
             return False, None
@@ -776,6 +933,7 @@ class Session:
                         self.on_event("sessions_updated", {})
             except Exception:  # noqa: BLE001 - titles are best effort
                 pass
+
         worker = threading.Thread(target=work, daemon=True)
         self.track(worker)
         worker.start()
@@ -822,10 +980,23 @@ class Harness:
 
         if op in ("approval_reply", "pick_reply"):
             s = self.sessions.get(key) if key else None
-            ok = s.reply(obj.get("id"), obj.get("allow") if op == "approval_reply" else obj.get("index")) if s else False
+            ok = (
+                s.reply(
+                    obj.get("id"),
+                    obj.get("allow") if op == "approval_reply" else obj.get("index"),
+                )
+                if s
+                else False
+            )
             return R({"reply": op, "ok": bool(ok)})
 
-        if op in ("list_providers", "save_provider", "delete_provider", "test_provider", "migrate_keys"):
+        if op in (
+            "list_providers",
+            "save_provider",
+            "delete_provider",
+            "test_provider",
+            "migrate_keys",
+        ):
             return R(self._provider_op(op, obj))
 
         if op == "ws_sessions":
@@ -833,7 +1004,10 @@ class Harness:
             if not workspace_root:
                 return R({"reply": op, "ok": False, "error": "no root"})
             with paths_mod.rooted(workspace_root):
-                data = {"root": str(workspace_root), "sessions": session_mod.all_sessions()}
+                data = {
+                    "root": str(workspace_root),
+                    "sessions": session_mod.all_sessions(),
+                }
             return R({"reply": op, "ok": True, "data": data})
 
         if op in ("get_agents", "set_agents"):
@@ -850,8 +1024,16 @@ class Harness:
             s.open_chat(obj.get("id", ""), obj.get("mode", s.mode))
             return R({"reply": "open", "ok": True})
         if op == "submit":
-            return R({"reply": "submit", "ok": s.submit(obj.get("text", ""), obj.get("mode", s.mode),
-                                                       submission_id=obj.get("submission_id"))})
+            return R(
+                {
+                    "reply": "submit",
+                    "ok": s.submit(
+                        obj.get("text", ""),
+                        obj.get("mode", s.mode),
+                        submission_id=obj.get("submission_id"),
+                    ),
+                }
+            )
         if op == "stop":
             s.stop()
             return R({"reply": "stop", "ok": True})
@@ -866,12 +1048,15 @@ class Harness:
                 return R({"reply": op, "ok": False, "error": str(failure)})
         if op == "get_plan":
             from . import plan as plan_mod
+
             with s.workspace():
                 data = plan_mod.load(obj.get("id") or s.session_id or "")
             return R({"reply": op, "ok": True, "data": data})
         if op == "rename_session":
             with s.workspace():
-                session_mod.set_title(obj.get("id", ""), (obj.get("title", "") or "")[:60])
+                session_mod.set_title(
+                    obj.get("id", ""), (obj.get("title", "") or "")[:60]
+                )
             s.on_event("sessions_updated", {})
             return R({"reply": op, "ok": True})
         if op == "delete_session":
@@ -882,27 +1067,71 @@ class Harness:
             s.on_event("sessions_updated", {})
             return R({"reply": op, "ok": True})
         if op == "rewind_preview":
-            return R({"reply": op, "ok": True, "data": {"count": obj.get("count", 0), "changes": s.rewind_preview(obj.get("count", 0))}})
+            return R(
+                {
+                    "reply": op,
+                    "ok": True,
+                    "data": {
+                        "count": obj.get("count", 0),
+                        "changes": s.rewind_preview(obj.get("count", 0)),
+                    },
+                }
+            )
         if op == "rewind_to":
             if s.running:
-                return R({"reply": op, "ok": False, "error": "busy or invalid position"})
+                return R(
+                    {"reply": op, "ok": False, "error": "busy or invalid position"}
+                )
             ok, restored = s.rewind_to(obj.get("count", 0))
             if ok:
                 return R({"reply": op, "ok": True, "data": restored or []})
             return R({"reply": op, "ok": False, "error": "invalid position"})
         if op == "resend":
-            return R({"reply": "resend", "ok": s.resubmit(obj.get("count", 0), obj.get("text", ""), obj.get("mode", s.mode))})
+            return R(
+                {
+                    "reply": "resend",
+                    "ok": s.resubmit(
+                        obj.get("count", 0),
+                        obj.get("text", ""),
+                        obj.get("mode", s.mode),
+                    ),
+                }
+            )
         if op == "get_context":
-            info = git_status(s.root) if s.root else {"has_git": False, "branch": "", "default_branch": "", "is_protected": False}
-            info.update({"project": s.root.name if s.root else "", "project_root": str(s.root or "")})
+            info = (
+                git_status(s.root)
+                if s.root
+                else {
+                    "has_git": False,
+                    "branch": "",
+                    "default_branch": "",
+                    "is_protected": False,
+                }
+            )
+            info.update(
+                {
+                    "project": s.root.name if s.root else "",
+                    "project_root": str(s.root or ""),
+                }
+            )
             return R({"reply": op, "ok": True, "data": info})
         if op == "git_status":
-            return R({"reply": op, "ok": True, "data": git_status(s.root) if s.root else {"has_git": False}})
+            return R(
+                {
+                    "reply": op,
+                    "ok": True,
+                    "data": git_status(s.root) if s.root else {"has_git": False},
+                }
+            )
         if op == "git_create_branch":
             if not s.root:
                 return R({"reply": op, "ok": False, "error": "no workspace"})
             ok, detail = git_create_branch(s.root, obj.get("name", ""))
-            return R({"reply": op, "ok": ok, "data": detail} if ok else {"reply": op, "ok": False, "error": detail})
+            return R(
+                {"reply": op, "ok": ok, "data": detail}
+                if ok
+                else {"reply": op, "ok": False, "error": detail}
+            )
         if op == "set_permissions":
             mode = obj.get("mode", "default")
             if mode in permissions_mod.MODES:
@@ -918,7 +1147,10 @@ class Harness:
                     # Abandon the generation in flight instead of letting the
                     # rest of the turn keep writing on a model the user left.
                     s.stop()
-                    s.on_event(events.NOTE, {"text": "model switched - the request in flight was stopped"})
+                    s.on_event(
+                        events.NOTE,
+                        {"text": "model switched - the request in flight was stopped"},
+                    )
                 s.active_provider = obj.get("id")
             return R({"reply": op, "ok": bool(ok)})
         if op == "set_effort":
@@ -927,8 +1159,12 @@ class Harness:
             s.effort = obj.get("effort") or "default"
             return R({"reply": op, "ok": True})
         if op == "retry":
-            ok = s.resubmit(obj.get("count", 0), obj.get("text", ""), obj.get("mode", s.mode),
-                            restore_files=False)
+            ok = s.resubmit(
+                obj.get("count", 0),
+                obj.get("text", ""),
+                obj.get("mode", s.mode),
+                restore_files=False,
+            )
             return R({"reply": "retry", "ok": bool(ok)})
         return R({"reply": op, "ok": False, "error": f"unknown op: {op}"})
 
@@ -941,7 +1177,11 @@ class Harness:
             try:
                 stored = agents_mod.save(obj.get("config") or {})
             except Exception as failure:  # noqa: BLE001 - report, never crash the UI
-                return {"reply": op, "ok": False, "error": f"{type(failure).__name__}: {failure}"}
+                return {
+                    "reply": op,
+                    "ok": False,
+                    "error": f"{type(failure).__name__}: {failure}",
+                }
             # Saved config is ambient: every session reads it fresh at its next
             # turn, so nothing needs to be pushed here. A running turn is left
             # alone - switching an agent mid-response would desync its plan.
@@ -950,17 +1190,22 @@ class Harness:
 
     def _provider_op(self, op, obj):
         from . import providers as providers_mod
+
         if op == "list_providers":
             models = providers_mod.list_models()
             statuses = {m["id"]: providers_mod.provider_status(m["id"]) for m in models}
-            return {"reply": op, "ok": True, "data": {
-                "groups": providers_mod.list_groups(),
-                "providers": models,
-                "active_provider_id": providers_mod.get_active_provider_id(),
-                "active_model_id": providers_mod.get_active_id(),
-                "statuses": statuses,
-                "migration": providers_mod.migration_report(),
-            }}
+            return {
+                "reply": op,
+                "ok": True,
+                "data": {
+                    "groups": providers_mod.list_groups(),
+                    "providers": models,
+                    "active_provider_id": providers_mod.get_active_provider_id(),
+                    "active_model_id": providers_mod.get_active_id(),
+                    "statuses": statuses,
+                    "migration": providers_mod.migration_report(),
+                },
+            }
         if op == "save_provider":
             entry = obj.get("entry", {})
             try:
@@ -973,7 +1218,11 @@ class Harness:
                 providers_mod.set_key(stored["id"], obj["key"])
             if not providers_mod.get_active_id():
                 providers_mod.set_active(stored["id"])
-            return {"reply": op, "ok": True, "data": providers_mod.get_provider(stored["id"])}
+            return {
+                "reply": op,
+                "ok": True,
+                "data": providers_mod.get_provider(stored["id"]),
+            }
         if op == "delete_provider":
             target = obj.get("id", "")
             if obj.get("scope") == "provider":
@@ -989,7 +1238,11 @@ class Harness:
                 count = providers_mod.migrate_from_settings()
                 return {"reply": op, "ok": True, "data": count}
             except Exception as failure:  # noqa: BLE001
-                return {"reply": op, "ok": False, "error": f"{type(failure).__name__}: {failure}"}
+                return {
+                    "reply": op,
+                    "ok": False,
+                    "error": f"{type(failure).__name__}: {failure}",
+                }
         return {"reply": op, "ok": False, "error": "unknown op"}
 
 
@@ -1009,11 +1262,22 @@ async def serve(host="127.0.0.1", port=8765):
         loop = asyncio.get_running_loop()
 
         def send_json(obj):
-            asyncio.run_coroutine_threadsafe(ws.send(json.dumps(obj, ensure_ascii=False)), loop)
+            asyncio.run_coroutine_threadsafe(
+                ws.send(json.dumps(obj, ensure_ascii=False)), loop
+            )
 
         backend.attach(send_json)
         try:
-            await ws.send(json.dumps({"ready": {"project": paths_mod.project_name(), "project_root": str(paths_mod.project_root())}}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "ready": {
+                            "project": paths_mod.project_name(),
+                            "project_root": str(paths_mod.project_root()),
+                        }
+                    }
+                )
+            )
             async for raw in ws:
                 try:
                     obj = json.loads(raw)
@@ -1025,10 +1289,16 @@ async def serve(host="127.0.0.1", port=8765):
                     # never take down the shared socket: every tab loses its
                     # stream and any running turn's output with it.
                     try:
-                        await ws.send(json.dumps({
-                            "event": "error",
-                            "payload": {"text": f"{type(failure).__name__}: {failure}"},
-                        }))
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "event": "error",
+                                    "payload": {
+                                        "text": f"{type(failure).__name__}: {failure}"
+                                    },
+                                }
+                            )
+                        )
                     except Exception:
                         pass
         finally:
@@ -1047,9 +1317,10 @@ async def serve(host="127.0.0.1", port=8765):
 
 
 def main(argv=None):
-    import argparse
 
-    parser = argparse.ArgumentParser(description="Harness backend service for Electron.")
+    parser = argparse.ArgumentParser(
+        description="Harness backend service for Electron."
+    )
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--project-root", default=None)

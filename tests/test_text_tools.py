@@ -10,9 +10,12 @@ os.environ.setdefault("BASE_URL", "http://127.0.0.1:1/v1")
 os.environ.setdefault("API_KEY", "dummy")
 os.environ.setdefault("MODEL", "dummy")
 
-from harness import paths, providers  # noqa: E402
-from harness import texttools  # noqa: E402
-from harness.tools import TOOL_SCHEMAS  # noqa: E402
+from harness import (
+    paths,
+    providers,
+    texttools,
+)
+from harness.tools import TOOL_SCHEMAS
 
 
 class FakeKeyring:
@@ -47,24 +50,41 @@ class ParseCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        paths.init(project_root=Path(self.tmp.name), app_data_dir=Path(self.tmp.name) / "app")
+        paths.init(
+            project_root=Path(self.tmp.name), app_data_dir=Path(self.tmp.name) / "app"
+        )
         self.addCleanup(paths.reset)
-        mock.patch.object(providers, "PROVIDERS_FILE",
-                          Path(self.tmp.name) / "app" / "providers.json").start()
+        mock.patch.object(
+            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "app" / "providers.json"
+        ).start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
-        self.available = ["bash", "read_file", "write_file", "str_replace",
-                          "read_skill", "write_todos", "task"]
+        self.available = [
+            "bash",
+            "read_file",
+            "write_file",
+            "str_replace",
+            "read_skill",
+            "write_todos",
+            "task",
+        ]
 
     def parse(self, text, available=None):
-        return texttools.parse(text, schemas=TOOL_SCHEMAS,
-                               available=available if available is not None else self.available)
+        return texttools.parse(
+            text,
+            schemas=TOOL_SCHEMAS,
+            available=available if available is not None else self.available,
+        )
 
     def test_well_formed_call_parses(self):
-        call = self.parse(sample("bash", command="find . -maxdepth 2 -type f | head -50"))
+        call = self.parse(
+            sample("bash", command="find . -maxdepth 2 -type f | head -50")
+        )
         self.assertTrue(call.ok, call.reason())
         self.assertEqual(call.name, "bash")
-        self.assertEqual(call.arguments["command"], "find . -maxdepth 2 -type f | head -50")
+        self.assertEqual(
+            call.arguments["command"], "find . -maxdepth 2 -type f | head -50"
+        )
 
     def test_arguments_are_type_coerced(self):
         call = self.parse(sample("read_file", path="notes.txt"))
@@ -96,7 +116,9 @@ class ParseCase(unittest.TestCase):
         for broken in (
             sample("bash", command="ls") + " trailing prose",
             "I would call " + sample("bash", command="ls") + " here",
-            sample("bash", command="ls").replace("<" + "function=bash>", "<function=bash>", 1),
+            sample("bash", command="ls").replace(
+                "<" + "function=bash>", "<function=bash>", 1
+            ),
             sample("bash", command="ls").replace("command>", "cmd>", 1),
         ):
             if broken == sample("bash", command="ls"):
@@ -111,7 +133,9 @@ class ParseCase(unittest.TestCase):
         self.assertIn("code fence", call.reason())
 
     def test_a_quoted_command_is_never_a_call(self):
-        call = self.parse('The model said ' + sample("bash", command="ls") + ' in reply.')
+        call = self.parse(
+            "The model said " + sample("bash", command="ls") + " in reply."
+        )
         self.assertFalse(call.ok)
 
     def test_inline_code_is_not_a_call(self):
@@ -120,8 +144,11 @@ class ParseCase(unittest.TestCase):
 
     def test_narration_is_kept_when_the_call_is_good(self):
         call, prose = texttools.parse_with_narration(
-            "Let me look at the project structure.\n" + sample("bash", command="find . | head -50"),
-            schemas=TOOL_SCHEMAS, available=self.available)
+            "Let me look at the project structure.\n"
+            + sample("bash", command="find . | head -50"),
+            schemas=TOOL_SCHEMAS,
+            available=self.available,
+        )
         self.assertTrue(call.ok, call.reason())
         self.assertIn("Let me look at the project structure.", prose)
 
@@ -131,6 +158,7 @@ class ParseCase(unittest.TestCase):
         self.assertEqual(native.function.name, "bash")
         self.assertEqual(native.id, "call-9")
         import json
+
         self.assertEqual(json.loads(native.function.arguments), {"command": "ls"})
 
     def test_describe_mentions_the_tool(self):

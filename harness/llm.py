@@ -9,12 +9,10 @@ this module owns that policy now.
 
 from types import SimpleNamespace
 
-from . import events
-from . import instructions
-from . import providers
-from . import retry as retry_mod
 from . import errors as errors_mod
-from .errors import Cancelled, stream_interrupted
+from . import events, instructions, providers
+from . import retry as retry_mod
+from .errors import stream_interrupted
 from .skills import skills_prompt
 from .tools import TOOL_SCHEMAS
 
@@ -31,12 +29,18 @@ def get_client():
     if client is None:
         if not api_key:
             caps = providers.active_model_capabilities()
-            raise errors_mod.no_key(model=caps.get("name") or caps.get("model"),
-                                    provider=caps.get("provider_name"))
+            raise errors_mod.no_key(
+                model=caps.get("name") or caps.get("model"),
+                provider=caps.get("provider_name"),
+            )
         from openai import OpenAI
 
-        client = OpenAI(base_url=base_url, api_key=api_key,
-                       timeout=retry_mod.timeouts(), max_retries=0)
+        client = OpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=retry_mod.timeouts(),
+            max_retries=0,
+        )
         _client_cache[key] = client
     return client
 
@@ -55,10 +59,15 @@ def _params(messages, tools, caps):
         # set the caller asked for. A tool that would fail on arrival is noise
         # the model has to pay for; a session where nothing runs sends no tools
         # at all and says so instead of pretending.
-        wanted = {schema["function"]["name"]: schema
-                  for schema in (tools if tools is not None else TOOL_SCHEMAS)}
-        offered = [schema for schema in tools_mod.tool_schemas()
-                   if schema["function"]["name"] in wanted]
+        wanted = {
+            schema["function"]["name"]: schema
+            for schema in (tools if tools is not None else TOOL_SCHEMAS)
+        }
+        offered = [
+            schema
+            for schema in tools_mod.tool_schemas()
+            if schema["function"]["name"] in wanted
+        ]
         if offered:
             params["tools"] = offered
     params.update(providers.active_model_params())
@@ -67,7 +76,12 @@ def _params(messages, tools, caps):
 
 def _usage_from(response_usage):
     if response_usage is None:
-        return {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": None, "cached_tokens": None}
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "reasoning_tokens": None,
+            "cached_tokens": None,
+        }
     completion_details = response_usage.completion_tokens_details
     prompt_details = response_usage.prompt_tokens_details
     return {
@@ -91,11 +105,15 @@ def _close(handle):
 
 def _progress(caps):
     def emit(state):
-        payload = {"attempt": state["attempt"], "retries_total": state.get("retries_total"),
-                   "wait": state["wait"],
-                   "elapsed": state["elapsed"], "window": state["window"],
-                   "model": caps.get("name") or caps.get("model"),
-                   "model_id": caps.get("model")}
+        payload = {
+            "attempt": state["attempt"],
+            "retries_total": state.get("retries_total"),
+            "wait": state["wait"],
+            "elapsed": state["elapsed"],
+            "window": state["window"],
+            "model": caps.get("name") or caps.get("model"),
+            "model_id": caps.get("model"),
+        }
         error = state.get("error")
         if error is not None:
             payload.update(error.payload())
@@ -126,10 +144,12 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
     host = base_url or ""
 
     if on_delta is None:
+
         def attempt():
             response = client.chat.completions.create(**params)
             return response.choices[0].message, _usage_from(response.usage)
     else:
+
         def attempt():
             content, calls, usage, streamed = [], {}, None, []
             stream = client.chat.completions.create(
@@ -153,7 +173,9 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
                         streamed.append(delta.content)
                         on_delta(delta.content)
                     for call in delta.tool_calls or []:
-                        slot = calls.setdefault(call.index, {"id": "", "name": "", "arguments": ""})
+                        slot = calls.setdefault(
+                            call.index, {"id": "", "name": "", "arguments": ""}
+                        )
                         slot["id"] += call.id or ""
                         if call.function:
                             slot["name"] += call.function.name or ""
@@ -162,15 +184,24 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
                 if isinstance(failure, errors_mod.Cancelled):
                     raise
                 if streamed:
-                    raise stream_interrupted(failure, partial="".join(streamed),
-                                             api_key=api_key, model=label,
-                                             model_id=model_id) from failure
+                    raise stream_interrupted(
+                        failure,
+                        partial="".join(streamed),
+                        api_key=api_key,
+                        model=label,
+                        model_id=model_id,
+                    ) from failure
                 raise
             finally:
                 _close(stream)
 
             tool_calls = [
-                SimpleNamespace(id=slot["id"], function=SimpleNamespace(name=slot["name"], arguments=slot["arguments"]))
+                SimpleNamespace(
+                    id=slot["id"],
+                    function=SimpleNamespace(
+                        name=slot["name"], arguments=slot["arguments"]
+                    ),
+                )
                 for slot in calls.values()
             ]
             text = "".join(content)
@@ -178,10 +209,23 @@ def call_llm(messages, tools=None, on_delta=None, cancel=None):
             message.model_dump = lambda exclude_none=True: {
                 "role": "assistant",
                 **({"content": text} if text else {}),
-                **({"tool_calls": [
-                    {"id": c.id, "type": "function",
-                     "function": {"name": c.function.name, "arguments": c.function.arguments}}
-                    for c in tool_calls]} if tool_calls else {}),
+                **(
+                    {
+                        "tool_calls": [
+                            {
+                                "id": c.id,
+                                "type": "function",
+                                "function": {
+                                    "name": c.function.name,
+                                    "arguments": c.function.arguments,
+                                },
+                            }
+                            for c in tool_calls
+                        ]
+                    }
+                    if tool_calls
+                    else {}
+                ),
             }
             return message, _usage_from(usage)
 
@@ -292,9 +336,11 @@ def system_prompt(mode="build", role_instructions=""):
     template = PLAN_SYSTEM_PROMPT if mode == "plan" else SYSTEM_PROMPT
     # Instructions last: their own text can contain anything, and replacing
     # placeholders after injecting it would let it rewrite the prompt.
-    prompt = (template.replace("{cwd}", cwd)
-                    .replace("{skills}", skills)
-                    .replace("{instructions}", instructions.load()))
+    prompt = (
+        template.replace("{cwd}", cwd)
+        .replace("{skills}", skills)
+        .replace("{instructions}", instructions.load())
+    )
     # Role instructions come after substitution too, so a custom instruction
     # can never smuggle a placeholder expansion into the prompt. They are the
     # user's words for this one role, kept separate from the project's rules.

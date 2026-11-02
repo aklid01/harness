@@ -15,7 +15,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import errors, history, llm, providers, retry  # noqa: E402
+from harness import errors, history, llm, providers, retry
 
 
 class FakeKeyring:
@@ -34,11 +34,16 @@ class FakeKeyring:
 
 def canned(content="ok", usage=None):
     message = SimpleNamespace(content=content, tool_calls=[])
-    return SimpleNamespace(choices=[SimpleNamespace(message=message)],
-                           usage=usage or SimpleNamespace(
-                               prompt_tokens=1, completion_tokens=1,
-                               completion_tokens_details=SimpleNamespace(reasoning_tokens=None),
-                               prompt_tokens_details=SimpleNamespace(cached_tokens=None)))
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message)],
+        usage=usage
+        or SimpleNamespace(
+            prompt_tokens=1,
+            completion_tokens=1,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=None),
+            prompt_tokens_details=SimpleNamespace(cached_tokens=None),
+        ),
+    )
 
 
 class FakeCompletions:
@@ -60,16 +65,21 @@ class LlmCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        mock.patch.object(providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json").start()
+        mock.patch.object(
+            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json"
+        ).start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         # The fixed schedule is the policy under test in test_retry.py; here a
         # retry is just plumbing, so its wait costs milliseconds, not seconds.
-        mock.patch.object(retry, "RETRY_SCHEDULE", (0.01,) * len(retry.RETRY_SCHEDULE)).start()
+        mock.patch.object(
+            retry, "RETRY_SCHEDULE", (0.01,) * len(retry.RETRY_SCHEDULE)
+        ).start()
         self.addCleanup(mock.patch.stopall)
 
     def use(self, **extra):
-        providers.save_provider({"id": "p", "name": "P", "base_url": "https://x/v1",
-                                 "model": "m", **extra})
+        providers.save_provider(
+            {"id": "p", "name": "P", "base_url": "https://x/v1", "model": "m", **extra}
+        )
         providers.set_active("p")
         return self
 
@@ -113,8 +123,16 @@ class LlmCase(unittest.TestCase):
                 nonlocal chunks
                 chunks += 1
                 if chunks == 1:
-                    return SimpleNamespace(usage=None, choices=[SimpleNamespace(
-                        delta=SimpleNamespace(content="partial", tool_calls=None))])
+                    return SimpleNamespace(
+                        usage=None,
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(
+                                    content="partial", tool_calls=None
+                                )
+                            )
+                        ],
+                    )
                 raise ConnectionResetError("connection reset by peer")
 
             def close(self):
@@ -150,12 +168,23 @@ class LlmCase(unittest.TestCase):
                 raise StopIteration
 
         good = [
-            SimpleNamespace(usage=None, choices=[SimpleNamespace(
-                delta=SimpleNamespace(content="fine", tool_calls=None))]),
-            SimpleNamespace(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=2,
-                                                  completion_tokens_details=None,
-                                                  prompt_tokens_details=None),
-                            choices=[]),
+            SimpleNamespace(
+                usage=None,
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="fine", tool_calls=None)
+                    )
+                ],
+            ),
+            SimpleNamespace(
+                usage=SimpleNamespace(
+                    prompt_tokens=2,
+                    completion_tokens=2,
+                    completion_tokens_details=None,
+                    prompt_tokens_details=None,
+                ),
+                choices=[],
+            ),
         ]
 
         class Steady:
@@ -178,13 +207,14 @@ class LlmCase(unittest.TestCase):
         mock.patch.object(llm, "get_client", return_value=client).start()
 
         seen = []
-        message, _ = llm.call_llm([{"role": "user", "content": "hi"}], on_delta=seen.append)
+        message, _ = llm.call_llm(
+            [{"role": "user", "content": "hi"}], on_delta=seen.append
+        )
         self.assertEqual(seen, ["fine"])
         self.assertEqual(message.content, "fine")
         self.assertEqual(len(completions.calls), 2)
 
     def test_cancel_stops_a_stream_mid_flight(self):
-        import threading
         self.use()
         cancel = threading.Event()
         release = threading.Event()
@@ -200,8 +230,14 @@ class LlmCase(unittest.TestCase):
             def __next__(self):
                 if not served["chunks"]:
                     served["chunks"] = 1
-                    return SimpleNamespace(usage=None, choices=[SimpleNamespace(
-                        delta=SimpleNamespace(content="first", tool_calls=None))])
+                    return SimpleNamespace(
+                        usage=None,
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(content="first", tool_calls=None)
+                            )
+                        ],
+                    )
                 release.wait(2)  # < join timeout: the worker must unblock first
                 raise ConnectionResetError("should have been abandoned")
 
@@ -212,7 +248,11 @@ class LlmCase(unittest.TestCase):
 
         def worker():
             try:
-                llm.call_llm([{"role": "user", "content": "hi"}], on_delta=seen.append, cancel=cancel)
+                llm.call_llm(
+                    [{"role": "user", "content": "hi"}],
+                    on_delta=seen.append,
+                    cancel=cancel,
+                )
             except Exception as failure:  # noqa: BLE001 - recorded for the assertion
                 self.outcome = failure
 
@@ -236,6 +276,7 @@ class LlmCase(unittest.TestCase):
 
     def test_retry_events_reach_the_event_bus(self):
         from harness import events
+
         self.use()
         seen = []
         events.subscribe(lambda kind, payload: seen.append((kind, payload)))
@@ -257,8 +298,9 @@ class _StatusError(Exception):
     def __init__(self, status, message=""):
         super().__init__(message)
         self.status_code = status
-        self.response = SimpleNamespace(status_code=status, headers={},
-                                        request=None, url="https://x/v1")
+        self.response = SimpleNamespace(
+            status_code=status, headers={}, request=None, url="https://x/v1"
+        )
         self.body = {"error": {"message": message}}
 
 
@@ -266,15 +308,21 @@ class ContextCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        mock.patch.object(providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json").start()
+        mock.patch.object(
+            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json"
+        ).start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
 
     def transcript(self, turns=6):
         messages = [{"role": "system", "content": "system prompt"}]
         for index in range(turns):
-            messages.append({"role": "user", "content": f"question {index} " + "x" * 400})
-            messages.append({"role": "assistant", "content": f"answer {index} " + "y" * 400})
+            messages.append(
+                {"role": "user", "content": f"question {index} " + "x" * 400}
+            )
+            messages.append(
+                {"role": "assistant", "content": f"answer {index} " + "y" * 400}
+            )
         return messages
 
     def test_stored_history_is_untouched_when_it_does_not_fit(self):
@@ -283,7 +331,9 @@ class ContextCase(unittest.TestCase):
         request, note = history.prepare(messages, window=500)
         self.assertTrue(note)
         self.assertLess(history.estimate(request), history.estimate(messages))
-        self.assertEqual(json.dumps(messages), before, "the caller's copy must not change")
+        self.assertEqual(
+            json.dumps(messages), before, "the caller's copy must not change"
+        )
 
     def test_system_and_live_tail_always_survive(self):
         messages = self.transcript()
@@ -309,7 +359,9 @@ class ContextCase(unittest.TestCase):
         messages.append({"role": "user", "content": "<summary>handoff</summary>"})
         for index in range(8):
             messages.append({"role": "user", "content": f"q{index} " + "z" * 300})
-            messages.append({"role": "tool", "tool_call_id": f"c{index}", "content": "r" * 300})
+            messages.append(
+                {"role": "tool", "tool_call_id": f"c{index}", "content": "r" * 300}
+            )
         request, note = history.prepare(messages, window=600)
         self.assertEqual(request[1], messages[1])
         self.assertTrue(note)
@@ -330,14 +382,25 @@ class RunnerContextCase(unittest.TestCase):
         self.addCleanup(paths.reset)
         os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
         self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
-        mock.patch.object(providers, "PROVIDERS_FILE", Path(self.tmp.name) / "app" / "providers.json").start()
+        mock.patch.object(
+            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "app" / "providers.json"
+        ).start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
         providers.save_group({"id": "grp", "name": "N", "base_url": "https://x/v1"})
-        providers.save_model({"id": "mdl-big", "name": "big", "model": "big",
-                              "context_window": 200_000}, "grp")
-        providers.save_model({"id": "mdl-small", "name": "small", "model": "small",
-                              "context_window": 400}, "grp")
+        providers.save_model(
+            {"id": "mdl-big", "name": "big", "model": "big", "context_window": 200_000},
+            "grp",
+        )
+        providers.save_model(
+            {
+                "id": "mdl-small",
+                "name": "small",
+                "model": "small",
+                "context_window": 400,
+            },
+            "grp",
+        )
         providers.set_active("mdl-big")
 
     def transcript(self):
@@ -345,7 +408,9 @@ class RunnerContextCase(unittest.TestCase):
         for index in range(8):
             messages.append({"role": "user", "content": f"q{index} " + "u" * 200})
             messages.append({"role": "assistant", "content": f"a{index} " + "v" * 200})
-            messages.append({"role": "tool", "tool_call_id": f"c{index}", "content": "r" * 200})
+            messages.append(
+                {"role": "tool", "tool_call_id": f"c{index}", "content": "r" * 200}
+            )
         return messages
 
     def run_turn(self, model_id, text="keep going"):
@@ -360,9 +425,20 @@ class RunnerContextCase(unittest.TestCase):
         runner.messages = self.transcript()
         count = len(runner.messages)
         providers.set_active(model_id)
-        with mock.patch("harness.llm.call_llm", return_value=(SimpleNamespace(
-                content="ok", tool_calls=[],
-                model_dump=lambda exclude_none=True: {"role": "assistant", "content": "ok"}), {})):
+        with mock.patch(
+            "harness.llm.call_llm",
+            return_value=(
+                SimpleNamespace(
+                    content="ok",
+                    tool_calls=[],
+                    model_dump=lambda exclude_none=True: {
+                        "role": "assistant",
+                        "content": "ok",
+                    },
+                ),
+                {},
+            ),
+        ):
             runner.handle_input(text)
         return runner, count, seen
 

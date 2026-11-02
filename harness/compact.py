@@ -52,9 +52,9 @@ work so far, not as something the user told you.
 {summary}
 </summary>"""
 
+
 def needed(usage, window=None):
     """Has the last request grown past the point where we rebuild?"""
-    from . import config
 
     size = int(window) if window else config.CONTEXT_WINDOW
     return usage["prompt_tokens"] > size * config.COMPACT_AT
@@ -101,7 +101,11 @@ def summarize(messages):
         return (response.choices[0].message.content or "").strip()
 
     summary = retry.run(once)
-    return summary or "(the summariser returned nothing; the transcript below is the kept tail)"
+    return (
+        summary
+        or "(the summariser returned nothing; the transcript below is the kept tail)"
+    )
+
 
 def safe_boundary(messages, start):
     """First index at or after `start` where cutting cannot orphan a tool call.
@@ -129,7 +133,6 @@ def tail_start(messages, budget):
 
 def compact(messages, window=None):
     """system + summary + a recent tail. The caller freezes what comes back."""
-    from . import config
 
     size = int(window) if window else config.CONTEXT_WINDOW
     cut = tail_start(messages, size * config.COMPACT_TO)

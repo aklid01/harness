@@ -7,10 +7,10 @@ stays cached.
 import hashlib
 import subprocess
 from datetime import datetime
+from pathlib import Path
 
 from . import paths
 from .todos import todos_prompt
-from pathlib import Path
 
 LABELS = {"M": "modified", "D": "deleted", "A": "added", "??": "new"}
 
@@ -23,9 +23,14 @@ def git(command):
     """
     try:
         result = subprocess.run(
-            f"git {command}", shell=True, capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            cwd=str(paths.project_root()), timeout=10,
+            f"git {command}",
+            shell=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(paths.project_root()),
+            timeout=10,
         )
         return result.stdout or ""
     except (OSError, subprocess.TimeoutExpired):
@@ -41,9 +46,14 @@ def is_git_worktree():
     """
     try:
         probe = subprocess.run(
-            "git rev-parse --is-inside-work-tree", shell=True, capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            cwd=str(paths.project_root()), timeout=10,
+            "git rev-parse --is-inside-work-tree",
+            shell=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(paths.project_root()),
+            timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -73,7 +83,12 @@ def _porcelain_path(raw):
     if raw.startswith('"') and raw.endswith('"'):
         raw = raw[1:-1]
         try:
-            raw = raw.encode("latin-1").decode("unicode_escape").encode("latin-1").decode("utf-8")
+            raw = (
+                raw.encode("latin-1")
+                .decode("unicode_escape")
+                .encode("latin-1")
+                .decode("utf-8")
+            )
         except (UnicodeEncodeError, UnicodeDecodeError, ValueError):
             pass
     return raw

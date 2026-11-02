@@ -43,9 +43,17 @@ _ACTIVE_ID = contextvars.ContextVar("providers_active_id", default=None)
 _EFFORT = contextvars.ContextVar("providers_effort", default=None)
 
 MODEL_FIELDS = (
-    "name", "model", "reasoning_effort", "temperature", "context_window",
-    "max_output_tokens", "supports_tools", "supports_reasoning", "supports_text_tools",
-    "extra_params", "disabled",
+    "name",
+    "model",
+    "reasoning_effort",
+    "temperature",
+    "context_window",
+    "max_output_tokens",
+    "supports_tools",
+    "supports_reasoning",
+    "supports_text_tools",
+    "extra_params",
+    "disabled",
 )
 MODEL_DEFAULTS = {
     "name": "",
@@ -180,8 +188,11 @@ def _same_host(one, two):
 def _clean_headers(value):
     if not isinstance(value, dict):
         return {}
-    return {str(k): str(v) for k, v in value.items()
-            if isinstance(k, str) and isinstance(v, (str, int, float, bool))}
+    return {
+        str(k): str(v)
+        for k, v in value.items()
+        if isinstance(k, str) and isinstance(v, (str, int, float, bool))
+    }
 
 
 def _clean_params(value):
@@ -240,7 +251,9 @@ def _is_current(raw):
         return False
     if raw.get("version") == FORMAT_VERSION:
         return True
-    return any(isinstance(p, dict) and isinstance(p.get("models"), list) for p in providers)
+    return any(
+        isinstance(p, dict) and isinstance(p.get("models"), list) for p in providers
+    )
 
 
 def _backup_path():
@@ -251,7 +264,8 @@ def _backup(raw):
     """Keep the pre-migration file, so nothing is ever discarded silently."""
     try:
         _backup_path().write_text(
-            json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+            json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
     except OSError:
         pass
 
@@ -283,7 +297,9 @@ def _migrate_flat(raw):
             }
             by_id[group_id] = group
             groups.append(group)
-        taken = {m["id"] for g in groups for m in g["models"]} | {g["id"] for g in groups}
+        taken = {m["id"] for g in groups for m in g["models"]} | {
+            g["id"] for g in groups
+        }
         model = dict(MODEL_DEFAULTS)
         model["id"] = _unique_id(MODEL_PREFIX, taken)
         model.update(_clean_model(entry))
@@ -293,15 +309,20 @@ def _migrate_flat(raw):
 
     active_id = _text(raw.get("active_id"))
     active_model = _text(raw.get("active_model_id"))
-    if active_model and active_model not in {m["id"] for g in groups for m in g["models"]}:
+    if active_model and active_model not in {
+        m["id"] for g in groups for m in g["models"]
+    }:
         active_model = ""
     if not active_model:
         group = by_id.get(active_id)
         if group and group["models"]:
             active_model = group["models"][0]["id"]
-    return {"version": FORMAT_VERSION, "active_id": active_model,
-            "active_provider_id": _text(raw.get("active_provider_id")) or active_id,
-            "providers": groups}
+    return {
+        "version": FORMAT_VERSION,
+        "active_id": active_model,
+        "active_provider_id": _text(raw.get("active_provider_id")) or active_id,
+        "providers": groups,
+    }
 
 
 def _clean_group(group):
@@ -329,8 +350,12 @@ def _clean_group(group):
 
 
 def _normalise(raw):
-    empty = {"version": FORMAT_VERSION, "active_id": None,
-             "active_provider_id": None, "providers": []}
+    empty = {
+        "version": FORMAT_VERSION,
+        "active_id": None,
+        "active_provider_id": None,
+        "providers": [],
+    }
     if not isinstance(raw, dict):
         return empty
     providers = raw.get("providers")
@@ -338,10 +363,13 @@ def _normalise(raw):
         return empty
     if _is_current(raw):
         groups = [_clean_group(p) for p in providers if isinstance(p, dict)]
-        return {"version": FORMAT_VERSION,
-                "active_id": _text(raw.get("active_id")) or _text(raw.get("active_model_id")),
-                "active_provider_id": _text(raw.get("active_provider_id")),
-                "providers": groups}
+        return {
+            "version": FORMAT_VERSION,
+            "active_id": _text(raw.get("active_id"))
+            or _text(raw.get("active_model_id")),
+            "active_provider_id": _text(raw.get("active_provider_id")),
+            "providers": groups,
+        }
     return _migrate_flat(raw)
 
 
@@ -364,9 +392,12 @@ def _cached():
 def _write(data):
     target = _file()
     target.parent.mkdir(parents=True, exist_ok=True)
-    body = {"version": FORMAT_VERSION, "active_id": data.get("active_id"),
-            "active_provider_id": data.get("active_provider_id"),
-            "providers": data.get("providers", [])}
+    body = {
+        "version": FORMAT_VERSION,
+        "active_id": data.get("active_id"),
+        "active_provider_id": data.get("active_provider_id"),
+        "providers": data.get("providers", []),
+    }
     tmp = target.with_name(target.name + ".tmp")
     tmp.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(target)
@@ -484,7 +515,8 @@ def save_group(group):
     """Create or replace a provider. Never put secrets here."""
     data = _cached()
     group_id = _text(group.get("id")) or _unique_id(
-        GROUP_PREFIX, {g["id"] for g in data["providers"]})
+        GROUP_PREFIX, {g["id"] for g in data["providers"]}
+    )
     clean = {
         "id": group_id,
         "name": _text(group.get("name")) or "Provider",
@@ -522,28 +554,45 @@ def save_model(model, group_id=None):
     group, existing = _find_model(data, model_id)
     if existing is not None:
         target_group, target = group, existing
-        wanted = _text(group_id) or _text(model.get("provider_id")) or _text(model.get("group_id"))
+        wanted = (
+            _text(group_id)
+            or _text(model.get("provider_id"))
+            or _text(model.get("group_id"))
+        )
         destination = _find_group(data, wanted) if wanted else None
         if destination is not None and destination is not group:
-            target_group["models"] = [m for m in target_group["models"] if m["id"] != model_id]
+            target_group["models"] = [
+                m for m in target_group["models"] if m["id"] != model_id
+            ]
             destination["models"].append(existing)
             target_group = destination
     else:
-        explicit = _text(group_id) or _text(model.get("provider_id")) or _text(model.get("group_id"))
+        explicit = (
+            _text(group_id)
+            or _text(model.get("provider_id"))
+            or _text(model.get("group_id"))
+        )
         if not explicit:
             # A caller that talks in flat provider ids gets one provider whose
             # id matches the model id, exactly like the old format.
-            explicit = model_id if _find_group(data, model_id) is None else _unique_id(
-                GROUP_PREFIX, {g["id"] for g in data["providers"]})
+            explicit = (
+                model_id
+                if _find_group(data, model_id) is None
+                else _unique_id(GROUP_PREFIX, {g["id"] for g in data["providers"]})
+            )
         target_group = _find_group(data, explicit)
         if target_group is None:
-            target_group = save_group({
-                "id": explicit,
-                "name": _text(model.get("provider_name")) or _text(model.get("name")) or "Provider",
-                "base_url": _text(model.get("base_url")),
-                "headers": _clean_headers(model.get("headers")),
-                "disabled": _as_bool(model.get("disabled"), default=False),
-            })
+            target_group = save_group(
+                {
+                    "id": explicit,
+                    "name": _text(model.get("provider_name"))
+                    or _text(model.get("name"))
+                    or "Provider",
+                    "base_url": _text(model.get("base_url")),
+                    "headers": _clean_headers(model.get("headers")),
+                    "disabled": _as_bool(model.get("disabled"), default=False),
+                }
+            )
             data = _cached()
             target_group = _find_group(data, target_group["id"])
         target = None
@@ -554,11 +603,18 @@ def save_model(model, group_id=None):
     wanted_model = _text(model.get("model"))
     if wanted_model:
         self_id = target["id"] if target is not None else model_id
-        clash = next((m for m in target_group["models"]
-                      if m.get("model") == wanted_model and m["id"] != self_id), None)
+        clash = next(
+            (
+                m
+                for m in target_group["models"]
+                if m.get("model") == wanted_model and m["id"] != self_id
+            ),
+            None,
+        )
         if clash is not None:
             raise ValueError(
-                f"a model with id '{wanted_model}' already exists in this provider")
+                f"a model with id '{wanted_model}' already exists in this provider"
+            )
 
     if target is None:
         target = dict(MODEL_DEFAULTS)
@@ -595,6 +651,7 @@ def save_provider(entry):
 def _forget_key(group_id):
     try:
         import keyring
+
         keyring.delete_password(SERVICE, group_id)
     except Exception:  # noqa: BLE001 - a missing secret is not an error
         pass
@@ -608,7 +665,9 @@ def delete_group(group_id):
         return False
     data["providers"] = [g for g in data["providers"] if g["id"] != group_id]
     if data.get("active_provider_id") == group_id:
-        data["active_provider_id"] = data["providers"][0]["id"] if data["providers"] else None
+        data["active_provider_id"] = (
+            data["providers"][0]["id"] if data["providers"] else None
+        )
     if data.get("active_id") and _find_model(data, data["active_id"])[1] is None:
         data["active_id"] = None
     body = _save(data)
@@ -699,6 +758,7 @@ def set_key(target_id, secret):
     if not group_id:
         return False
     import keyring
+
     keyring.set_password(SERVICE, group_id, secret)
     return True
 
@@ -706,6 +766,7 @@ def set_key(target_id, secret):
 def _key_for_group(group_id):
     try:
         import keyring
+
         return keyring.get_password(SERVICE, group_id)
     except Exception:  # noqa: BLE001 - no backend means no key
         return None
@@ -816,10 +877,17 @@ def active_model_capabilities():
     """What the active model can do, so callers never assume too much."""
     group, model = active_pair()
     if not (group and model):
-        return {"supports_tools": True, "supports_reasoning": True,
-                "supports_text_tools": False, "context_window": None,
-                "max_output_tokens": None, "model": None, "name": None,
-                "provider_id": None, "provider_name": None}
+        return {
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "supports_text_tools": False,
+            "context_window": None,
+            "max_output_tokens": None,
+            "model": None,
+            "name": None,
+            "provider_id": None,
+            "provider_name": None,
+        }
     return {
         "supports_tools": bool(model.get("supports_tools", True)),
         "supports_reasoning": bool(model.get("supports_reasoning", True)),
@@ -856,7 +924,9 @@ def _credential_for(group):
     legacy = _legacy_env()
     # Borrow the plaintext .env key only when it points at this same host,
     # otherwise the request would fail with a confusing authentication error.
-    if legacy.get("API_KEY") and _same_host(legacy.get("BASE_URL"), group.get("base_url")):
+    if legacy.get("API_KEY") and _same_host(
+        legacy.get("BASE_URL"), group.get("base_url")
+    ):
         return group.get("base_url", ""), legacy["API_KEY"], "plaintext-env"
     return group.get("base_url", ""), None, "missing"
 
@@ -896,7 +966,9 @@ def provider_status(target_id):
     legacy = _legacy_env()
     if _key_for_group(group["id"]):
         state = "keyring"
-    elif legacy.get("API_KEY") and _same_host(legacy.get("BASE_URL"), group.get("base_url")):
+    elif legacy.get("API_KEY") and _same_host(
+        legacy.get("BASE_URL"), group.get("base_url")
+    ):
         state = "plaintext-env"
     else:
         state = "missing"
@@ -925,23 +997,30 @@ def migration_report():
     try:
         raw = json.loads(backup.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return ["an earlier providers.json could not be read; it is kept as providers.json.bak"]
+        return [
+            "an earlier providers.json could not be read; it is kept as providers.json.bak"
+        ]
     entries = raw.get("providers") if isinstance(raw.get("providers"), list) else []
     if not entries:
         return []
     # Each legacy entry became one model; entries that shared an id became
     # siblings under one provider, so providers are the distinct group ids.
-    group_ids = {(_text(entry.get("id")) or _text(entry.get("base_url")))
-                 for entry in entries if isinstance(entry, dict)}
+    group_ids = {
+        (_text(entry.get("id")) or _text(entry.get("base_url")))
+        for entry in entries
+        if isinstance(entry, dict)
+    }
     group_ids.discard("")
     count = len(entries)
     try:
         _migration_marker().write_text("shown\n", encoding="utf-8")
     except OSError:
         pass
-    return [f"moved {count} legacy entr{'y' if count == 1 else 'ies'} into "
-            f"{count} model(s) under {len(group_ids)} provider(s); "
-            "the original file is kept as providers.json.bak"]
+    return [
+        f"moved {count} legacy entr{'y' if count == 1 else 'ies'} into "
+        f"{count} model(s) under {len(group_ids)} provider(s); "
+        "the original file is kept as providers.json.bak"
+    ]
 
 
 def _import_target(base_url, model=""):
@@ -955,9 +1034,19 @@ def _import_target(base_url, model=""):
     while _find_group(data, group_id) is not None:
         group_id = f"{base_url}#{suffix}"
         suffix += 1
-    new_model_id = _unique_id(MODEL_PREFIX, {m["id"] for g in data["providers"] for m in g["models"]})
-    save_model({"id": new_model_id, "provider_id": group_id, "provider_name": base_url,
-                "name": model or base_url, "model": model, "base_url": base_url})
+    new_model_id = _unique_id(
+        MODEL_PREFIX, {m["id"] for g in data["providers"] for m in g["models"]}
+    )
+    save_model(
+        {
+            "id": new_model_id,
+            "provider_id": group_id,
+            "provider_name": base_url,
+            "name": model or base_url,
+            "model": model,
+            "base_url": base_url,
+        }
+    )
     return _find_group(_cached(), group_id)
 
 
@@ -965,7 +1054,9 @@ def _import_target(base_url, model=""):
 def migrate_from_settings():
     """One-time import of settings.json/.env keys into keyring. Returns count."""
     try:
-        settings = json.loads((paths.project_root() / "settings.json").read_text(encoding="utf-8"))
+        settings = json.loads(
+            (paths.project_root() / "settings.json").read_text(encoding="utf-8")
+        )
     except (OSError, ValueError):
         settings = {}
     entries = settings.get("providers") if isinstance(settings, dict) else None
@@ -978,7 +1069,7 @@ def migrate_from_settings():
         if not key and isinstance(auth, dict):
             bearer = auth.get("Authorization") or ""
             if isinstance(bearer, str) and bearer.startswith("Bearer "):
-                key = bearer[len("Bearer "):]
+                key = bearer[len("Bearer ") :]
         base_url = _text(entry.get("base_url"))
         if not (base_url and key):
             continue
@@ -991,8 +1082,14 @@ def migrate_from_settings():
     legacy = _legacy_env()
     env_base = legacy.get("BASE_URL")
     if env_base and not list_models():
-        save_model({"id": env_base, "name": legacy.get("MODEL", env_base),
-                    "base_url": env_base, "model": legacy.get("MODEL", "")})
+        save_model(
+            {
+                "id": env_base,
+                "name": legacy.get("MODEL", env_base),
+                "base_url": env_base,
+                "model": legacy.get("MODEL", ""),
+            }
+        )
     if get_active_id() is None and list_models():
         set_active(list_models()[0]["id"])
     return imported
@@ -1022,14 +1119,24 @@ PROBE_TOOL = {
 def _tool_probe(client, model):
     """(ok, note) for one tool-calling probe. Never raises."""
     try:
-        message = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a test. Use the tools you are given."},
-                {"role": "user", "content": "Call the harness_selftest tool with probe='harness'."},
-            ],
-            tools=[PROBE_TOOL],
-        ).choices[0].message
+        message = (
+            client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a test. Use the tools you are given.",
+                    },
+                    {
+                        "role": "user",
+                        "content": "Call the harness_selftest tool with probe='harness'.",
+                    },
+                ],
+                tools=[PROBE_TOOL],
+            )
+            .choices[0]
+            .message
+        )
     except Exception as failure:  # noqa: BLE001 - reported, never fatal here
         from . import errors as errors_mod
 
@@ -1044,6 +1151,7 @@ def _tool_probe(client, model):
 def test_provider(target_id, timeout=20):
     """Run the harness-ok probe, then a tool-calling probe. Never exposes the key."""
     import time
+
     from openai import OpenAI
 
     from . import errors as errors_mod
@@ -1056,15 +1164,19 @@ def test_provider(target_id, timeout=20):
     started = time.monotonic()
     try:
         client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
-        message = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a test."},
-                {"role": "user", "content": "Reply with exactly: harness-ok"},
-            ],
-        ).choices[0].message
+        message = (
+            client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a test."},
+                    {"role": "user", "content": "Reply with exactly: harness-ok"},
+                ],
+            )
+            .choices[0]
+            .message
+        )
         elapsed = time.monotonic() - started
-        content = (message.content or "")
+        content = message.content or ""
         if "harness-ok" not in content:
             return False, f"{model}: unexpected reply in {elapsed:.1f}s"
         detail = f"{model}: ok in {elapsed:.1f}s via {source}"
@@ -1092,12 +1204,23 @@ def suggest_title(first_text, timeout=15):
         return None
     try:
         client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
-        reply = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": (
-                "Title this coding task in 4 words max. Plain words only, "
-                f"no quotes: {first_text[:300]}")}],
-        ).choices[0].message.content or ""
+        reply = (
+            client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            "Title this coding task in 4 words max. Plain words only, "
+                            f"no quotes: {first_text[:300]}"
+                        ),
+                    }
+                ],
+            )
+            .choices[0]
+            .message.content
+            or ""
+        )
         title = " ".join(reply.strip().strip("\"'").split())
         return title[:40] or None
     except Exception:  # noqa: BLE001 - titles are best effort

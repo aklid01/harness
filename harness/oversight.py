@@ -22,9 +22,7 @@ disagreement escalates to the user rather than looping.
 import dataclasses
 import json
 
-from . import instructions
-from . import permissions
-from . import providers
+from . import instructions, permissions, providers
 from .llm import call_llm
 
 VERDICTS = ("approve", "revise", "clarify", "escalate")
@@ -162,12 +160,16 @@ def _text(value, limit):
 
 def _render_action(name, args):
     if name == "write_file":
-        return (f"write_file(path={args.get('path')})\n"
-                f"--- new content ---\n{_text(args.get('content'), 1600)}")
+        return (
+            f"write_file(path={args.get('path')})\n"
+            f"--- new content ---\n{_text(args.get('content'), 1600)}"
+        )
     if name == "str_replace":
-        return (f"str_replace(path={args.get('path')})\n"
-                f"--- replace this ---\n{_text(args.get('old_str'), 800)}\n"
-                f"--- with this ---\n{_text(args.get('new_str'), 800)}")
+        return (
+            f"str_replace(path={args.get('path')})\n"
+            f"--- replace this ---\n{_text(args.get('old_str'), 800)}\n"
+            f"--- with this ---\n{_text(args.get('new_str'), 800)}"
+        )
     if name == "bash":
         return f"bash(command)\n{_text(args.get('command'), 1200)}"
     return f"{name}({_text(json.dumps(args, ensure_ascii=False), 800)})"
@@ -193,7 +195,11 @@ def _build_prompt(task, plan, action_text, note, reviewer_instructions, history)
     rules = _text(instructions.load(), 3000)
     context_blocks = _fits(
         chars_budget,
-        _text(task, 2200), _text(plan, 2200), rules, _text(reviewer_instructions, 2000))
+        _text(task, 2200),
+        _text(plan, 2200),
+        rules,
+        _text(reviewer_instructions, 2000),
+    )
 
     parts = []
     for heading, body in context_blocks:
@@ -210,13 +216,15 @@ def _build_prompt(task, plan, action_text, note, reviewer_instructions, history)
                 line += f" - correction: {h['correction']}"
             rows.append(line)
         parts.append(
-            "## Prior review rounds on this same decision\n" + "\n".join(rows) +
-            "\n\nThe coding agent has answered those rounds with the action and "
+            "## Prior review rounds on this same decision\n"
+            + "\n".join(rows)
+            + "\n\nThe coding agent has answered those rounds with the action and "
             "reason above. It may be applying a correction or challenging one "
             "with its own reasoning. Re-judge on the merits: address its "
             "counterargument with evidence, and do not repeat an earlier verdict "
             "if the new reasoning answers it. If it has genuinely resolved the "
-            "concern, you may now approve.")
+            "concern, you may now approve."
+        )
     parts.append("Return your JSON verdict now.")
     return "\n\n".join(parts)
 
@@ -238,22 +246,27 @@ def parse_verdict(text):
     end = raw.rfind("}")
     if start != -1 and end > start:
         try:
-            parsed = json.loads(raw[start:end + 1])
+            parsed = json.loads(raw[start : end + 1])
             if isinstance(parsed, dict):
                 data = parsed
         except ValueError:
             data = None
     if data is None:
-        return Verdict("clarify",
-                       reasoning="The reviewer's answer could not be read as a "
-                                 "verdict, so the action needs a human look.",
-                       error="unparseable")
+        return Verdict(
+            "clarify",
+            reasoning="The reviewer's answer could not be read as a "
+            "verdict, so the action needs a human look.",
+            error="unparseable",
+        )
     verdict = str(data.get("verdict", "")).strip().lower()
     if verdict not in VERDICTS:
-        return Verdict("clarify",
-                       reasoning=str(data.get("reasoning") or
-                                     "The verdict was not one we recognise."),
-                       error="unknown-verdict")
+        return Verdict(
+            "clarify",
+            reasoning=str(
+                data.get("reasoning") or "The verdict was not one we recognise."
+            ),
+            error="unknown-verdict",
+        )
     risks = data.get("risks")
     if not isinstance(risks, list):
         risks = [str(risks)] if risks else []
@@ -266,8 +279,18 @@ def parse_verdict(text):
     )
 
 
-def review(checker_model_id, reviewer_instructions, *, task, plan, name, args,
-           note="", history=None, cancel=None):
+def review(
+    checker_model_id,
+    reviewer_instructions,
+    *,
+    task,
+    plan,
+    name,
+    args,
+    note="",
+    history=None,
+    cancel=None,
+):
     """Ask the reviewer for one verdict. Returns (Verdict, usage_dict).
 
     The reviewer runs on its own model, with no tools, bounded by call_llm's
@@ -275,12 +298,22 @@ def review(checker_model_id, reviewer_instructions, *, task, plan, name, args,
     back as an error verdict rather than an exception, so the caller can apply
     a risk-based policy and never deadlock.
     """
-    zero = {"prompt_tokens": 0, "completion_tokens": 0,
-            "reasoning_tokens": None, "cached_tokens": None}
+    zero = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": None,
+        "cached_tokens": None,
+    }
     if not checker_model_id:
         return Verdict("error", error="no reviewer model configured"), zero
-    prompt = _build_prompt(task, plan, _render_action(name, args), note,
-                           reviewer_instructions, history or [])
+    prompt = _build_prompt(
+        task,
+        plan,
+        _render_action(name, args),
+        note,
+        reviewer_instructions,
+        history or [],
+    )
     messages = [
         {"role": "system", "content": CHECKER_SYSTEM},
         {"role": "user", "content": prompt},
@@ -297,9 +330,14 @@ def fingerprint(name, args):
     """A stable id for one decision, so re-proposing the same call counts as a
     challenge round while a genuinely different approach starts fresh."""
     import hashlib
+
     try:
-        blob = json.dumps({"name": name, "args": args}, sort_keys=True,
-                          ensure_ascii=False, default=str)
+        blob = json.dumps(
+            {"name": name, "args": args},
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        )
     except (TypeError, ValueError):
         blob = f"{name}:{args}"
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]

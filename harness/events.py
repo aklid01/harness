@@ -65,7 +65,7 @@ def emit(type, payload=None):
     if session is not None:
         session.on_event(type, payload or {})
         return
-    for fn in list(_subscribers):
+    for fn in _subscribers:
         fn(type, payload or {})
 
 

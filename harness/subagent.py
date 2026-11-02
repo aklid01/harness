@@ -33,6 +33,7 @@ WITHHELD = {"task", "write_todos", "str_replace", "write_file"}
 
 def _workspace_root() -> str:
     from . import paths
+
     try:
         if paths.is_initialized():
             return str(paths.project_root())
@@ -81,11 +82,10 @@ def task(description: str) -> str:
     """Run a fresh agent on one question and return only its final answer."""
     # Imported inside the function, not at the top: llm imports tools, and
     # tools imports us, so importing them up there would close the circle.
+    from . import events, providers
     from .history import prepare
     from .llm import call_llm
     from .tools import execute
-    from . import events
-    from . import providers
 
     # --- rule 1 ---
     # Two messages. Not a copy of the caller's transcript, not a trimmed
@@ -115,7 +115,13 @@ def task(description: str) -> str:
             message, usage = call_llm(request, tools=toolset())
         except Exception as failure:  # noqa: BLE001
             events.emit(events.STATUS, {"active": None})
-            events.emit(events.ERROR, {"text": f"subagent failed - {type(failure).__name__}: {failure}", "nested": True})
+            events.emit(
+                events.ERROR,
+                {
+                    "text": f"subagent failed - {type(failure).__name__}: {failure}",
+                    "nested": True,
+                },
+            )
             return report or "(the subagent hit an error before reporting.)"
         events.emit(events.STATUS, {"active": None})
 
@@ -136,13 +142,32 @@ def task(description: str) -> str:
             # not a privileged one - it is not a way around any of that.
             args, result = execute(tool_call)
             call_id = getattr(tool_call, "id", None)
-            events.emit(events.TOOL_CALL, {"call_id": call_id, "name": tool_call.function.name, "args": args, "nested": True})
-            events.emit(events.TOOL_RESULT, {"call_id": call_id, "name": tool_call.function.name, "args": args, "result": result, "nested": True})
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": result,
-            })
+            events.emit(
+                events.TOOL_CALL,
+                {
+                    "call_id": call_id,
+                    "name": tool_call.function.name,
+                    "args": args,
+                    "nested": True,
+                },
+            )
+            events.emit(
+                events.TOOL_RESULT,
+                {
+                    "call_id": call_id,
+                    "name": tool_call.function.name,
+                    "args": args,
+                    "result": result,
+                    "nested": True,
+                },
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result,
+                }
+            )
 
     # Out of turns. Hand back whatever it last managed to say rather than
     # nothing at all - a partial finding still beats making the lead agent

@@ -12,7 +12,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import instructions, llm, paths  # noqa: E402
+from harness import instructions, llm, paths
 
 
 class InstructionsCase(unittest.TestCase):
@@ -29,7 +29,9 @@ class InstructionsCase(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
 
     def test_project_agents_md_reaches_the_prompt(self):
-        self.write(self.root / "AGENTS.md", "- Never use em dashes.\n- Use the venv python.")
+        self.write(
+            self.root / "AGENTS.md", "- Never use em dashes.\n- Use the venv python."
+        )
         prompt = llm.system_prompt("build")
         self.assertIn("Never use em dashes", prompt)
         self.assertIn("Use the venv python", prompt)
@@ -68,8 +70,12 @@ class InstructionsCase(unittest.TestCase):
         self.write(app_dir / "AGENTS.md", "- App profile rule.")
         with mock.patch("pathlib.Path.home", return_value=home):
             prompt = llm.system_prompt("build")
-        self.assertLess(prompt.index("Project rule"), prompt.index("Engine global rule"))
-        self.assertLess(prompt.index("Engine global rule"), prompt.index("App profile rule"))
+        self.assertLess(
+            prompt.index("Project rule"), prompt.index("Engine global rule")
+        )
+        self.assertLess(
+            prompt.index("Engine global rule"), prompt.index("App profile rule")
+        )
         self.assertLess(prompt.index("Project rule"), prompt.index("App profile rule"))
 
     def test_the_profile_fallback_to_the_home_dir_is_not_duplicated(self):
@@ -100,7 +106,9 @@ class InstructionsCase(unittest.TestCase):
         self.write(self.root / "AGENTS.md", "Rules: {cwd} {skills} {instructions}")
         prompt = llm.system_prompt("build")
         self.assertIn("{cwd} {skills} {instructions}", prompt)
-        self.assertIn(f"Your current working directory is: {paths.project_root()}", prompt)
+        self.assertIn(
+            f"Your current working directory is: {paths.project_root()}", prompt
+        )
 
 
 if __name__ == "__main__":

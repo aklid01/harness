@@ -19,9 +19,17 @@ os.environ.setdefault("MODEL", "dummy-model")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
-from mock_provider import MockProvider  # noqa: E402
-from harness import agent, events, paths, permissions, providers  # noqa: E402
-from harness import texttools, tools  # noqa: E402
+from mock_provider import MockProvider
+
+from harness import (
+    agent,
+    events,
+    paths,
+    permissions,
+    providers,
+    texttools,
+    tools,
+)
 
 
 class FakeKeyring:
@@ -43,12 +51,17 @@ CLOSE = texttools.CLOSE
 
 
 def markup(command):
-    return "\n".join([
-        "Let me take a look at the project structure.", "",
-        OPEN, "<function=bash>",
-        "<parameter=command>" + command + "</parameter>",
-        "</function>", CLOSE,
-    ])
+    return "\n".join(
+        [
+            "Let me take a look at the project structure.",
+            "",
+            OPEN,
+            "<function=bash>",
+            "<parameter=command>" + command + "</parameter>",
+            "</function>",
+            CLOSE,
+        ]
+    )
 
 
 class ToolFlowCase(unittest.TestCase):
@@ -63,7 +76,9 @@ class ToolFlowCase(unittest.TestCase):
             {"kind": "text", "content": "both done"},
         ],
         "plain": [{"kind": "text", "content": "just an answer"}],
-        "markup-bad": [{"kind": "text", "content": markup("find . -maxdepth 2 -type f | head -50")}],
+        "markup-bad": [
+            {"kind": "text", "content": markup("find . -maxdepth 2 -type f | head -50")}
+        ],
         "unknown": [
             {"kind": "tool", "name": "drop_database", "arguments": {"target": "all"}},
             {"kind": "text", "content": "my mistake"},
@@ -73,11 +88,19 @@ class ToolFlowCase(unittest.TestCase):
             {"kind": "text", "content": "fixed it"},
         ],
         "approve": [
-            {"kind": "tool", "name": "bash", "arguments": {"command": "echo approved-ok"}},
+            {
+                "kind": "tool",
+                "name": "bash",
+                "arguments": {"command": "echo approved-ok"},
+            },
             {"kind": "text", "content": "approved"},
         ],
         "deny": [
-            {"kind": "tool", "name": "bash", "arguments": {"command": "echo denied-ok"}},
+            {
+                "kind": "tool",
+                "name": "bash",
+                "arguments": {"command": "echo denied-ok"},
+            },
             {"kind": "text", "content": "denied"},
         ],
         "fails": [
@@ -104,8 +127,9 @@ class ToolFlowCase(unittest.TestCase):
         self.script_path = Path(self.tmp.name) / "script.json"
         self.script_path.write_text(json.dumps(self.SCRIPT), encoding="utf-8")
         self.record_path = Path(self.tmp.name) / "record.jsonl"
-        mock.patch.object(providers, "PROVIDERS_FILE",
-                          Path(self.tmp.name) / "providers.json").start()
+        mock.patch.object(
+            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json"
+        ).start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
         self.seen = []
@@ -116,8 +140,17 @@ class ToolFlowCase(unittest.TestCase):
         self.addCleanup(self.mock.__exit__, None, None, None)
 
     def use(self, model, **extra):
-        providers.save_provider({"id": "m-" + model, "name": model, "base_url": self.mock.base_url,
-                                 "model": model, "headers": {}, "disabled": False, **extra})
+        providers.save_provider(
+            {
+                "id": "m-" + model,
+                "name": model,
+                "base_url": self.mock.base_url,
+                "model": model,
+                "headers": {},
+                "disabled": False,
+                **extra,
+            }
+        )
         providers.set_active("m-" + model)
         providers.set_key("m-" + model, "dummy-secret")
         return self
@@ -134,8 +167,11 @@ class ToolFlowCase(unittest.TestCase):
         return [p["result"] for t, p in self.seen if t == events.TOOL_RESULT]
 
     def assistant_texts(self):
-        return [p["content"] for t, p in self.seen
-                if t == events.MESSAGE and p.get("role") == "assistant"]
+        return [
+            p["content"]
+            for t, p in self.seen
+            if t == events.MESSAGE and p.get("role") == "assistant"
+        ]
 
     def requests(self):
         payloads = []
@@ -183,10 +219,16 @@ class ToolFlowCase(unittest.TestCase):
         self.use("markup-bad")
         runner = self.run_turn()
         self.assertEqual(self.tool_calls(), [], "the markup must not execute")
-        notes = [p["text"] for t, p in self.seen if t == events.NOTE and "tool call" in p["text"]]
+        notes = [
+            p["text"]
+            for t, p in self.seen
+            if t == events.NOTE and "tool call" in p["text"]
+        ]
         self.assertTrue(notes, "the user must be told the call was not understood")
         transcript = " ".join(str(m.get("content")) for m in runner.messages)
-        self.assertIn("find . -maxdepth 2", transcript, "the text itself is kept, not hidden")
+        self.assertIn(
+            "find . -maxdepth 2", transcript, "the text itself is kept, not hidden"
+        )
 
     def test_markup_with_the_capability_executes_through_approvals(self):
         self.use("markup-bad", supports_text_tools=True)
@@ -195,8 +237,13 @@ class ToolFlowCase(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["name"], "bash")
         results = self.tool_results()
-        self.assertTrue(any("workspace" in r or ".py" in r or "mock" in r.lower() or r.strip() for r in results),
-                        results)
+        self.assertTrue(
+            any(
+                "workspace" in r or ".py" in r or "mock" in r.lower() or r.strip()
+                for r in results
+            ),
+            results,
+        )
 
     def test_unknown_tool_comes_back_as_a_result(self):
         self.use("unknown")
@@ -242,7 +289,10 @@ class ToolFlowCase(unittest.TestCase):
         calls = [p for t, p in self.seen if t == events.TOOL_CALL]
         self.assertEqual(calls[0]["name"], "bash")
         import json as json_mod
-        self.assertEqual(json_mod.loads("{" + '"command": "echo hi"' + "}")["command"], "echo hi")
+
+        self.assertEqual(
+            json_mod.loads("{" + '"command": "echo hi"' + "}")["command"], "echo hi"
+        )
 
     def test_replayed_execution_replays_the_result(self):
         import subprocess
@@ -256,8 +306,11 @@ class ToolFlowCase(unittest.TestCase):
         first = {"command": "echo once"}
         import json as json_mod
         from types import SimpleNamespace
-        call = SimpleNamespace(id="c1", function=SimpleNamespace(
-            name="bash", arguments=json_mod.dumps(first)))
+
+        call = SimpleNamespace(
+            id="c1",
+            function=SimpleNamespace(name="bash", arguments=json_mod.dumps(first)),
+        )
         with mock.patch("harness.sandbox.run", side_effect=fake_run):
             args1, result1 = tools.execute(call, note="", call_key=("req-1", "c1"))
             args2, result2 = tools.execute(call, note="", call_key=("req-1", "c1"))
@@ -266,7 +319,6 @@ class ToolFlowCase(unittest.TestCase):
         self.assertIn("c1", [call_id for _, call_id in tools.executed_calls()])
 
     def test_build_mode_advertises_tools(self):
-        from harness import permissions
 
         with permissions.moded("default"):
             self.use("native")
@@ -294,18 +346,25 @@ class ToolFlowCase(unittest.TestCase):
     def test_no_tools_at_all_is_told_to_the_model_and_the_user(self):
         """The one case where 'no tools are available' is true: say it plainly."""
         self.use("plain")
-        with mock.patch("harness.tools.available_tool_names", return_value=[]), \
-                mock.patch("harness.tools.tool_schemas", return_value=[]), \
-                mock.patch("harness.tools.unavailable_summary",
-                           return_value="bash: no shell was found on PATH"):
+        with (
+            mock.patch("harness.tools.available_tool_names", return_value=[]),
+            mock.patch("harness.tools.tool_schemas", return_value=[]),
+            mock.patch(
+                "harness.tools.unavailable_summary",
+                return_value="bash: no shell was found on PATH",
+            ),
+        ):
             self.run_turn()
         payloads = self.requests()
         self.assertNotIn("tools", payloads[0], "nothing to advertise")
         last = payloads[0]["messages"][-1]["content"]
         self.assertIn("No tools are available", last)
         self.assertIn("no shell was found on PATH", last)
-        notes = [p for t, p in self.seen
-                 if t == events.NOTE and p.get("kind") == "tools_unavailable"]
+        notes = [
+            p
+            for t, p in self.seen
+            if t == events.NOTE and p.get("kind") == "tools_unavailable"
+        ]
         self.assertTrue(notes, "the user must be told why, not left guessing")
 
     def test_tools_available_means_no_honesty_note(self):
@@ -313,8 +372,11 @@ class ToolFlowCase(unittest.TestCase):
         self.run_turn()
         payloads = self.requests()
         self.assertIn("tools", payloads[0])
-        notes = [p for t, p in self.seen
-                 if t == events.NOTE and p.get("kind") == "tools_unavailable"]
+        notes = [
+            p
+            for t, p in self.seen
+            if t == events.NOTE and p.get("kind") == "tools_unavailable"
+        ]
         self.assertEqual(notes, [])
 
 

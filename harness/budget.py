@@ -36,11 +36,16 @@ class Budget:
         return self.tool_calls is not None and self._tools > self.tool_calls
 
     def timed_out(self):
-        return self.seconds is not None and (time.monotonic() - self._start) > self.seconds
+        return (
+            self.seconds is not None and (time.monotonic() - self._start) > self.seconds
+        )
 
     def snapshot(self):
-        return {"turns": self._turns, "tools": self._tools,
-                "elapsed_s": round(time.monotonic() - self._start, 1)}
+        return {
+            "turns": self._turns,
+            "tools": self._tools,
+            "elapsed_s": round(time.monotonic() - self._start, 1),
+        }
 
     def reason(self):
         if self.seconds is not None and self.timed_out():
@@ -69,6 +74,7 @@ class Progress:
     def repeat(self, key):
         """Feed one step's fingerprint. True when it has repeated too often."""
         import hashlib
+
         h = hashlib.sha1(str(key).encode("utf-8")).hexdigest()
         if h == self._last:
             self._count += 1

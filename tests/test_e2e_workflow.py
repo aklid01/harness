@@ -1,4 +1,4 @@
-﻿"""End-to-end: plan agent, build agent, and decision oversight on the wire.
+"""End-to-end: plan agent, build agent, and decision oversight on the wire.
 
 This is the one test that does not patch call_llm. It runs the real Harness
 backend, the real model call and the real provider routing against a scripted
@@ -22,15 +22,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from tests.mock_provider import _payload, _stream  # noqa: E402
+from tests.mock_provider import _payload, _stream
 
 os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import agents, events, providers, server  # noqa: E402
-from harness import paths as paths_mod  # noqa: E402
-from harness import session as session_mod  # noqa: E402
+from harness import agents, events, providers, server
+from harness import paths as paths_mod
 
 
 class FakeKeyring:
@@ -75,19 +74,23 @@ class E2EHandler(BaseHTTPRequestHandler):
         st = self.state
         with st.lock:
             step, index = st.step_for(model)
-            st.requests.append({
-                "model": model,
-                "stream": bool(body.get("stream")),
-                "has_tools": bool(body.get("tools")),
-                "messages": body.get("messages") or [],
-            })
+            st.requests.append(
+                {
+                    "model": model,
+                    "stream": bool(body.get("stream")),
+                    "has_tools": bool(body.get("tools")),
+                    "messages": body.get("messages") or [],
+                }
+            )
         if body.get("stream"):
             data = _stream(model, step, index + 1).encode()
         else:
             data = json.dumps(_payload(model, step, index + 1)).encode()
         self.send_response(200)
-        self.send_header("Content-Type",
-                         "text/event-stream" if body.get("stream") else "application/json")
+        self.send_header(
+            "Content-Type",
+            "text/event-stream" if body.get("stream") else "application/json",
+        )
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -127,14 +130,23 @@ class WorkflowE2E(unittest.TestCase):
         self.edited.write_text("# placeholder\n", encoding="utf-8")
 
         self.scripts = {
-            "plan-model": [{"kind": "text", "content": "PLAN: open app.py, then set a marker."}],
+            "plan-model": [
+                {"kind": "text", "content": "PLAN: open app.py, then set a marker."}
+            ],
             "coder-model": [
-                {"kind": "tool", "name": "write_file",
-                 "arguments": {"path": str(self.edited), "content": "# marker\n"}},
+                {
+                    "kind": "tool",
+                    "name": "write_file",
+                    "arguments": {"path": str(self.edited), "content": "# marker\n"},
+                },
                 {"kind": "text", "content": "Implemented the plan."},
             ],
-            "reviewer-model": [{"kind": "text",
-                                "content": '{"verdict":"approve","reasoning":"matches the plan"}'}],
+            "reviewer-model": [
+                {
+                    "kind": "text",
+                    "content": '{"verdict":"approve","reasoning":"matches the plan"}',
+                }
+            ],
         }
         self.server, base = start_mock(self.scripts)
         # shutdown BEFORE server_close: closing the socket while serve_forever
@@ -144,9 +156,15 @@ class WorkflowE2E(unittest.TestCase):
         self.addCleanup(self.server.server_close)
 
         providers.save_group({"id": "grp-1", "name": "One", "base_url": base})
-        providers.save_model({"id": "mdl-coder", "name": "Coder", "model": "coder-model"}, "grp-1")
-        providers.save_model({"id": "mdl-plan", "name": "Planner", "model": "plan-model"}, "grp-1")
-        providers.save_model({"id": "mdl-rev", "name": "Reviewer", "model": "reviewer-model"}, "grp-1")
+        providers.save_model(
+            {"id": "mdl-coder", "name": "Coder", "model": "coder-model"}, "grp-1"
+        )
+        providers.save_model(
+            {"id": "mdl-plan", "name": "Planner", "model": "plan-model"}, "grp-1"
+        )
+        providers.save_model(
+            {"id": "mdl-rev", "name": "Reviewer", "model": "reviewer-model"}, "grp-1"
+        )
         providers.set_active("mdl-coder")
         providers.set_key("grp-1", "sk-one-shared-secret")
 
@@ -162,7 +180,10 @@ class WorkflowE2E(unittest.TestCase):
     def done(self, session, timeout=30, kind="done"):
         limit = time.time() + timeout
         while time.time() < limit:
-            if any(m.get("event") == kind and m.get("session") == session for m in self.sent):
+            if any(
+                m.get("event") == kind and m.get("session") == session
+                for m in self.sent
+            ):
                 return True
             time.sleep(0.02)
         return False
@@ -174,34 +195,63 @@ class WorkflowE2E(unittest.TestCase):
         return None
 
     def run_turn(self, text="set a marker in app.py", mode="build"):
-        self.backend.dispatch({"op": "open", "session": "s", "root": str(self.root),
-                               "req_id": time.time_ns()})
+        self.backend.dispatch(
+            {
+                "op": "open",
+                "session": "s",
+                "root": str(self.root),
+                "req_id": time.time_ns(),
+            }
+        )
         self.assertTrue(self.done("s", kind="session"))
         self.sent.clear()
-        self.backend.dispatch({"op": "submit", "session": "s", "text": text,
-                               "mode": mode, "req_id": time.time_ns()})
+        self.backend.dispatch(
+            {
+                "op": "submit",
+                "session": "s",
+                "text": text,
+                "mode": mode,
+                "req_id": time.time_ns(),
+            }
+        )
         self.assertTrue(self.done("s"))
         time.sleep(0.2)
         for s in list(self.backend.sessions.values()):
             s.join_background(timeout=10)
 
     def test_the_whole_workflow_over_the_wire(self):
-        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"},
-                     "build": {"enabled": False},  # build falls back to the session model
-                     "oversight": {"enabled": True, "model_id": "mdl-rev",
-                                   "intensity": "medium", "max_rounds": 2}})
+        agents.save(
+            {
+                "plan": {"enabled": True, "model_id": "mdl-plan"},
+                "build": {"enabled": False},  # build falls back to the session model
+                "oversight": {
+                    "enabled": True,
+                    "model_id": "mdl-rev",
+                    "intensity": "medium",
+                    "max_rounds": 2,
+                },
+            }
+        )
         self.run_turn(mode="plan-build")
 
         # Only workflow requests, not the background title request (coder-model).
-        flow = [r for r in mock_state(self.server).requests
-                if not any("Title this coding task" in str(m.get("content") or "")
-                           for m in r["messages"])]
+        flow = [
+            r
+            for r in mock_state(self.server).requests
+            if not any(
+                "Title this coding task" in str(m.get("content") or "")
+                for m in r["messages"]
+            )
+        ]
         models = [r["model"] for r in flow]
 
         # Order: the plan runs first, then the coder proposes, the reviewer
         # checks that decision, and the coder continues after approval.
-        self.assertEqual(models[:4], ["plan-model", "coder-model", "reviewer-model", "coder-model"],
-                         f"routing order was {models}")
+        self.assertEqual(
+            models[:4],
+            ["plan-model", "coder-model", "reviewer-model", "coder-model"],
+            f"routing order was {models}",
+        )
 
         reviewer_req = next(r for r in flow if r["model"] == "reviewer-model")
         self.assertFalse(reviewer_req["has_tools"], "the reviewer must hold no tools")
@@ -209,8 +259,12 @@ class WorkflowE2E(unittest.TestCase):
         # The plan reached the coder: the coder's post-review request carries the
         # <plan> handoff as structured context.
         coder_post = flow[3]
-        self.assertTrue(any("<plan>" in str(m.get("content") or "") for m in coder_post["messages"]),
-                        "the plan is handed to the build agent as context")
+        self.assertTrue(
+            any(
+                "<plan>" in str(m.get("content") or "") for m in coder_post["messages"]
+            ),
+            "the plan is handed to the build agent as context",
+        )
 
         # The approved edit really landed.
         self.assertEqual(self.edited.read_text(encoding="utf-8"), "# marker\n")
@@ -220,20 +274,26 @@ class WorkflowE2E(unittest.TestCase):
             "scenario": "plan -> build -> oversight-approve -> build",
             "model_request_order": models,
             "reviewer_is_tool_less": not reviewer_req["has_tools"],
-            "plan_reached_build": any("<plan>" in str(m.get("content") or "")
-                                      for m in coder_post["messages"]),
-            "approved_edit_landed": self.edited.read_text(encoding="utf-8").strip() == "# marker",
+            "plan_reached_build": any(
+                "<plan>" in str(m.get("content") or "") for m in coder_post["messages"]
+            ),
+            "approved_edit_landed": self.edited.read_text(encoding="utf-8").strip()
+            == "# marker",
             "transcript_has_plan": None,
         }
         sid = self.sid()
-        transcript = (paths_mod.session_dir() / f"{sid}.jsonl").read_text(encoding="utf-8")
+        transcript = (paths_mod.session_dir() / f"{sid}.jsonl").read_text(
+            encoding="utf-8"
+        )
         report["transcript_has_plan"] = "<plan>" in transcript
 
         artifact = Path(self.tmp.name) / "e2e-workflow-report.json"
         artifact.write_text(json.dumps(report, indent=2), encoding="utf-8")
         reread = json.loads(artifact.read_text(encoding="utf-8"))
-        self.assertEqual(reread["model_request_order"][:4],
-                         ["plan-model", "coder-model", "reviewer-model", "coder-model"])
+        self.assertEqual(
+            reread["model_request_order"][:4],
+            ["plan-model", "coder-model", "reviewer-model", "coder-model"],
+        )
         self.assertTrue(reread["reviewer_is_tool_less"])
         self.assertTrue(reread["plan_reached_build"])
         self.assertTrue(reread["approved_edit_landed"])
@@ -246,38 +306,85 @@ class WorkflowE2E(unittest.TestCase):
         # write never lands; the adapted one does. All three models are real.
         self.edited.write_text("# placeholder\n", encoding="utf-8")
         mock_state(self.server).scripts["reviewer-model"] = [
-            {"kind": "text", "content": '{"verdict":"revise","reasoning":"wipes the file",'
-                                        '"correction":"append instead of overwrite"}'},
-            {"kind": "text", "content": '{"verdict":"approve","reasoning":"append is safe"}'},
+            {
+                "kind": "text",
+                "content": '{"verdict":"revise","reasoning":"wipes the file",'
+                '"correction":"append instead of overwrite"}',
+            },
+            {
+                "kind": "text",
+                "content": '{"verdict":"approve","reasoning":"append is safe"}',
+            },
         ]
         # coder first proposes an overwrite, then adapts to a str_replace.
         mock_state(self.server).scripts["coder-model"] = [
-            {"kind": "tool", "name": "write_file",
-             "arguments": {"path": str(self.edited), "content": "OVERWRITTEN"}},
-            {"kind": "tool", "name": "str_replace",
-             "arguments": {"path": str(self.edited), "old_str": "# placeholder",
-                           "new_str": "# placeholder\n# marker"}},
+            {
+                "kind": "tool",
+                "name": "write_file",
+                "arguments": {"path": str(self.edited), "content": "OVERWRITTEN"},
+            },
+            {
+                "kind": "tool",
+                "name": "str_replace",
+                "arguments": {
+                    "path": str(self.edited),
+                    "old_str": "# placeholder",
+                    "new_str": "# placeholder\n# marker",
+                },
+            },
             {"kind": "text", "content": "Adapted and finished."},
         ]
-        mock_state(self.server).cursors = {k: 0 for k in mock_state(self.server).scripts}
-        agents.save({"oversight": {"enabled": True, "model_id": "mdl-rev",
-                                   "intensity": "medium", "max_rounds": 2}})
+        mock_state(self.server).cursors = {
+            k: 0 for k in mock_state(self.server).scripts
+        }
+        agents.save(
+            {
+                "oversight": {
+                    "enabled": True,
+                    "model_id": "mdl-rev",
+                    "intensity": "medium",
+                    "max_rounds": 2,
+                }
+            }
+        )
         self.run_turn()
 
-        flow = [r for r in mock_state(self.server).requests
-                if not any("Title this coding task" in str(m.get("content") or "")
-                           for m in r["messages"])]
+        flow = [
+            r
+            for r in mock_state(self.server).requests
+            if not any(
+                "Title this coding task" in str(m.get("content") or "")
+                for m in r["messages"]
+            )
+        ]
         models = [r["model"] for r in flow]
         # coder(1) revise, reviewer(1), coder(2) approve, reviewer(2), coder(3)
-        self.assertEqual(models, ["coder-model", "reviewer-model", "coder-model",
-                                  "reviewer-model", "coder-model"],
-                         f"got {models}")
-        self.assertIn("placeholder", self.edited.read_text(encoding="utf-8"),
-                      "the adapted edit preserved the placeholder")
-        self.assertEqual(self.edited.read_text(encoding="utf-8"), "# placeholder\n# marker\n",
-                         "the corrected edit is what landed")
-        self.assertNotIn("OVERWRITTEN", self.edited.read_text(encoding="utf-8"),
-                          "the action the reviewer refused never ran")
+        self.assertEqual(
+            models,
+            [
+                "coder-model",
+                "reviewer-model",
+                "coder-model",
+                "reviewer-model",
+                "coder-model",
+            ],
+            f"got {models}",
+        )
+        self.assertIn(
+            "placeholder",
+            self.edited.read_text(encoding="utf-8"),
+            "the adapted edit preserved the placeholder",
+        )
+        self.assertEqual(
+            self.edited.read_text(encoding="utf-8"),
+            "# placeholder\n# marker\n",
+            "the corrected edit is what landed",
+        )
+        self.assertNotIn(
+            "OVERWRITTEN",
+            self.edited.read_text(encoding="utf-8"),
+            "the action the reviewer refused never ran",
+        )
 
 
 if __name__ == "__main__":

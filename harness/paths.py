@@ -21,9 +21,13 @@ def slug_for(root: Path | str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", str(Path(root).resolve())).strip("-")
 
 
-def init(project_root: Path | str | None = None, app_data_dir: Path | str | None = None) -> None:
+def init(
+    project_root: Path | str | None = None, app_data_dir: Path | str | None = None
+) -> None:
     global _PROJECT_ROOT, _APP_DATA_DIR, _INITIALIZED
-    _PROJECT_ROOT = Path(project_root).resolve() if project_root else Path.cwd().resolve()
+    _PROJECT_ROOT = (
+        Path(project_root).resolve() if project_root else Path.cwd().resolve()
+    )
     if app_data_dir:
         _APP_DATA_DIR = Path(app_data_dir).resolve()
     else:
@@ -101,9 +105,11 @@ def agents_file() -> Path:
 
 def legacy_providers_files() -> list[Path]:
     seen: list[Path] = []
-    for candidate in (Path.cwd() / "providers.json",
-                      project_root() / "providers.json",
-                      Path.home() / ".agents" / "providers.json"):
+    for candidate in (
+        Path.cwd() / "providers.json",
+        project_root() / "providers.json",
+        Path.home() / ".agents" / "providers.json",
+    ):
         if candidate not in seen:
             seen.append(candidate)
     current = providers_file().resolve() if _INITIALIZED else None
@@ -182,9 +188,11 @@ def instruction_files() -> list[Path]:
     falls back to `~/.agents` when no explicit app data dir was given.
     """
     found = []
-    for path in (project_root() / "AGENTS.md",
-                 Path.home() / ".agents" / "AGENTS.md",
-                 app_data_dir() / "AGENTS.md"):
+    for path in (
+        project_root() / "AGENTS.md",
+        Path.home() / ".agents" / "AGENTS.md",
+        app_data_dir() / "AGENTS.md",
+    ):
         if path not in found:
             found.append(path)
     return found

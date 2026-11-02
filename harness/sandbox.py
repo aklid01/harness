@@ -48,11 +48,21 @@ def wrap(command):
     if sys.platform.startswith("linux") and shutil.which("bwrap"):
         return [
             "bwrap",
-            "--ro-bind", "/", "/",
-            "--bind", str(root), str(root),
-            "--dev", "/dev", "--proc", "/proc",
-            "--unshare-net", "--die-with-parent",
-            "/bin/sh", "-c", command,
+            "--ro-bind",
+            "/",
+            "/",
+            "--bind",
+            str(root),
+            str(root),
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--unshare-net",
+            "--die-with-parent",
+            "/bin/sh",
+            "-c",
+            command,
         ]
 
     return None  # Windows, or Linux without bubblewrap
@@ -90,18 +100,22 @@ def _posix_pathify(command):
     so a command is classified and executed on the same shape. (The one casualty
     is a literal ``\\n`` inside a printf - rarely needed here.)
     """
-    text = re.sub(r"([A-Za-z]):[\\/]", lambda m: "/" + m.group(1).lower() + "/", command)
+    text = re.sub(
+        r"([A-Za-z]):[\\/]", lambda m: "/" + m.group(1).lower() + "/", command
+    )
     return text.replace("\\", "/")
 
 
 def _run_bash(command, timeout, cwd):
     argv = [_BASH, "-c", _posix_pathify(command)]
     try:
-        return subprocess.run(argv, shell=False, capture_output=True, text=True,
-                              timeout=timeout, cwd=cwd)
+        return subprocess.run(
+            argv, shell=False, capture_output=True, text=True, timeout=timeout, cwd=cwd
+        )
     except NotADirectoryError:
-        return subprocess.run(argv, shell=False, capture_output=True, text=True,
-                              timeout=timeout)
+        return subprocess.run(
+            argv, shell=False, capture_output=True, text=True, timeout=timeout
+        )
 
 
 def run(command, timeout=60):
@@ -125,7 +139,13 @@ def run(command, timeout=60):
         )
     except NotADirectoryError:
         # The configured root vanished; run from the process cwd rather than fail.
-        return subprocess.run(sandboxed or command, shell=sandboxed is None, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(
+            sandboxed or command,
+            shell=sandboxed is None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
 
 
 def name():

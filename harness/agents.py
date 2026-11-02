@@ -35,8 +35,13 @@ _ROLE_FIELDS = ("enabled", "model_id", "instructions")
 DEFAULTS = {
     "plan": {"enabled": False, "model_id": "", "instructions": "", "approve": False},
     "build": {"enabled": False, "model_id": "", "instructions": ""},
-    "oversight": {"enabled": False, "model_id": "", "instructions": "",
-                  "intensity": DEFAULT_INTENSITY, "max_rounds": DEFAULT_MAX_ROUNDS},
+    "oversight": {
+        "enabled": False,
+        "model_id": "",
+        "instructions": "",
+        "intensity": DEFAULT_INTENSITY,
+        "max_rounds": DEFAULT_MAX_ROUNDS,
+    },
 }
 
 
@@ -73,8 +78,12 @@ def _clean_role(raw, approve_default=None):
         clean["approve"] = _as_bool(raw.get("approve"), default=approve_default)
     if "intensity" in raw or "max_rounds" in raw:
         intensity = _as_text(raw.get("intensity")) or DEFAULT_INTENSITY
-        clean["intensity"] = intensity if intensity in INTENSITIES else DEFAULT_INTENSITY
-        clean["max_rounds"] = _as_int(raw.get("max_rounds"), DEFAULT_MAX_ROUNDS, 1, MAX_ROUNDS_LIMIT)
+        clean["intensity"] = (
+            intensity if intensity in INTENSITIES else DEFAULT_INTENSITY
+        )
+        clean["max_rounds"] = _as_int(
+            raw.get("max_rounds"), DEFAULT_MAX_ROUNDS, 1, MAX_ROUNDS_LIMIT
+        )
     return clean
 
 
@@ -84,8 +93,11 @@ def normalise(raw):
     out = {"version": FORMAT_VERSION}
     for role, default in DEFAULTS.items():
         merged = dict(default)
-        merged.update(_clean_role(raw.get(role),
-                                  approve_default=False if role == "plan" else None))
+        merged.update(
+            _clean_role(
+                raw.get(role), approve_default=False if role == "plan" else None
+            )
+        )
         out[role] = merged
     return out
 

@@ -55,7 +55,9 @@ def _save(session_id, data):
     try:
         d = _dir(session_id)
         d.mkdir(parents=True, exist_ok=True)
-        _index(session_id).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        _index(session_id).write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
     except OSError:
         pass
 
@@ -78,7 +80,11 @@ def _at_or_after(session_id, count):
         count = int(count)
     except (TypeError, ValueError):
         count = 0
-    return [c for c in _load(session_id).get("changes", []) if int(c.get("index", 0)) >= count]
+    return [
+        c
+        for c in _load(session_id).get("changes", [])
+        if int(c.get("index", 0)) >= count
+    ]
 
 
 def preview(session_id, count):
@@ -118,7 +124,9 @@ def restore_since(session_id, count):
         p = c.get("path")
         if not p:
             continue
-        if p not in earliest or int(c.get("index", 0)) < int(earliest[p].get("index", 0)):
+        if p not in earliest or int(c.get("index", 0)) < int(
+            earliest[p].get("index", 0)
+        ):
             earliest[p] = c
     restored = []
     for p, c in earliest.items():

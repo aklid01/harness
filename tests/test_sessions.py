@@ -10,8 +10,10 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import paths  # noqa: E402
-from harness import session  # noqa: E402
+from harness import (
+    paths,
+    session,
+)
 
 
 class SessionCase(unittest.TestCase):
@@ -36,7 +38,10 @@ class SessionCase(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_save_load_roundtrip(self):
-        messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "hello"}]
+        messages = [
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": "hello"},
+        ]
         session.save(messages)
         self.assertTrue((self.dir / "20260101-000000.jsonl").exists())
         self.assertEqual(session.load("20260101-000000"), messages)
@@ -52,18 +57,24 @@ class SessionCase(unittest.TestCase):
         self.assertTrue(keep.exists())
 
     def test_titles_rename_delete(self):
-        session.save([{"role": "user", "content": "a fairly long first message about widgets"}])
+        session.save(
+            [{"role": "user", "content": "a fairly long first message about widgets"}]
+        )
         self.assertIn("widgets", session.all_sessions()[0]["title"])
         session.set_title("20260101-000000", "my name")
         self.assertEqual(session.all_sessions()[0]["title"], "my name")
-        self.assertEqual(session.title(session.load("20260101-000000"), "20260101-000000"), "my name")
+        self.assertEqual(
+            session.title(session.load("20260101-000000"), "20260101-000000"), "my name"
+        )
         session.delete_session("20260101-000000")
         self.assertEqual(session.all_sessions(), [])
 
     def test_ensure_title_uses_llm_once(self):
         messages = [{"role": "user", "content": "fix the login bug"}]
         session.save(messages)
-        with mock.patch("harness.providers.suggest_title", return_value="Login fix") as suggest:
+        with mock.patch(
+            "harness.providers.suggest_title", return_value="Login fix"
+        ) as suggest:
             session.ensure_title(messages)
             self.assertEqual(suggest.call_count, 1)
             session.ensure_title(messages)

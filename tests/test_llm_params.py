@@ -11,7 +11,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import llm, providers  # noqa: E402
+from harness import llm, providers
 
 
 class FakeKeyring:
@@ -30,7 +30,8 @@ class FakeKeyring:
 
 def canned():
     usage = SimpleNamespace(
-        prompt_tokens=1, completion_tokens=1,
+        prompt_tokens=1,
+        completion_tokens=1,
         completion_tokens_details=SimpleNamespace(reasoning_tokens=None),
         prompt_tokens_details=SimpleNamespace(cached_tokens=None),
     )
@@ -51,7 +52,9 @@ class ParamCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        mock.patch.object(providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json").start()
+        mock.patch.object(
+            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json"
+        ).start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.completions = FakeCompletions()
         client = SimpleNamespace(chat=SimpleNamespace(completions=self.completions))
@@ -59,8 +62,14 @@ class ParamCase(unittest.TestCase):
         self.addCleanup(mock.patch.stopall)
 
     def use_provider(self, **extra):
-        entry = {"id": "p", "name": "P", "base_url": "https://x/v1", "model": "m",
-                 "headers": {}, "disabled": False}
+        entry = {
+            "id": "p",
+            "name": "P",
+            "base_url": "https://x/v1",
+            "model": "m",
+            "headers": {},
+            "disabled": False,
+        }
         entry.update(extra)
         providers.save_provider(entry)
         providers.set_active("p")

@@ -15,7 +15,7 @@ os.environ.setdefault("BASE_URL", "http://127.0.0.1:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import paths, sandbox  # noqa: E402
+from harness import paths, sandbox
 
 
 def has_posix_shell():
@@ -26,18 +26,20 @@ class PathifyCase(unittest.TestCase):
     """Path translation is deterministic and never disturbs shell operators."""
 
     def test_drive_paths_become_msys_mounts(self):
-        self.assertEqual(sandbox._posix_pathify(r"cat D:\a\b\c.py"),
-                         "cat /d/a/b/c.py")
+        self.assertEqual(sandbox._posix_pathify(r"cat D:\a\b\c.py"), "cat /d/a/b/c.py")
         self.assertEqual(sandbox._posix_pathify(r"D:/x/y"), "/d/x/y")
         self.assertEqual(sandbox._posix_pathify(r"cat C:\p\f"), "cat /c/p/f")
 
     def test_operators_and_redirects_are_untouched(self):
         self.assertEqual(
             sandbox._posix_pathify(r"cat D:\f.txt && echo hi 2>/dev/null || ls"),
-            "cat /d/f.txt && echo hi 2>/dev/null || ls")
+            "cat /d/f.txt && echo hi 2>/dev/null || ls",
+        )
 
 
-@unittest.skipUnless(has_posix_shell(), "no POSIX shell available to back the bash tool")
+@unittest.skipUnless(
+    has_posix_shell(), "no POSIX shell available to back the bash tool"
+)
 class SandboxRunCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

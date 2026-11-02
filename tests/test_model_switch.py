@@ -18,8 +18,8 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import events, llm, providers, server  # noqa: E402
-from harness.errors import ModelError  # noqa: E402
+from harness import events, providers, server
+from harness.errors import ModelError
 
 
 class FakeKeyring:
@@ -37,11 +37,19 @@ class FakeKeyring:
 
 
 def message(content):
-    return SimpleNamespace(content=content, tool_calls=[],
-                           model_dump=lambda exclude_none=True: {"role": "assistant", "content": content})
+    return SimpleNamespace(
+        content=content,
+        tool_calls=[],
+        model_dump=lambda exclude_none=True: {"role": "assistant", "content": content},
+    )
 
 
-USAGE = {"prompt_tokens": 1, "completion_tokens": 1, "reasoning_tokens": None, "cached_tokens": None}
+USAGE = {
+    "prompt_tokens": 1,
+    "completion_tokens": 1,
+    "reasoning_tokens": None,
+    "cached_tokens": None,
+}
 
 
 class SwitchCase(unittest.TestCase):
@@ -56,14 +64,25 @@ class SwitchCase(unittest.TestCase):
         self.addCleanup(server.paths_mod.reset)
         os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
         self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
-        mock.patch.object(providers, "PROVIDERS_FILE", appdata / "providers.json").start()
+        mock.patch.object(
+            providers, "PROVIDERS_FILE", appdata / "providers.json"
+        ).start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
-        providers.save_group({"id": "grp-1", "name": "NVIDIA", "base_url": "https://nvidia.example/v1"})
-        self.a = providers.save_model({"id": "mdl-a", "name": "GLM 5.3 Flash",
-                                       "model": "glm-5.3-flash"}, "grp-1")
-        self.b = providers.save_model({"id": "mdl-b", "name": "DeepSeek V4.1 Flash",
-                                       "model": "deepseek-v4.1-flash"}, "grp-1")
+        providers.save_group(
+            {"id": "grp-1", "name": "NVIDIA", "base_url": "https://nvidia.example/v1"}
+        )
+        self.a = providers.save_model(
+            {"id": "mdl-a", "name": "GLM 5.3 Flash", "model": "glm-5.3-flash"}, "grp-1"
+        )
+        self.b = providers.save_model(
+            {
+                "id": "mdl-b",
+                "name": "DeepSeek V4.1 Flash",
+                "model": "deepseek-v4.1-flash",
+            },
+            "grp-1",
+        )
         providers.set_active("mdl-a")
         providers.set_key("grp-1", "sk-shared")
         self.backend = server.Harness()
@@ -111,7 +130,7 @@ class SwitchCase(unittest.TestCase):
         for line in path.read_text(encoding="utf-8").splitlines():
             entry = json.loads(line)
             if "rewind_to" in entry:
-                del messages[entry["rewind_to"]:]
+                del messages[entry["rewind_to"] :]
             elif "compacted" not in entry:
                 messages.append(entry)
         return messages
@@ -123,11 +142,15 @@ class SwitchCase(unittest.TestCase):
             model = providers.active_config()[2]
             seen.append(model)
             if model == "glm-5.3-flash":
-                raise ModelError("network", "could not reach the provider", model="GLM 5.3 Flash")
+                raise ModelError(
+                    "network", "could not reach the provider", model="GLM 5.3 Flash"
+                )
             return message("done by deepseek"), USAGE
 
         with mock.patch("harness.agent.call_llm", side_effect=fake_call):
-            self.dispatch(op="open", session="s", root=str(server.paths_mod.project_root()))
+            self.dispatch(
+                op="open", session="s", root=str(server.paths_mod.project_root())
+            )
             self.assertTrue(self.done(kind="session"))
             self.note_session()
             self.submit("fix the bug")
@@ -144,8 +167,13 @@ class SwitchCase(unittest.TestCase):
         self.dispatch(op="set_active", session="s", id="mdl-b")
         self.clear_sent()
         with mock.patch("harness.agent.call_llm", side_effect=fake_call):
-            self.dispatch(op="retry", session="s", count=failures[0]["retry"]["count"],
-                          text="fix the bug", mode="build")
+            self.dispatch(
+                op="retry",
+                session="s",
+                count=failures[0]["retry"]["count"],
+                text="fix the bug",
+                mode="build",
+            )
             self.assertTrue(self.done())
 
         bodies = self.user_messages()
@@ -166,7 +194,9 @@ class SwitchCase(unittest.TestCase):
             return message("late answer"), USAGE
 
         with mock.patch("harness.agent.call_llm", side_effect=slow):
-            self.dispatch(op="open", session="s", root=str(server.paths_mod.project_root()))
+            self.dispatch(
+                op="open", session="s", root=str(server.paths_mod.project_root())
+            )
             self.assertTrue(self.done(kind="session"))
             self.note_session()
             self.clear_sent()
@@ -181,15 +211,24 @@ class SwitchCase(unittest.TestCase):
 
         assistant = [m for m in self.session_messages() if m.get("role") == "assistant"]
         self.assertEqual(assistant, [], "an abandoned generation is not appended")
-        self.assertFalse(self.backend.sessions["s"].running, "the session must not stay stuck busy")
+        self.assertFalse(
+            self.backend.sessions["s"].running, "the session must not stay stuck busy"
+        )
 
         # a fresh turn then uses the model the user chose
         self.clear_sent()
-        with mock.patch("harness.agent.call_llm", return_value=(message("fresh"), USAGE)) as call:
+        with mock.patch(
+            "harness.agent.call_llm", return_value=(message("fresh"), USAGE)
+        ) as call:
             self.dispatch(op="submit", session="s", text="again", mode="build")
             self.assertTrue(self.done())
             self.assertEqual(call.call_count, 1)
-        self.assertEqual([m for m in self.session_messages() if m.get("role") == "assistant"][0]["content"], "fresh")
+        self.assertEqual(
+            [m for m in self.session_messages() if m.get("role") == "assistant"][0][
+                "content"
+            ],
+            "fresh",
+        )
 
     def test_two_models_of_one_provider_stay_selectable(self):
         models = providers.list_models("grp-1")

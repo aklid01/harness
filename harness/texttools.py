@@ -33,11 +33,18 @@ CALL_OPEN = "".join(["<", "function", "="])
 PARAM_OPEN = "".join(["<", "parameter", "="])
 
 CALL_PATTERN = (
-    re.escape(OPEN) + r"\s*" + re.escape(CALL_OPEN) +
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_.\-]*)>\s*"
-    r"(?P<params>(?:" + re.escape(PARAM_OPEN) + r".*?" +
-    re.escape(CLOSE_PARAM) + r"\s*)*)" +
-    re.escape(CLOSE_FUNCTION) + r"\s*" + re.escape(CLOSE)
+    re.escape(OPEN)
+    + r"\s*"
+    + re.escape(CALL_OPEN)
+    + r"(?P<name>[A-Za-z_][A-Za-z0-9_.\-]*)>\s*"
+    r"(?P<params>(?:"
+    + re.escape(PARAM_OPEN)
+    + r".*?"
+    + re.escape(CLOSE_PARAM)
+    + r"\s*)*)"
+    + re.escape(CLOSE_FUNCTION)
+    + r"\s*"
+    + re.escape(CLOSE)
 )
 STANDALONE_RE = re.compile(r"^\s*" + CALL_PATTERN + r"\s*$", re.DOTALL)
 ANY_CALL_RE = re.compile(CALL_PATTERN, re.DOTALL)
@@ -66,7 +73,9 @@ class TextCall:
         """The same shape a native tool_call arrives in."""
         return SimpleNamespace(
             id=call_id,
-            function=SimpleNamespace(name=self.name, arguments=json.dumps(self.arguments)),
+            function=SimpleNamespace(
+                name=self.name, arguments=json.dumps(self.arguments)
+            ),
         )
 
     def reason(self):
@@ -74,7 +83,10 @@ class TextCall:
 
     def __repr__(self):  # pragma: no cover - debugging aid
         return "TextCall(name=%r, arguments=%r, error=%r)" % (
-            self.name, self.arguments, self.error)
+            self.name,
+            self.arguments,
+            self.error,
+        )
 
 
 def _schema_for(name, schemas):
@@ -131,7 +143,12 @@ def _validate(name, arguments, schema, available):
 
 def looks_like_call(text):
     """Cheap pre-check so the caller does not parse every message."""
-    return isinstance(text, str) and OPEN in text and CLOSE_FUNCTION in text and CALL_OPEN in text
+    return (
+        isinstance(text, str)
+        and OPEN in text
+        and CLOSE_FUNCTION in text
+        and CALL_OPEN in text
+    )
 
 
 def parse(text, schemas=None, available=None):
@@ -155,8 +172,10 @@ def parse(text, schemas=None, available=None):
         return TextCall(error="the call arguments could not be read")
 
     schema = _schema_for(name, schemas)
-    arguments = {key: _coerce(value, (schema or {}).get("properties", {}).get(key, {}))
-                 for key, value in raw.items()}
+    arguments = {
+        key: _coerce(value, (schema or {}).get("properties", {}).get(key, {}))
+        for key, value in raw.items()
+    }
     problem = _validate(name, arguments, schema, available)
     if problem:
         return TextCall(name=name, arguments=arguments, error=problem)
@@ -177,12 +196,14 @@ def parse_with_narration(text, schemas=None, available=None):
     match = ANY_CALL_RE.search(text)
     if not match:
         return TextCall(error="the call markup is not well formed"), ""
-    if "```" in text[:match.start()] or "```" in text[match.end():]:
-        return TextCall(error="the markup is inside a code fence, so it is not a call"), ""
+    if "```" in text[: match.start()] or "```" in text[match.end() :]:
+        return TextCall(
+            error="the markup is inside a code fence, so it is not a call"
+        ), ""
     call = parse(match.group(0), schemas, available)
     if not call.ok:
         return call, ""
-    around = " ".join((text[:match.start()] + " " + text[match.end():]).split())
+    around = " ".join((text[: match.start()] + " " + text[match.end() :]).split())
     return call, around
 
 
@@ -190,6 +211,7 @@ def describe(call):
     """One line for the user: what the text call asks for."""
     if not call.ok:
         return call.error or "unrecognized tool call"
-    summary = ", ".join("%s=%r" % (key, value)
-                        for key, value in list(call.arguments.items())[:3])
+    summary = ", ".join(
+        "%s=%r" % (key, value) for key, value in list(call.arguments.items())[:3]
+    )
     return "%s(%s)" % (call.name, summary)

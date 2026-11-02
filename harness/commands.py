@@ -1,8 +1,7 @@
 """Slash commands. Anything typed starting with / lands here."""
 
 from . import compact as compaction
-from . import events
-from . import session
+from . import events, session
 
 COMMANDS = {
     "/rewind": "jump back to an earlier point in this chat",
@@ -19,7 +18,10 @@ def preview(message):
 
 def redraw(messages, label):
     """The screen no longer matches the history, so redraw from scratch."""
-    events.emit(events.SESSION, {"label": label, "messages": messages, "id": session.current_id()})
+    events.emit(
+        events.SESSION,
+        {"label": label, "messages": messages, "id": session.current_id()},
+    )
     return messages
 
 
@@ -54,7 +56,12 @@ def compact(messages, window=None):
         # Compaction is one more API call, and it fires when the window is
         # nearly full - the worst moment to lose the session over a rate limit.
         events.emit(events.STATUS, {"active": None})
-        events.emit(events.NOTE, {"text": f"compaction failed ({type(failure).__name__}); transcript kept as is"})
+        events.emit(
+            events.NOTE,
+            {
+                "text": f"compaction failed ({type(failure).__name__}); transcript kept as is"
+            },
+        )
         return messages
     events.emit(events.STATUS, {"active": None})
     if len(compacted) == before:
@@ -72,5 +79,8 @@ def handle(command, messages):
         return rewind(messages)
     if command == "/sessions":
         return sessions(messages)
-    events.emit(events.NOTE, {"text": "\n".join(f"{name}  -  {help}" for name, help in COMMANDS.items())})
+    events.emit(
+        events.NOTE,
+        {"text": "\n".join(f"{name}  -  {help}" for name, help in COMMANDS.items())},
+    )
     return messages

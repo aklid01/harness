@@ -11,9 +11,9 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-import openai  # noqa: E402
+import openai
 
-from harness import errors, retry  # noqa: E402
+from harness import errors, retry
 
 
 class FakeResponse:
@@ -25,18 +25,32 @@ class FakeResponse:
 
 
 _STATUS_NAMES = {
-    429: "RateLimitError", 500: "InternalServerError", 503: "InternalServerError",
-    401: "AuthenticationError", 403: "PermissionDeniedError", 404: "NotFoundError",
-    400: "BadRequestError", 422: "UnprocessableEntityError", 408: "APIStatusError",
-    504: "APIStatusError", 502: "InternalServerError",
+    429: "RateLimitError",
+    500: "InternalServerError",
+    503: "InternalServerError",
+    401: "AuthenticationError",
+    403: "PermissionDeniedError",
+    404: "NotFoundError",
+    400: "BadRequestError",
+    422: "UnprocessableEntityError",
+    408: "APIStatusError",
+    504: "APIStatusError",
+    502: "InternalServerError",
 }
 
 
 def http(status, message="", headers=None, body=None):
     """A real SDK status error, named the way the SDK would name it."""
-    cls = type(_STATUS_NAMES.get(status, "APIStatusError"), (openai.APIStatusError,), {})
-    return cls(message, response=FakeResponse(status, headers),
-              body=body if body is not None else {"error": {"message": message or name_of(status)}})
+    cls = type(
+        _STATUS_NAMES.get(status, "APIStatusError"), (openai.APIStatusError,), {}
+    )
+    return cls(
+        message,
+        response=FakeResponse(status, headers),
+        body=body
+        if body is not None
+        else {"error": {"message": message or name_of(status)}},
+    )
 
 
 def name_of(status):
@@ -59,8 +73,11 @@ class ClassifyCase(unittest.TestCase):
             # The SDK's base APIError: it could not map the provider's answer
             # onto a status error, and "currently unavailable, try again
             # later" reaches us in exactly this shape.
-            openai.APIError("This model is currently unavailable. Please try again later.",
-                            request=mock.Mock(url="https://x/v1"), body=None),
+            openai.APIError(
+                "This model is currently unavailable. Please try again later.",
+                request=mock.Mock(url="https://x/v1"),
+                body=None,
+            ),
         ]
         for failure in transient:
             error = errors.classify(failure, model="m")
@@ -87,8 +104,11 @@ class ClassifyCase(unittest.TestCase):
             openai.APITimeoutError(request=mock.Mock(url="https://x/v1")): "timeout",
             openai.APIConnectionError(request=mock.Mock(url="https://x/v1")): "network",
             ConnectionResetError("reset"): "network",
-            openai.APIError("This model is currently unavailable. Please try again later.",
-                            request=mock.Mock(url="https://x/v1"), body=None): "server",
+            openai.APIError(
+                "This model is currently unavailable. Please try again later.",
+                request=mock.Mock(url="https://x/v1"),
+                body=None,
+            ): "server",
         }
         for failure, kind in cases.items():
             self.assertEqual(errors.classify(failure).kind, kind)
@@ -99,17 +119,23 @@ class ClassifyCase(unittest.TestCase):
 
     def test_messages_never_carry_the_key(self):
         secret = "sk-abcdefghijklmnopqrstuvwxyz012345"
-        error = errors.classify(http(401, f"Incorrect API key provided: {secret}", body=None),
-                                api_key=secret)
+        error = errors.classify(
+            http(401, f"Incorrect API key provided: {secret}", body=None),
+            api_key=secret,
+        )
         self.assertNotIn(secret, error.text())
         self.assertNotIn(secret, str(error))
 
     def test_model_is_named_in_the_message(self):
-        error = errors.classify(http(404, "model not found"), model="DeepSeek V4.1 Flash")
+        error = errors.classify(
+            http(404, "model not found"), model="DeepSeek V4.1 Flash"
+        )
         self.assertIn("DeepSeek V4.1 Flash", error.text())
 
     def test_provider_detail_survives(self):
-        error = errors.classify(http(422, "Unsupported parameter: 'reasoning_effort'"), model="m")
+        error = errors.classify(
+            http(422, "Unsupported parameter: 'reasoning_effort'"), model="m"
+        )
         self.assertIn("reasoning_effort", error.text())
 
     def test_each_status_suggests_its_own_next_step(self):
@@ -132,8 +158,14 @@ class ClassifyCase(unittest.TestCase):
         self.assertIn("Retry", payload["hint"])
 
     def test_provider_error_body_is_parsed_cleanly(self):
-        body = {"error": {"message": "Unsupported parameter", "code": "unsupported_parameter",
-                          "type": "invalid_request_error", "param": "reasoning_effort"}}
+        body = {
+            "error": {
+                "message": "Unsupported parameter",
+                "code": "unsupported_parameter",
+                "type": "invalid_request_error",
+                "param": "reasoning_effort",
+            }
+        }
         error = errors.classify(http(422, "", body=body), model="m")
         self.assertIn("Unsupported parameter", error.detail)
         self.assertIn("reasoning_effort", error.detail)
@@ -159,8 +191,7 @@ class RunCase(unittest.TestCase):
 
     def test_transient_then_success(self):
         started = time.monotonic()
-        value = retry.run(self.request(2), window=30, host="h",
-                          schedule=(0.05, 0.05))
+        value = retry.run(self.request(2), window=30, host="h", schedule=(0.05, 0.05))
         self.assertEqual(value, "ok")
         self.assertEqual(len(self.calls), 3)
         self.assertLess(time.monotonic() - started, 10)
@@ -191,8 +222,7 @@ class RunCase(unittest.TestCase):
         self.assertTrue(raised.exception.kind == "timeout")
         # The scheduled 3s wait is squeezed into what is left of the window,
         # so the deadline still allows a retry before it gives up.
-        self.assertGreaterEqual(len(self.calls), 2,
-                                "the window still allows a retry")
+        self.assertGreaterEqual(len(self.calls), 2, "the window still allows a retry")
 
     def test_attempt_count_caps_the_retries(self):
         def call():
@@ -204,12 +234,15 @@ class RunCase(unittest.TestCase):
         self.assertEqual(len(self.calls), retry.MAX_ATTEMPTS)
         self.assertTrue(raised.exception.exhausted)
         self.assertEqual(raised.exception.retries, retry.MAX_ATTEMPTS - 1)
-        self.assertIn(f"still failing after {retry.MAX_ATTEMPTS - 1} retries",
-                      raised.exception.text())
+        self.assertIn(
+            f"still failing after {retry.MAX_ATTEMPTS - 1} retries",
+            raised.exception.text(),
+        )
 
     def test_the_fixed_schedule_is_honored(self):
         """The user-visible promise: retry 1 comes 3s later, retry 2 after
         5s, and the card counts them off in that order."""
+
         def call():
             self.calls.append(time.monotonic())
             if len(self.calls) <= 2:
@@ -233,7 +266,8 @@ class RunCase(unittest.TestCase):
         self.assertEqual(retry.MAX_ATTEMPTS, len(retry.RETRY_SCHEDULE) + 1)
         self.assertGreaterEqual(
             retry.RETRY_WINDOW,
-            retry.MAX_ATTEMPTS * retry.READ_TIMEOUT + sum(retry.RETRY_SCHEDULE))
+            retry.MAX_ATTEMPTS * retry.READ_TIMEOUT + sum(retry.RETRY_SCHEDULE),
+        )
 
     def test_a_slow_first_attempt_still_gets_its_retry(self):
         """A provider that stalls for longer than the old read timeout, then
@@ -247,8 +281,9 @@ class RunCase(unittest.TestCase):
                 raise openai.APITimeoutError(request=mock.Mock(url="https://x/v1"))
             return "answer"
 
-        self.assertEqual(retry.run(call, attempts=3, host="h",
-                                   schedule=(0.05, 0.05)), "answer")
+        self.assertEqual(
+            retry.run(call, attempts=3, host="h", schedule=(0.05, 0.05)), "answer"
+        )
         self.assertEqual(len(self.calls), 3)
 
     def test_retry_after_is_respected(self):
@@ -287,8 +322,13 @@ class RunCase(unittest.TestCase):
             raise http(503, "overloaded")
 
         with self.assertRaises(errors.ModelError) as raised:
-            retry.run(call, window=30, cancel=cancel, host="h",
-                      schedule=(0.2, 0.2, 0.2, 0.2, 0.2))
+            retry.run(
+                call,
+                window=30,
+                cancel=cancel,
+                host="h",
+                schedule=(0.2, 0.2, 0.2, 0.2, 0.2),
+            )
         self.assertEqual(raised.exception.kind, "cancelled")
         attempts = len(self.calls)
         time.sleep(0.8)
@@ -296,9 +336,14 @@ class RunCase(unittest.TestCase):
 
     def test_progress_events_report_wait_and_model(self):
         seen = []
-        retry.run(self.request(1), window=10, host="h", model="DeepSeek V4.1 Flash",
-                  schedule=(0.1, 0.1),
-                  on_attempt=lambda state: seen.append(state))
+        retry.run(
+            self.request(1),
+            window=10,
+            host="h",
+            model="DeepSeek V4.1 Flash",
+            schedule=(0.1, 0.1),
+            on_attempt=lambda state: seen.append(state),
+        )
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0]["model"], "DeepSeek V4.1 Flash")
         self.assertGreater(seen[0]["attempt"], 1)

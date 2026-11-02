@@ -16,27 +16,47 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import commands, events  # noqa: E402
-from harness.agent import Runner  # noqa: E402
-from harness import todos  # noqa: E402
+from harness import (
+    commands,
+    events,
+    todos,
+)
+from harness.agent import Runner
 
 
 def fake_message(content=None, calls=()):
     tool_calls = [
-        SimpleNamespace(id=f"call_{i}", function=SimpleNamespace(name=name, arguments=json.dumps(args)))
+        SimpleNamespace(
+            id=f"call_{i}",
+            function=SimpleNamespace(name=name, arguments=json.dumps(args)),
+        )
         for i, (name, args) in enumerate(calls)
     ]
     dumped = {"role": "assistant", "content": content}
     if tool_calls:
         dumped["tool_calls"] = [
-            {"id": c.id, "function": {"name": c.function.name, "arguments": c.function.arguments}}
+            {
+                "id": c.id,
+                "function": {
+                    "name": c.function.name,
+                    "arguments": c.function.arguments,
+                },
+            }
             for c in tool_calls
         ]
-    return SimpleNamespace(content=content, tool_calls=tool_calls,
-                           model_dump=lambda exclude_none=True: dict(dumped))
+    return SimpleNamespace(
+        content=content,
+        tool_calls=tool_calls,
+        model_dump=lambda exclude_none=True: dict(dumped),
+    )
 
 
-USAGE = {"prompt_tokens": 10, "completion_tokens": 5, "reasoning_tokens": None, "cached_tokens": None}
+USAGE = {
+    "prompt_tokens": 10,
+    "completion_tokens": 5,
+    "reasoning_tokens": None,
+    "cached_tokens": None,
+}
 
 
 class EngineCase(unittest.TestCase):
@@ -46,7 +66,11 @@ class EngineCase(unittest.TestCase):
         self.seen = []
         events.subscribe(lambda t, p: self.seen.append((t, p)))
         self.responder = None
-        events.set_responder(lambda kind, payload: self.responder(kind, payload) if self.responder else None)
+        events.set_responder(
+            lambda kind, payload: (
+                self.responder(kind, payload) if self.responder else None
+            )
+        )
         for name in ("save", "compacted", "rewind_to", "ensure_title"):
             mock.patch("harness.session." + name).start()
         mock.patch("harness.session.all_sessions", return_value=[]).start()
@@ -95,7 +119,10 @@ class EngineCase(unittest.TestCase):
         answers = []
         runner = Runner()
         self.responder = lambda kind, payload: answers.append((kind, payload)) or False
-        self.llm.side_effect = [(fake_message(None, ask), USAGE), (fake_message("ok"), USAGE)]
+        self.llm.side_effect = [
+            (fake_message(None, ask), USAGE),
+            (fake_message("ok"), USAGE),
+        ]
         runner.handle_input("ask me")
         kinds = [k for k, _ in answers]
         self.assertIn(events.APPROVAL, kinds)
@@ -107,16 +134,24 @@ class EngineCase(unittest.TestCase):
         events.set_responder(lambda kind, payload: True)
         mark = len(self.seen)
         runner2 = Runner()
-        self.llm.side_effect = [(fake_message(None, ask), USAGE), (fake_message("ok"), USAGE)]
+        self.llm.side_effect = [
+            (fake_message(None, ask), USAGE),
+            (fake_message("ok"), USAGE),
+        ]
         runner2.handle_input("ask me")
-        allowed = [p for t, p in self.seen[mark:] if t == events.TOOL_RESULT][0]["result"]
+        allowed = [p for t, p in self.seen[mark:] if t == events.TOOL_RESULT][0][
+            "result"
+        ]
         self.assertIn("1", allowed)
 
     def test_no_responder_denies(self):
         events.set_responder(None)
         runner = Runner()
         self.llm.side_effect = [
-            (fake_message(None, [("bash", {"command": 'python -c "print(1)"'})]), USAGE),
+            (
+                fake_message(None, [("bash", {"command": 'python -c "print(1)"'})]),
+                USAGE,
+            ),
             (fake_message("ok"), USAGE),
         ]
         runner.handle_input("ask me")
@@ -154,7 +189,10 @@ class EngineCase(unittest.TestCase):
             Path(target).unlink()
         runner = Runner(mode="plan")
         self.llm.side_effect = [
-            (fake_message(None, [("write_file", {"path": target, "content": "x"})]), USAGE),
+            (
+                fake_message(None, [("write_file", {"path": target, "content": "x"})]),
+                USAGE,
+            ),
             (fake_message("ok"), USAGE),
         ]
         with mock.patch("harness.agent.execute") as exe:
@@ -187,7 +225,11 @@ class EngineCase(unittest.TestCase):
         runner.handle_input("hi")
         sent = self.llm.call_args[0][0]
         self.assertNotIn("<mode>", sent[-1]["content"])
-        self.assertFalse(any("<system-reminder>" in (m.get("content") or "") for m in runner.messages))
+        self.assertFalse(
+            any(
+                "<system-reminder>" in (m.get("content") or "") for m in runner.messages
+            )
+        )
 
     def test_fresh_runners_get_mode_identity(self):
         plan = Runner(mode="plan")
@@ -239,9 +281,11 @@ class ContextHonestyCase(unittest.TestCase):
     def test_a_repo_reports_its_branch(self):
         from harness import context
 
-        with mock.patch.object(context, "is_git_worktree", return_value=True), \
-                mock.patch.object(context, "git", return_value="feature/x\n"), \
-                mock.patch.object(context, "changes_note", return_value=""):
+        with (
+            mock.patch.object(context, "is_git_worktree", return_value=True),
+            mock.patch.object(context, "git", return_value="feature/x\n"),
+            mock.patch.object(context, "changes_note", return_value=""),
+        ):
             body = context.reminder()["content"]
         self.assertIn("git branch: feature/x", body)
 

@@ -32,7 +32,9 @@ def find_skills():
                 _, frontmatter, _ = text.split("---", 2)
                 meta = yaml.safe_load(frontmatter)
                 description = " ".join(str(meta["description"]).split())
-                skills.setdefault(meta["name"], {"description": description, "path": path})
+                skills.setdefault(
+                    meta["name"], {"description": description, "path": path}
+                )
             except (ValueError, KeyError, TypeError, yaml.YAMLError, OSError):
                 continue
     return skills
