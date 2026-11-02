@@ -185,6 +185,15 @@ export interface TodoItem {
   activeForm?: string;
 }
 
+/* A message filed against a running turn: "steer" joins the conversation at
+   the next model-call boundary, "queue" auto-runs after the turn ends well. */
+export type PendingKind = "steer" | "queue";
+export interface PendingItem {
+  id: string;
+  kind: PendingKind;
+  text: string;
+}
+
 export interface SessionOp {
   session: string;
   root?: string;
@@ -194,6 +203,9 @@ export interface SessionOp {
 
 export type OpPayload =
   | { op: "submit"; text: string; mode: Mode; submission_id?: string }
+  | { op: "enqueue"; text: string; kind: PendingKind; submission_id?: string }
+  | { op: "pending_edit"; id: string; text: string }
+  | { op: "pending_remove"; id: string }
   | { op: "open"; id: string; mode: Mode }
   | { op: "stop" }
   | { op: "rewind_to"; count: number }

@@ -7,6 +7,8 @@ import type {
   DecisionEventPayload,
   Mode,
   OpPayload,
+  PendingItem,
+  PendingKind,
   PhaseEventPayload,
   PlanEventPayload,
   PlanRecord,
@@ -100,6 +102,8 @@ interface Prefs {
   rightPanel: boolean;
   confirmProtected: boolean;
   defaultMode: Mode;
+  defaultMidTurn: PendingKind;
+  showThinking: boolean;
   modeByWs: Record<string, Mode>;
   effortGlobal: string;
   effortByWs: Record<string, string>;
@@ -116,6 +120,8 @@ const DEFAULT_PREFS: Prefs = {
   rightPanel: false,
   confirmProtected: true,
   defaultMode: "build",
+  defaultMidTurn: "queue",
+  showThinking: true,
   modeByWs: {},
   effortGlobal: "default",
   effortByWs: {},
@@ -212,6 +218,11 @@ const effortMenu = el<HTMLDivElement>("effortMenu");
 const permsBtn = el<HTMLButtonElement>("permsBtn");
 const permsLabel = el<HTMLSpanElement>("permsLabel");
 const permsMenu = el<HTMLDivElement>("permsMenu");
+const pendingBar = el<HTMLDivElement>("pendingBar");
+const sendExtra = el<HTMLButtonElement>("sendExtra");
+const sendExtraCaret = el<HTMLButtonElement>("sendExtraCaret");
+const sendExtraMenu = el<HTMLDivElement>("sendExtraMenu");
+const thinkBtn = el<HTMLButtonElement>("thinkBtn");
 const sendstop = el<HTMLButtonElement>("sendstop");
 const modal = el<HTMLDivElement>("modal");
 const modalBox = el<HTMLDivElement>("modalBox");
@@ -253,6 +264,11 @@ const REQUIRED_IDS = [
   "permsBtn",
   "permsLabel",
   "permsMenu",
+  "pendingBar",
+  "sendExtra",
+  "sendExtraCaret",
+  "sendExtraMenu",
+  "thinkBtn",
   "sendstop",
   "modal",
   "modalBox",
@@ -310,11 +326,14 @@ interface Ctx {
   lastBranch: string;
   branchAck: string;
   pendingText: string | null;
+  pendingKind: PendingKind | null;
   pendingRewind: number | null;
   pendingEffort: string | null;
   pendingProviderId: string | null;
   pendingOpenSessionId: string | null;
   pendingResume: boolean;
+  pendingItems: PendingItem[];
+  editingPendingId: string | null;
   failure: {
     retry: RetryInfo | null;
     headline: string;
@@ -322,6 +341,7 @@ interface Ctx {
     text: string;
     transient: boolean;
     hint: string;
+    discarded?: string[];
   } | null;
   retryCard: HTMLDivElement | null;
   phaseEl: string | null;
@@ -332,6 +352,9 @@ interface Ctx {
   streamWrap: HTMLElement | null;
   streamText: string[];
   thinking: HTMLDivElement | null;
+  thinkWrap: HTMLElement | null;
+  thinkBody: HTMLDivElement | null;
+  thinkText: string[];
   toolCards: Map<string, HTMLDivElement>;
   chatBody: HTMLElement;
   entryDraft: string;
@@ -489,11 +512,14 @@ function makeCtx(
     lastBranch: "",
     branchAck: "",
     pendingText: null,
+    pendingKind: null,
     pendingRewind: null,
     pendingEffort: null,
     pendingProviderId: null,
     pendingOpenSessionId: null,
     pendingResume: false,
+    pendingItems: [],
+    editingPendingId: null,
     failure: null,
     retryCard: null,
     retryTick: null,
@@ -504,6 +530,9 @@ function makeCtx(
     streamWrap: null,
     streamText: [],
     thinking: null,
+    thinkWrap: null,
+    thinkBody: null,
+    thinkText: [],
     toolCards: new Map(),
     chatBody: document.createElement("div"),
     entryDraft: "",
@@ -533,6 +562,10 @@ function escapeHtml(text: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+function trimOneLine(text: string, max: number): string {
+  const one = text.replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max)}…` : one;
 }
 function baseName(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
@@ -730,12 +763,36 @@ function setBusy(ctx: Ctx, value: boolean): void {
     if (value && !modeMenu.classList.contains("hidden")) closeAllMenus();
     refreshModeIndicator();
   }
+  // The steer/queue affordance only exists while a turn runs; it follows the
+  // tab that owns the turn, since the composer is shared between tabs.
+  if (ctx === activeCtx || !value) {
+    promptZone.classList.toggle("busy", value && ctx === activeCtx);
+    updateSendExtra();
+    renderPendingStrip(ctx);
+  }
 }
 function updateSendState(): void {
   if (!activeCtx) return;
   sendstop.classList.toggle("busy", activeCtx.busy);
   sendstop.disabled = activeCtx.busy ? false : entry.value.trim().length === 0;
   sendstop.title = activeCtx.busy ? "Stop" : "Send";
+  updateSendExtra();
+}
+/* While a turn runs, Enter and the extra button file the typed message as
+   steer or queue (the default from settings); the caret picks the other. */
+function updateSendExtra(): void {
+  const busy = !!activeCtx?.busy;
+  sendExtra.disabled = busy ? entry.value.trim().length === 0 : true;
+  const kind = midTurnKind();
+  sendExtra.title =
+    kind === "steer"
+      ? "Steer: add to the running turn"
+      : "Queue: run after this turn";
+  sendExtra.classList.toggle("steer", kind === "steer");
+  sendExtraCaret.title = `Choose steer or queue (default: ${kind})`;
+}
+function midTurnKind(): PendingKind {
+  return prefs.defaultMidTurn === "steer" ? "steer" : "queue";
 }
 /* One submission id per send, so a replayed or duplicated submit is dropped
    by the backend instead of turning into a second message or turn. */
@@ -764,7 +821,7 @@ function send(ctx: Ctx, op: OpPayload): number {
     ...op,
     req_id: reqSeq,
   } as ClientOp;
-  if (op.op === "submit") {
+  if (op.op === "submit" || op.op === "enqueue") {
     payload.submission_id = nextSubmissionId();
   }
   sharedWs.send(JSON.stringify(payload));
@@ -783,9 +840,15 @@ function turnWrap(kind: "user" | "assistant"): {
   wrap.appendChild(body);
   return { wrap, body };
 }
-function addUser(ctx: Ctx, text: string): void {
+function addUser(ctx: Ctx, text: string, via?: string): void {
   const { wrap, body } = turnWrap("user");
   body.textContent = text;
+  if (via === "steer" || via === "queue") {
+    const chip = document.createElement("span");
+    chip.className = `via-chip ${via}`;
+    chip.textContent = via === "steer" ? "steered" : "queued";
+    wrap.appendChild(chip);
+  }
   ctx.chatBody.appendChild(wrap);
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
@@ -803,6 +866,7 @@ function beginStream(ctx: Ctx): void {
 }
 function appendDelta(ctx: Ctx, text: string): void {
   hideThinking(ctx);
+  collapseThinking(ctx);
   if (!ctx.streamPre) beginStream(ctx);
   ctx.streamText.push(text);
   if (ctx.streamPre) ctx.streamPre.textContent = ctx.streamText.join("");
@@ -834,6 +898,59 @@ function showThinking(ctx: Ctx): void {
 function hideThinking(ctx: Ctx): void {
   ctx.thinking?.remove();
   ctx.thinking = null;
+}
+/* ---- real model thinking (reasoning tokens) ---- */
+function makeThinkBlock(text: string, open: boolean): {
+  wrap: HTMLElement;
+  body: HTMLDivElement;
+} {
+  const wrap = document.createElement("div");
+  wrap.className = `think-block${open ? " open" : ""}`;
+  const head = document.createElement("div");
+  head.className = "think-head";
+  head.innerHTML = `<span class="t-label">Thinking</span><span class="t-caret">${ICONS.chev}</span>`;
+  const body = document.createElement("div");
+  body.className = "think-body";
+  body.textContent = text;
+  head.onclick = () => wrap.classList.toggle("open");
+  wrap.appendChild(head);
+  wrap.appendChild(body);
+  return { wrap, body };
+}
+function thinkBlockAppend(ctx: Ctx, text: string): void {
+  if (!text) return;
+  if (!ctx.thinkWrap) {
+    const block = makeThinkBlock("", true);
+    if (ctx.streamWrap) ctx.chatBody.insertBefore(block.wrap, ctx.streamWrap);
+    else ctx.chatBody.appendChild(block.wrap);
+    ctx.thinkWrap = block.wrap;
+    ctx.thinkBody = block.body;
+    ctx.thinkText = [];
+  }
+  ctx.thinkText.push(text);
+  if (ctx.thinkBody) ctx.thinkBody.textContent = ctx.thinkText.join("");
+  scrollBottom(ctx);
+}
+/* The answer has started: fold the block away but leave it readable. The
+   live ref drops, so reasoning after a tool call opens a fresh block. */
+function collapseThinking(ctx: Ctx): void {
+  if (!ctx.thinkWrap) return;
+  ctx.thinkWrap.classList.remove("open");
+  ctx.thinkWrap = null;
+  ctx.thinkBody = null;
+  ctx.thinkText = [];
+}
+function normPendingItems(raw: unknown): PendingItem[] {
+  if (!Array.isArray(raw)) return [];
+  const items: PendingItem[] = [];
+  for (const it of raw) {
+    const o = it as Record<string, unknown>;
+    const kind = o["kind"] === "steer" ? "steer" : "queue";
+    const id = typeof o["id"] === "string" ? o["id"] : "";
+    const text = typeof o["text"] === "string" ? o["text"] : "";
+    if (id && text) items.push({ id, kind, text });
+  }
+  return items;
 }
 function addNote(ctx: Ctx, text: string): void {
   const div = document.createElement("div");
@@ -924,11 +1041,17 @@ function failureCard(
     actions.push(
       `<button class="btn small" data-switch="1">Switch model</button>`,
     );
+  const discardedLines = (failure.discarded ?? [])
+    .map((t) => `<div class="e-discarded">${escapeHtml(trimOneLine(t, 200))}</div>`)
+    .join("");
   div.innerHTML =
     `<b>${escapeHtml(failure.headline)}</b>` +
     `<div>${escapeHtml(failure.text)}</div>` +
     (failure.hint
       ? `<div class="error-hint">Things to do: ${escapeHtml(failure.hint)}</div>`
+      : "") +
+    (discardedLines
+      ? `<div class="error-hint">Queued messages were discarded because the provider failed:${discardedLines}</div>`
       : "") +
     (actions.length
       ? `<div class="msg-actions" style="opacity:1;pointer-events:auto;margin-top:8px">${actions.join("")}</div>`
@@ -963,6 +1086,9 @@ function addError(
   ctx.streamWrap = null;
   ctx.streamPre = null;
   ctx.streamText = [];
+  ctx.thinkWrap = null;
+  ctx.thinkBody = null;
+  ctx.thinkText = [];
   clearRetryCard(ctx);
   if (ctx === activeCtx) setStatusState("error");
   const retry = (meta?.["retry"] as RetryInfo | undefined) ?? null;
@@ -977,7 +1103,18 @@ function addError(
     text,
     transient: meta?.["transient"] !== false,
     hint: String(meta?.["hint"] ?? ""),
+    discarded: Array.isArray(meta?.["discarded_queue"])
+      ? (meta?.["discarded_queue"] as unknown[]).map(String)
+      : undefined,
   };
+  // Queued texts survive on screen: hand them back to the composer when it
+  // is free, so a provider failure never eats what the user typed.
+  const restore = ctx.failure.discarded ?? [];
+  if (restore.length && ctx === activeCtx && !entry.value.trim()) {
+    entry.value = restore.join("\n\n");
+    autogrow();
+    updateSendState();
+  }
   ctx.chatBody.appendChild(failureCard(ctx, ctx.failure));
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
@@ -1414,6 +1551,9 @@ function renderTranscript(
   ctx.toolCards.clear();
   ctx.streamPre = null;
   ctx.streamWrap = null;
+  ctx.thinkWrap = null;
+  ctx.thinkBody = null;
+  ctx.thinkText = [];
   const results = new Map<string, string>();
   for (const m of messages)
     if (m["role"] === "tool" && typeof m["tool_call_id"] === "string")
@@ -1435,6 +1575,10 @@ function renderTranscript(
       ctx.chatBody.appendChild(wrap);
     } else if (m["role"] === "assistant") {
       const content = String(m["content"] ?? "");
+      const reasoning =
+        typeof m["reasoning"] === "string" ? (m["reasoning"] as string).trim() : "";
+      if (reasoning)
+        ctx.chatBody.appendChild(makeThinkBlock(reasoning, false).wrap);
       if (content.trim()) {
         const { wrap, body } = turnWrap("assistant");
         body.innerHTML = renderMarkdown(content);
@@ -1715,6 +1859,9 @@ function renderActive(): void {
   if (ctx.pendingRewind !== null) showEditBar();
   else hideEditBar();
   updateSendState();
+  promptZone.classList.toggle("busy", ctx.busy);
+  renderPendingStrip(ctx);
+  refreshThinkBtn();
   renderTabs();
   renderTree();
   renderLanding();
@@ -2474,11 +2621,17 @@ function openRewindConfirm(
 }
 
 /* ---------------- branch guard ---------------- */
-function askBranchConfirm(ctx: Ctx, text: string): void {
+function askBranchConfirm(
+  ctx: Ctx,
+  text: string,
+  kind: PendingKind | null = null,
+): void {
   ctx.pendingText = text;
+  ctx.pendingKind = kind;
   const def = ctx.gitInfo.default_branch || "main";
   const cancel = (): void => {
     ctx.pendingText = null;
+    ctx.pendingKind = null;
     hideModal();
     setActivity("cancelled - not on a safe branch");
   };
@@ -2491,9 +2644,13 @@ function askBranchConfirm(ctx: Ctx, text: string): void {
   el<HTMLButtonElement>("bDirect").onclick = () => {
     ctx.branchAck = ctx.gitInfo.branch;
     const t = ctx.pendingText;
+    const k = ctx.pendingKind;
     ctx.pendingText = null;
+    ctx.pendingKind = null;
     hideModal();
-    if (t !== null) doSubmit(ctx, t);
+    if (t === null) return;
+    if (k && ctx.busy) enqueueNow(ctx, k, t);
+    else doSubmit(ctx, t);
   };
   el<HTMLButtonElement>("bBranch").onclick = () => askBranchName(ctx);
   el<HTMLButtonElement>("bCancel").onclick = cancel;
@@ -2532,6 +2689,110 @@ function autogrow(): void {
     : 200;
   entry.style.height = `${Math.min(entry.scrollHeight, cap)}px`;
 }
+/* File the typed message against the running turn. The engine owns the
+   pending list; the PENDING event it answers with re-renders the strip. */
+function enqueueNow(ctx: Ctx, kind: PendingKind, text: string): void {
+  entry.value = "";
+  ctx.entryDraft = "";
+  autogrow();
+  updateSendState();
+  send(ctx, { op: "enqueue", text, kind });
+  if (ctx === activeCtx)
+    setActivity(
+      kind === "steer"
+        ? "steer filed - reaches the model before its next step"
+        : "queued - runs after this turn",
+    );
+  dlog(ctx.id, "ENQUEUE", kind, text.slice(0, 40));
+}
+function renderPendingStrip(ctx: Ctx): void {
+  if (ctx !== activeCtx) return;
+  pendingBar.replaceChildren();
+  if (!ctx.pendingItems.length) {
+    pendingBar.classList.add("hidden");
+    return;
+  }
+  pendingBar.classList.remove("hidden");
+  for (const item of ctx.pendingItems) {
+    const row = document.createElement("div");
+    row.className = "pending-item";
+    if (ctx.editingPendingId === item.id) {
+      row.classList.add("editing");
+      const area = document.createElement("textarea");
+      area.className = "p-edit";
+      area.rows = 2;
+      area.value = item.text;
+      const save = (): void => {
+        const text = area.value.trim();
+        ctx.editingPendingId = null;
+        if (!text || text === item.text) {
+          renderPendingStrip(ctx);
+          return;
+        }
+        send(ctx, { op: "pending_edit", id: item.id, text });
+      };
+      const cancel = (): void => {
+        ctx.editingPendingId = null;
+        renderPendingStrip(ctx);
+      };
+      area.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          save();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          cancel();
+        }
+      };
+      const actions = document.createElement("div");
+      actions.className = "p-actions";
+      const saveBtn = document.createElement("button");
+      saveBtn.className = "btn small primary";
+      saveBtn.textContent = "Save";
+      saveBtn.onclick = save;
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "btn small";
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.onclick = cancel;
+      actions.appendChild(saveBtn);
+      actions.appendChild(cancelBtn);
+      row.appendChild(area);
+      row.appendChild(actions);
+      pendingBar.appendChild(row);
+      area.focus();
+      area.setSelectionRange(area.value.length, area.value.length);
+      continue;
+    }
+    const badge = document.createElement("span");
+    badge.className = `p-badge ${item.kind}`;
+    badge.textContent = item.kind === "steer" ? "STEER" : "QUEUE";
+    const text = document.createElement("div");
+    text.className = "p-text";
+    text.textContent = item.text;
+    const editBtn = document.createElement("button");
+    editBtn.className = "p-btn";
+    editBtn.title = "Edit before it is sent";
+    editBtn.innerHTML = ICONS.edit;
+    editBtn.onclick = () => {
+      ctx.editingPendingId = item.id;
+      renderPendingStrip(ctx);
+    };
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "p-btn";
+    removeBtn.title = "Remove";
+    removeBtn.innerHTML = ICONS.close;
+    removeBtn.onclick = () => send(ctx, { op: "pending_remove", id: item.id });
+    row.appendChild(badge);
+    row.appendChild(text);
+    const btns = document.createElement("div");
+    btns.className = "p-actions inline";
+    btns.appendChild(editBtn);
+    btns.appendChild(removeBtn);
+    row.appendChild(btns);
+    pendingBar.appendChild(row);
+  }
+}
 function doSubmit(ctx: Ctx, text: string): void {
   entry.value = "";
   ctx.pendingRewind = null;
@@ -2548,9 +2809,23 @@ function doSubmit(ctx: Ctx, text: string): void {
 function submit(ctx: Ctx, text: string): void {
   const trimmed = text.trim();
   if (activeApproval) return;
-  if (!trimmed || ctx.busy) return;
+  if (!trimmed) return;
   if (!connected) {
     setActivity("not connected - waiting for reconnect…");
+    return;
+  }
+  // While a turn runs the message becomes steer or queue instead of a new
+  // submission - the engine refuses plain submits while busy anyway.
+  if (ctx.busy) {
+    if (
+      prefs.confirmProtected &&
+      ctx.gitInfo.is_protected &&
+      ctx.branchAck !== ctx.gitInfo.branch
+    ) {
+      askBranchConfirm(ctx, trimmed, midTurnKind());
+      return;
+    }
+    enqueueNow(ctx, midTurnKind(), trimmed);
     return;
   }
   if (ctx.pendingRewind !== null) {
@@ -2692,13 +2967,23 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       case "message":
         hideThinking(ctx);
         clearRetryCard(ctx);
-        if (p["role"] === "user") addUser(ctx, String(p["content"] ?? ""));
+        if (p["role"] === "user")
+          addUser(ctx, String(p["content"] ?? ""), p["via"] as string | undefined);
         else endStream(ctx, String(p["content"] ?? ""));
         if (ctx === activeCtx) setActivity("ready");
         break;
       case "message_delta":
         clearRetryCard(ctx);
         appendDelta(ctx, String(p["text"] ?? ""));
+        break;
+      case "thinking":
+        clearRetryCard(ctx);
+        thinkBlockAppend(ctx, String(p["text"] ?? ""));
+        break;
+      case "pending":
+        ctx.pendingItems = normPendingItems(p["items"]);
+        ctx.editingPendingId = null;
+        renderPendingStrip(ctx);
         break;
       case "tool_call": {
         clearRetryCard(ctx);
@@ -2791,6 +3076,9 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         // in memory.
         if (first) persistTabs(ctx.root);
         ctx.sessionTitle = "New Session";
+        // The pending strip rides along with the session payload, so a tab
+        // that reattaches mid-conversation still sees what it filed.
+        ctx.pendingItems = normPendingItems(p["pending"]);
         // The failure outlives the session that produced it: it is a message
         // from the engine, and switching sessions keeps it on screen.
         clearRetryCard(ctx);
@@ -2798,6 +3086,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
           ctx,
           (p["messages"] as Array<Record<string, unknown>>) ?? [],
         );
+        renderPendingStrip(ctx);
         primeContext(ctx);
         // Load this session's plan artifact so a reload shows the plan that was
         // actually made (inspectable, and never a stale plan from another tab).
@@ -2962,6 +3251,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       refreshModelButton();
       effortLabel.textContent = ctx.effortVal;
       refreshProviderMenu();
+      refreshThinkBtn();
       renderTabs();
     }
     // Roles live alongside models in the composer button, so keep the agent
@@ -3005,6 +3295,15 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       hideThinking(ctx);
       if (ctx === activeCtx) setActivity("that message was already sent");
     }
+  } else if (msg.reply === "pending_edit" || msg.reply === "pending_remove") {
+    /* A refused edit means the message was already sent or removed; the
+       PENDING event that follows shows the engine's actual list. */
+    if (!msg.ok && ctx === activeCtx)
+      setActivity(
+        msg.reply === "pending_edit"
+          ? "that pending message is gone - it was already sent"
+          : "that pending message is already gone",
+      );
   } else if (
     msg.reply === "set_active" ||
     msg.reply === "delete_provider" ||
@@ -3053,8 +3352,11 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       send(ctx, { op: "get_context" });
       if (ctx.pendingText !== null) {
         const t = ctx.pendingText;
+        const k = ctx.pendingKind;
         ctx.pendingText = null;
-        doSubmit(ctx, t);
+        ctx.pendingKind = null;
+        if (k && ctx.busy) enqueueNow(ctx, k, t);
+        else doSubmit(ctx, t);
       }
     } else {
       ctx.pendingText = null;
@@ -3136,7 +3438,13 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
 
 /* ---------------- menus (operate on active tab) ---------------- */
 function closeAllMenus(): void {
-  for (const m of [modeMenu, providerMenu, effortMenu, permsMenu])
+  for (const m of [
+    modeMenu,
+    providerMenu,
+    effortMenu,
+    permsMenu,
+    sendExtraMenu,
+  ])
     m.classList.add("hidden");
 }
 function renderMenu(
@@ -3347,6 +3655,7 @@ function selectModel(
     refreshModelButton();
     effortLabel.textContent = ctx.effortVal;
     refreshProviderMenu();
+    refreshThinkBtn();
     renderTabs();
   }
 }
@@ -4129,10 +4438,16 @@ function settingsThemes(): [string, () => void] {
   return [html, wire];
 }
 function settingsGeneral(): [string, () => void] {
+  const midTurnOptions: Array<{ value: string; label: string }> = [
+    { value: "queue", label: "Queue" },
+    { value: "steer", label: "Steer" },
+  ];
   const html =
     `<p class="sub">Behavior defaults that apply across workspaces.</p>` +
     `<div class="set-row"><div class="set-info"><div class="set-label">Confirm before editing the default branch</div><div class="set-desc">Ask before a turn that writes directly to the protected branch.</div></div><div class="set-ctl"><span id="swProtected"></span></div></div>` +
     `<div class="set-row"><div class="set-info"><div class="set-label">Default workflow for new sessions</div><div class="set-desc">Build runs directly. Plan proposes read-only. Plan → Build plans, then hands off to Build automatically.</div></div><div class="set-ctl">${seg(prefs.defaultMode, MODE_OPTIONS, "defMode")}</div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">When a turn is running, Enter sends</div><div class="set-desc">Steer joins the running turn before the model's next step. Queue runs after the turn ends, and is discarded if the provider fails. The caret next to Send picks the other one per message.</div></div><div class="set-ctl">${seg(prefs.defaultMidTurn, midTurnOptions, "defMidTurn")}</div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Show model thinking</div><div class="set-desc">Stream reasoning into a collapsible block above the answer, for models that expose it.</div></div><div class="set-ctl"><span id="swThinking"></span></div></div>` +
     `<h4 class="card-title" style="margin-top:16px">Keyboard shortcuts</h4>` +
     `<div class="set-row"><div class="set-info"><div class="set-label">Focus composer</div></div><div class="set-ctl"><span class="set-desc">Ctrl / ⌘ + K</span></div></div>` +
     `<div class="set-row"><div class="set-info"><div class="set-label">Send / new line</div></div><div class="set-ctl"><span class="set-desc">Enter / Shift+Enter</span></div></div>` +
@@ -4145,6 +4460,16 @@ function settingsGeneral(): [string, () => void] {
       savePrefs();
       const ctx = activeCtx;
       if (ctx) applyMode(ctx, prefs.defaultMode);
+    });
+    wireSeg(body, "defMidTurn", (v) => {
+      prefs.defaultMidTurn = v === "steer" ? "steer" : "queue";
+      savePrefs();
+      updateSendExtra();
+    });
+    wireSwitch(body, "swThinking", prefs.showThinking, (v) => {
+      prefs.showThinking = v;
+      savePrefs();
+      refreshThinkBtn();
     });
     wireSwitch(body, "swProtected", prefs.confirmProtected, (v) => {
       prefs.confirmProtected = v;
@@ -4358,6 +4683,69 @@ sendstop.onclick = () => {
   if (activeCtx.busy) send(activeCtx, { op: "stop" });
   else submit(activeCtx, entry.value);
 };
+sendExtra.onclick = () => {
+  if (!activeCtx || !activeCtx.busy) return;
+  const text = entry.value.trim();
+  if (!text) return;
+  enqueueNow(activeCtx, midTurnKind(), text);
+};
+sendExtraCaret.onclick = (e) => {
+  e.stopPropagation();
+  const was = sendExtraMenu.classList.contains("hidden");
+  closeAllMenus();
+  if (was) {
+    renderSendExtraMenu();
+    sendExtraMenu.classList.remove("hidden");
+  }
+};
+thinkBtn.onclick = () => {
+  prefs.showThinking = !prefs.showThinking;
+  savePrefs();
+  refreshThinkBtn();
+};
+/* The thinking control only exists for models that actually stream
+   reasoning; the pref still hides anything already on screen. */
+function refreshThinkBtn(): void {
+  const model = activeCtx?.providerId
+    ? providerById.get(activeCtx.providerId)
+    : null;
+  thinkBtn.classList.toggle("hidden", !model?.supports_reasoning);
+  thinkBtn.classList.toggle("on", prefs.showThinking);
+  thinkBtn.setAttribute("aria-pressed", String(prefs.showThinking));
+  document.body.classList.toggle("hide-thinking", !prefs.showThinking);
+}
+function renderSendExtraMenu(): void {
+  sendExtraMenu.replaceChildren();
+  const options: Array<{ value: PendingKind; label: string; sub: string }> = [
+    {
+      value: "steer",
+      label: "Send as steer",
+      sub: "joins the running turn at its next step",
+    },
+    {
+      value: "queue",
+      label: "Send as queue",
+      sub: "runs after the turn ends",
+    },
+  ];
+  for (const opt of options) {
+    const btn = document.createElement("button");
+    const isDefault = opt.value === midTurnKind();
+    btn.innerHTML = `<span class="m-check"></span><span class="m-label">${escapeHtml(opt.label)}${isDefault ? ' <small class="m-default">default</small>' : ""}<small>${escapeHtml(opt.sub)}</small></span>`;
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      closeAllMenus();
+      if (!activeCtx || !activeCtx.busy) return;
+      const text = entry.value.trim();
+      if (!text) {
+        setActivity("type a message first");
+        return;
+      }
+      enqueueNow(activeCtx, opt.value, text);
+    };
+    sendExtraMenu.appendChild(btn);
+  }
+}
 entry.addEventListener("input", () => {
   autogrow();
   if (activeCtx) activeCtx.entryDraft = entry.value;

@@ -322,6 +322,7 @@
               >
               <button id="editCancel" class="btn small">Cancel edit</button>
             </div>
+            <div id="pendingBar" class="pending-bar hidden"></div>
             <div class="composer-box">
               <textarea
                 id="entry"
@@ -355,6 +356,62 @@
                 ></span>
                 <span class="spin" aria-hidden="true"></span>
               </button>
+              <button
+                id="sendExtra"
+                class="send-btn extra busy-only"
+                title="Queue for after this turn"
+                disabled
+              >
+                <span class="icon-plus"
+                  ><svg
+                    viewBox="0 0 24 24"
+                    width="16"
+                    height="16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" /></svg
+                ></span>
+                <span class="icon-arrow"
+                  ><svg
+                    viewBox="0 0 24 24"
+                    width="16"
+                    height="16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                    <polyline points="12 5 19 12 12 19" /></svg
+                ></span>
+              </button>
+              <div class="menu-anchor send-extra-anchor busy-only">
+                <button
+                  id="sendExtraCaret"
+                  class="send-btn caret busy-only"
+                  title="Choose steer or queue"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="12"
+                    height="12"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+                <div id="sendExtraMenu" class="menu hidden up"></div>
+              </div>
             </div>
             <div id="controls" class="composer-toolbar">
               <div class="menu-anchor">
@@ -483,6 +540,29 @@
                 </button>
                 <div id="permsMenu" class="menu hidden"></div>
               </div>
+              <button
+                id="thinkBtn"
+                class="icon-btn small hidden"
+                title="Show thinking"
+                aria-pressed="false"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="15"
+                  height="15"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M9 18h6" />
+                  <path d="M10 22h4" />
+                  <path
+                    d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.4 1 2.3h6c0-.9.4-1.8 1-2.3A7 7 0 0 0 12 2z"
+                  />
+                </svg>
+              </button>
               <span class="status-spacer"></span>
               <button
                 id="usageChip"

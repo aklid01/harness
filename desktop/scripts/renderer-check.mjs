@@ -1,6 +1,8 @@
-/* End-to-end checks for the failure card, the session library and the
-   workspace list, against a provider whose endpoint is dead so the retry
-   backoff and the error card come from the real engine.
+/* End-to-end checks for the failure card, the session library, the
+   workspace list, and the mid-turn steer/queue composer, against two
+   providers: a dead endpoint so the retry backoff and the error card come
+   from the real engine, and a live scripted SSE endpoint so a real turn can
+   run (steer drain, queue chain, reasoning stream).
 
    Drives the real Tauri renderer over the DevTools Protocol (WebView2 remote
    debugging). Builds the web assets first, and the debug exe when missing.
@@ -9,6 +11,7 @@
 */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
@@ -21,7 +24,152 @@ const CDP_PORT = Number(process.env.CDP_PORT ?? 9333);
 const APP_PORT = Number(process.env.APP_PORT ?? 8901);
 const REPORT =
   process.env.REPORT ?? path.join(ROOT, "tests", "renderer-check.txt");
-const DEAD = "http://127.0.0.1:9/v1";
+
+/* One scripted endpoint plays both providers, so a single .env key is borrowed
+   by both groups (the engine only borrows the plaintext key for an exact
+   base_url match). Requests for the dead model get their socket destroyed,
+   which is exactly the connection error the retry card and error card need;
+   requests for the live model run the scenario. Request 1 reasons then calls
+   read_file, request 2 streams slowly (the window where pending strips are
+   edited), request 3+ answer fast (the queued turn and the title call). */
+const liveState = { requests: [], server: null };
+function startLiveFixture() {
+  const server = http.createServer((req, res) => {
+    if (req.method !== "POST") {
+      res.writeHead(404).end();
+      return;
+    }
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      let payload = {};
+      try {
+        payload = JSON.parse(body || "{}");
+      } catch {
+        payload = {};
+      }
+      if ((payload.model || "") === "dead-model") {
+        req.socket.destroy();
+        return;
+      }
+      liveState.requests.push(payload);
+      const n = liveState.requests.length;
+      if (!payload.stream) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: "chatcmpl-live",
+            object: "chat.completion",
+            created: 1,
+            model: "live-model",
+            choices: [
+              {
+                index: 0,
+                message: { role: "assistant", content: "ok" },
+                finish_reason: "stop",
+              },
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 5 },
+          }),
+        );
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      const usage = { prompt_tokens: 10, completion_tokens: 20 };
+      if (n === 1) {
+        send({
+          choices: [
+            {
+              index: 0,
+              delta: {
+                role: "assistant",
+                reasoning_content: "Let me look at the workspace before acting.",
+              },
+            },
+          ],
+        });
+        setTimeout(() => {
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_1",
+                      type: "function",
+                      function: { name: "read_file", arguments: "" },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      function: {
+                        arguments: JSON.stringify({
+                          path: path.join(WS_ROOT, "README.md"),
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }, 1500);
+      } else if (n === 2) {
+        const text =
+          "The readme says this workspace is a throwaway fixture for the renderer check, " +
+          "and I have now read it end to end, so here is the summary you asked for, word by word. ";
+        let i = 0;
+        const timer = setInterval(() => {
+          if (i >= text.length) {
+            clearInterval(timer);
+            send({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+            send({ choices: [], usage });
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
+          send({
+            choices: [{ index: 0, delta: { content: text.slice(i, i + 8) } }],
+          });
+          i += 8;
+        }, 100);
+      } else {
+        send({
+          choices: [
+            { index: 0, delta: { role: "assistant", content: "queued turn complete" } },
+          ],
+        });
+        send({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+        send({ choices: [], usage });
+        res.write("data: [DONE]\n\n");
+        res.end();
+      }
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      liveState.server = server;
+      resolve(server.address().port);
+    });
+  });
+}
 
 const lines = [];
 /* The report is read wherever it lands, so keep it ASCII: the card text uses
@@ -37,13 +185,16 @@ const say = (text) => {
 };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const LIVE_PORT = await startLiveFixture();
+const ENDPOINT = `http://127.0.0.1:${LIVE_PORT}/v1`;
+
 function prepareFixtures() {
   fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(WS_ROOT, { recursive: true });
   fs.mkdirSync(APP_DATA, { recursive: true });
   fs.writeFileSync(
     path.join(WS_ROOT, ".env"),
-    `BASE_URL=${DEAD}\nAPI_KEY=sk-dead-endpoint-check\nMODEL=dead-model\n`,
+    `BASE_URL=${ENDPOINT}\nAPI_KEY=sk-renderer-check\nMODEL=dead-model\n`,
     "utf-8",
   );
   fs.writeFileSync(
@@ -57,12 +208,12 @@ function prepareFixtures() {
       {
         version: 2,
         active_id: "mdl-dead",
-        active_provider_id: DEAD,
+        active_provider_id: "grp-dead",
         providers: [
           {
-            id: DEAD,
+            id: "grp-dead",
             name: "Dead Local",
-            base_url: DEAD,
+            base_url: ENDPOINT,
             headers: {},
             disabled: false,
             models: [
@@ -79,6 +230,29 @@ function prepareFixtures() {
                 extra_params: {},
                 disabled: false,
                 id: "mdl-dead",
+              },
+            ],
+          },
+          {
+            id: "grp-live",
+            name: "Live Local",
+            base_url: ENDPOINT,
+            headers: {},
+            disabled: false,
+            models: [
+              {
+                name: "Live SSE",
+                model: "live-model",
+                reasoning_effort: null,
+                temperature: null,
+                context_window: null,
+                max_output_tokens: null,
+                supports_tools: true,
+                supports_reasoning: true,
+                supports_text_tools: false,
+                extra_params: {},
+                disabled: false,
+                id: "mdl-live",
               },
             ],
           },
@@ -525,6 +699,274 @@ try {
     `other=${awayFrom.errors.length} back=${afterSwitch.errors.length}`,
   );
 
+  /* ---- steer / queue / thinking against the live scripted endpoint ---- */
+  const waitFor = async (expr, timeout = 30000, poll = 200) => {
+    const limit = Date.now() + timeout;
+    let last;
+    while (Date.now() < limit) {
+      last = await evaluate(ws, expr);
+      if (last) return last;
+      await sleep(poll);
+    }
+    return last;
+  };
+  const typeEntry = (text) =>
+    evaluate(
+      ws,
+      `(() => {
+    const entry = document.getElementById("entry");
+    entry.value = ${JSON.stringify(text)};
+    entry.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`,
+    );
+  const stripState = () =>
+    evaluate(
+      ws,
+      `(() => ({
+    visible: !document.getElementById("pendingBar").classList.contains("hidden"),
+    items: [...document.querySelectorAll("#pendingBar .pending-item")].map((row) => ({
+      badge: row.querySelector(".p-badge")?.textContent ?? "",
+      text: row.querySelector(".p-text")?.textContent ?? "",
+    })),
+  }))()`,
+    );
+
+  await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
+  await sleep(500);
+  // The live model exposes reasoning, so the thinking control appears for it.
+  await evaluate(ws, `document.getElementById("providerBtn")?.click()`);
+  await sleep(200);
+  const pickedLive = await evaluate(
+    ws,
+    `(() => {
+    const btn = [...document.querySelectorAll("#providerMenu button")].find(
+      (b) => b.querySelector(".m-label")?.textContent.trim() === "Live SSE",
+    );
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`,
+  );
+  await sleep(400);
+  const thinkVisible = await evaluate(
+    ws,
+    `(() => ({
+    hidden: document.getElementById("thinkBtn").classList.contains("hidden"),
+    on: document.getElementById("thinkBtn").classList.contains("on"),
+  }))()`,
+  );
+  verdict(
+    "thinking-toggle-offers-for-reasoning-models",
+    pickedLive && !thinkVisible.hidden && thinkVisible.on,
+    JSON.stringify({ pickedLive, ...thinkVisible }),
+  );
+
+  // The turn reasons, reads a file, then streams slowly: the window in which
+  // steer/queue are filed and edited. The wait returns only once the reasoning
+  // block exists - an object result is always truthy, so gating matters.
+  await submit(ws, "summarize the readme");
+  const busyUI = await waitFor(
+    `(() => {
+    const block = document.querySelector("#chat .think-block");
+    if (!block) return false;
+    return {
+      busy: document.getElementById("promptZone").classList.contains("busy"),
+      sendExtraVisible:
+        getComputedStyle(document.getElementById("sendExtra")).display !== "none",
+      blockVisible: getComputedStyle(block).display !== "none",
+    };
+  })()`,
+  );
+  verdict(
+    "busy-turn-affords-steer-and-queue",
+    busyUI.busy && busyUI.sendExtraVisible,
+    JSON.stringify(busyUI),
+  );
+  verdict(
+    "thinking-block-renders-while-streaming",
+    Boolean(busyUI.blockVisible),
+    JSON.stringify(busyUI),
+  );
+
+  // Steer via the caret menu (explicit per-message choice).
+  await typeEntry("steer mid-turn");
+  await evaluate(ws, `document.getElementById("sendExtraCaret")?.click()`);
+  await sleep(200);
+  const menuSteer = await evaluate(
+    ws,
+    `(() => {
+    const btn = [...document.querySelectorAll("#sendExtraMenu button .m-label")].find(
+      (l) => l.textContent.includes("Send as steer"),
+    );
+    if (!btn) return false;
+    btn.closest("button").click();
+    return true;
+  })()`,
+  );
+  await sleep(300);
+  const strip1 = await stripState();
+  verdict(
+    "steer-files-with-a-badge",
+    menuSteer && strip1.visible && strip1.items.some((i) => i.badge === "STEER"),
+    JSON.stringify({ menuSteer, ...strip1 }),
+  );
+
+  // Queue via the default action (the extra button itself).
+  await typeEntry("queued work");
+  await evaluate(ws, `document.getElementById("sendExtra")?.click()`);
+  await sleep(300);
+  const strip2 = await stripState();
+  verdict(
+    "queue-files-with-a-badge",
+    strip2.items.filter((i) => i.badge === "QUEUE").length === 1 &&
+      strip2.items.some((i) => i.text === "queued work"),
+    JSON.stringify(strip2),
+  );
+
+  // Edit the queued message before it is sent.
+  await evaluate(
+    ws,
+    `(() => {
+    const row = [...document.querySelectorAll("#pendingBar .pending-item")].find(
+      (r) => r.querySelector(".p-text")?.textContent === "queued work",
+    );
+    row?.querySelector(".p-btn")?.click();
+    return Boolean(row);
+  })()`,
+  );
+  await sleep(200);
+  await evaluate(
+    ws,
+    `(() => {
+    const area = document.querySelector("#pendingBar .pending-item.editing .p-edit");
+    if (!area) return false;
+    area.value = "edited queue work";
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`,
+  );
+  await sleep(100);
+  await evaluate(
+    ws,
+    `(() => {
+    const btn = [...document.querySelectorAll("#pendingBar .pending-item.editing .p-actions button")].find(
+      (b) => b.textContent === "Save",
+    );
+    btn?.click();
+    return Boolean(btn);
+  })()`,
+  );
+  const strip3 = await waitFor(
+    `(() => {
+    const items = [...document.querySelectorAll("#pendingBar .pending-item")].map((row) => ({
+      badge: row.querySelector(".p-badge")?.textContent ?? "",
+      text: row.querySelector(".p-text")?.textContent ?? "",
+    }));
+    return items.some((i) => i.text === "edited queue work") ? items : false;
+  })()`,
+  );
+  const editLanded = Array.isArray(strip3);
+  verdict("pending-edit-updates-the-strip", editLanded, JSON.stringify(strip3));
+
+  // File a third message and remove it again.
+  await typeEntry("remove me");
+  await evaluate(ws, `document.getElementById("sendExtra")?.click()`);
+  const strip4 = await waitFor(
+    `(() => {
+    const items = [...document.querySelectorAll("#pendingBar .pending-item .p-text")].map((t) => t.textContent);
+    return items.includes("remove me") ? items : false;
+  })()`,
+  );
+  await evaluate(
+    ws,
+    `(() => {
+    const row = [...document.querySelectorAll("#pendingBar .pending-item")].find(
+      (r) => r.querySelector(".p-text")?.textContent === "remove me",
+    );
+    const btns = row ? [...row.querySelectorAll(".p-btn")] : [];
+    btns[btns.length - 1]?.click();
+    return Boolean(row);
+  })()`,
+  );
+  const strip5 = await waitFor(
+    `(() => {
+    const items = [...document.querySelectorAll("#pendingBar .pending-item .p-text")].map((t) => t.textContent);
+    return !items.includes("remove me") ? items : false;
+  })()`,
+  );
+  // The steer may already have drained by now (it lands at the tool boundary),
+  // so only the removal itself is asserted: the item is gone, the rest stays.
+  verdict(
+    "pending-remove-drops-the-message",
+    Array.isArray(strip4) &&
+      Array.isArray(strip5) &&
+      strip5.length === strip4.length - 1 &&
+      strip5.includes("edited queue work"),
+    JSON.stringify({ afterFile: strip4, afterRemove: strip5 }),
+  );
+
+  // The steer drains at the tool boundary: a user bubble with a steered chip
+  // appears mid-turn and the strip item is gone.
+  const steerDrained = await waitFor(
+    `(() => {
+    const chip = document.querySelector("#chat .via-chip.steer");
+    return chip ? chip.closest(".msg")?.textContent.includes("steer mid-turn") : false;
+  })()`,
+    20000,
+  );
+  const stripAfterDrain = await stripState();
+  verdict(
+    "steer-drains-into-the-running-turn",
+    steerDrained === true &&
+      !stripAfterDrain.items.some((i) => i.badge === "STEER"),
+    JSON.stringify({ steerDrained, strip: stripAfterDrain }),
+  );
+
+  // The thinking toggle hides and restores reasoning blocks in place.
+  await evaluate(ws, `document.getElementById("thinkBtn")?.click()`);
+  await sleep(200);
+  const hiddenNow = await evaluate(
+    ws,
+    `document.body.classList.contains("hide-thinking") && (() => {
+    const block = document.querySelector("#chat .think-block");
+    return !block || getComputedStyle(block).display === "none";
+  })()`,
+  );
+  await evaluate(ws, `document.getElementById("thinkBtn")?.click()`);
+  await sleep(200);
+  const shownAgain = await evaluate(
+    ws,
+    `(() => {
+    const block = document.querySelector("#chat .think-block");
+    return Boolean(block) && getComputedStyle(block).display !== "none";
+  })()`,
+  );
+  verdict(
+    "thinking-toggle-hides-and-restores",
+    hiddenNow && shownAgain,
+    JSON.stringify({ hiddenNow, shownAgain }),
+  );
+
+  // The queued message auto-runs when the turn ends: a user bubble with a
+  // queued chip, then the chain goes idle again.
+  const queuedRan = await waitFor(
+    `(() => {
+    const chips = [...document.querySelectorAll("#chat .via-chip.queue")];
+    return chips.some((c) => c.closest(".msg")?.textContent.includes("edited queue work"));
+  })()`,
+    30000,
+  );
+  const chainIdle = await waitFor(
+    `!document.getElementById("modeBtn").disabled`,
+    30000,
+  );
+  verdict(
+    "queue-auto-runs-after-the-turn",
+    queuedRan === true && chainIdle === true,
+    JSON.stringify({ queuedRan, chainIdle }),
+  );
+
   /* A renamed session takes the new name on its tab at once - the one you
      renamed from, and any other tab that has it open. */
   const labelsBefore = await tabLabels();
@@ -685,6 +1127,11 @@ try {
   say(`FAILED: ${err.message}`);
   results.push({ name: "harness", ok: false });
 } finally {
+  try {
+    liveState.server?.close();
+  } catch {
+    /* already gone */
+  }
   try {
     spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
   } catch {

@@ -1520,6 +1520,223 @@ button {
   display: grid;
 }
 
+/* steer / queue affordances - only meaningful while a turn runs */
+.busy-only {
+  display: none !important;
+}
+#promptZone.busy .busy-only {
+  display: grid !important;
+}
+#sendExtra.steer .icon-plus,
+#sendExtra:not(.steer) .icon-arrow {
+  display: none;
+}
+.send-btn.extra:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--border-strong);
+  color: var(--text-2);
+}
+.send-btn.extra:not(:disabled):hover {
+  background: var(--raised);
+  color: var(--text);
+}
+.send-btn.caret {
+  width: 22px;
+  height: 34px;
+  border-radius: var(--r-sm);
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+}
+.send-btn.caret:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+.send-extra-anchor .menu {
+  min-width: 230px;
+  left: auto;
+  right: 0;
+}
+.menu .m-label small {
+  display: block;
+  font-size: var(--t-micro);
+  color: var(--text-3);
+  white-space: normal;
+  line-height: 1.4;
+}
+.menu .m-label .m-default {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* pending strip: messages filed against the running turn */
+.pending-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.pending-bar.hidden {
+  display: none;
+}
+.pending-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  animation: retry-in 0.18s ease;
+}
+.p-badge {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--r-xs);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin-top: 2px;
+}
+.p-badge.steer {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.p-badge.queue {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+.pending-item .p-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-caption);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.p-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.p-btn:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+.p-btn svg {
+  width: 13px;
+  height: 13px;
+}
+.pending-item .p-actions.inline {
+  display: flex;
+  gap: 2px;
+}
+.pending-item.editing {
+  flex-direction: column;
+  align-items: stretch;
+}
+.pending-item .p-edit {
+  width: 100%;
+  resize: vertical;
+  min-height: 44px;
+  background: var(--raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xs);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--t-caption);
+  line-height: 1.5;
+  padding: 6px 8px;
+  outline: none;
+}
+.pending-item .p-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.via-chip {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 0 7px;
+  border-radius: var(--r-xs);
+  font-size: var(--t-micro);
+  letter-spacing: 0.04em;
+}
+.via-chip.steer {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.via-chip.queue {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+}
+
+/* model thinking: a dim, collapsible record of the reasoning stream */
+.think-block {
+  margin: 8px 0;
+  border-left: 2px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--panel-2);
+}
+.think-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: var(--t-caption);
+  user-select: none;
+}
+.think-head:hover {
+  color: var(--text-2);
+}
+.think-head .t-label {
+  flex: 1;
+}
+.think-head .t-caret {
+  display: grid;
+  place-items: center;
+  transition: transform 0.15s ease;
+}
+.think-head .t-caret svg {
+  width: 12px;
+  height: 12px;
+}
+.think-block.open .think-head .t-caret {
+  transform: rotate(90deg);
+}
+.think-body {
+  display: none;
+  padding: 2px 12px 9px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-3);
+  font-size: var(--t-caption);
+  line-height: 1.55;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.think-block.open .think-body {
+  display: block;
+}
+body.hide-thinking .think-block {
+  display: none;
+}
+.e-discarded {
+  padding: 2px 0;
+}
+
 .composer-toolbar {
   display: flex;
   align-items: center;
