@@ -24,4 +24,5 @@ tmp-session-test/
 # Node
 node_modules/
 desktop/dist/
+electron/
 skills-lock.json
