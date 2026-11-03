@@ -24,7 +24,7 @@ from . import plan as plan_mod
 from .context import reminder
 from .llm import call_llm, system_prompt
 from .todos import active_form
-from .tools import execute
+from .tools import available_tool_names, execute
 
 def _has_image_parts(message):
     """Does this request message carry an image part?"""
@@ -1151,7 +1151,7 @@ class Runner:
     def _corrective_note(self, call):
         """What the model is told when its text call could not be used."""
         available = ", ".join(
-            __import__("harness.tools", fromlist=["x"]).available_tool_names()
+            available_tool_names()
         )
         return (
             "<system-reminder>\n"

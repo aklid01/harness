@@ -258,7 +258,3 @@ def build_messages(scope, focus="", contexts=None, extra="", redactions=0):
         {"role": "user", "content": build_user(scope, contexts, extra, redactions)},
     ]
 
-
-def allowed_categories(focus=""):
-    """Every category a finding may carry."""
-    return list(findings_mod.CATEGORIES)
