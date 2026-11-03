@@ -6,8 +6,10 @@ to name a file that was actually reviewed and a line that actually appears in
 that file's diff. Anything else is discarded before it can reach a user, an
 agent or a report.
 
-Nothing in this module raises on bad input. A reviewer that returns prose
-instead of JSON is a failed review, not a crashed engine.
+Nothing here raises on bad input except one deliberate case: parse() raises
+ReviewFormatError when the reply carries no usable structure at all, so the
+caller can retry once and then report the model as failed. A reviewer that
+returns prose instead of JSON is a failed review, not a crashed engine.
 """
 
 import dataclasses

@@ -10,7 +10,7 @@ Identity is two-layered so one provider can serve many model configurations:
 
 Renaming either side therefore never breaks the link, and adding a second
 model to a provider cannot overwrite the first. The flat helpers
-(list_providers / active_config / active_model_params / ...) project that tree
+(list_models / active_config / active_model_params / ...) project that tree
 into the one-model-per-row shape the engine and the legacy GUI expect.
 
 Secrets never land in providers.json - they live in the OS keyring, one entry
@@ -494,19 +494,21 @@ def list_groups():
 
 
 def get_group(group_id):
-    return _find_group(_cached(), group_id)
+    """One provider, copied: the cache is shared, callers must not mutate it."""
+    return copy.deepcopy(_find_group(_cached(), group_id))
 
 
 def get_model(model_id):
-    return _resolve(_cached(), model_id)[1]
+    """One model row, copied: the cache is shared, callers must not mutate it."""
+    return copy.deepcopy(_resolve(_cached(), model_id)[1])
 
 
 def group_of(target_id):
-    return _resolve(_cached(), target_id)[0]
+    return copy.deepcopy(_resolve(_cached(), target_id)[0])
 
 
 def active_pair():
-    return _active(_cached())
+    return tuple(copy.deepcopy(part) for part in _active(_cached()))
 
 
 # ------------------------------------------------------------------- writes
@@ -841,10 +843,6 @@ def list_models(group_id=None):
     return out
 
 
-def list_providers():
-    return list_models()
-
-
 def get_provider(target_id):
     group, model = _resolve(_cached(), target_id)
     return _flat(group, model)
@@ -910,10 +908,6 @@ def active_context_window():
 
     window = active_model_capabilities()["context_window"]
     return int(window) if window else config.CONTEXT_WINDOW
-
-
-def active_model():
-    return active_model_capabilities()["model"]
 
 
 def _credential_for(group):
@@ -1144,7 +1138,7 @@ def _tool_probe(client, model):
     except Exception as failure:  # noqa: BLE001 - reported, never fatal here
         from . import errors as errors_mod
 
-        return False, errors_mod.explain(failure, None, model=model)
+        return False, errors_mod.explain(failure, model=model)
     calls = getattr(message, "tool_calls", None) or []
     names = [getattr(getattr(call, "function", None), "name", "") for call in calls]
     if "harness_selftest" in names:
@@ -1195,37 +1189,6 @@ def test_provider(target_id, timeout=20):
                 detail += " (native tool calling works)"
         return True, detail
     except Exception as failure:  # noqa: BLE001 - the GUI shows this string
-        detail = errors_mod.explain(failure, api_key, model=model)
+        detail = errors_mod.explain(failure, model=model)
         return False, detail
 
-
-def suggest_title(first_text, timeout=15):
-    """Name a session in a few words. Returns None on any failure."""
-    from openai import OpenAI
-
-    base_url, api_key, model, _ = active_config()
-    if not api_key or not (first_text or "").strip():
-        return None
-    try:
-        client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
-        reply = (
-            client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            "Title this coding task in 4 words max. Plain words only, "
-                            f"no quotes: {first_text[:300]}"
-                        ),
-                    }
-                ],
-            )
-            .choices[0]
-            .message.content
-            or ""
-        )
-        title = " ".join(reply.strip().strip("\"'").split())
-        return title[:40] or None
-    except Exception:  # noqa: BLE001 - titles are best effort
-        return None

@@ -1,7 +1,7 @@
 """Engine event bus and frontend interaction point.
 
 The agent engine emits events instead of drawing to a screen. Any frontend
-(the Electron sidecar, tests, a future API client) subscribes to render them
+(the desktop sidecar, tests, a future API client) subscribes to render them
 and registers a responder to answer blocking interaction requests.
 
 Two modes coexist:
@@ -87,6 +87,15 @@ def interact(kind, payload=None):
     if _responder is None:
         return None
     return _responder(kind, payload or {})
+
+
+def has_interaction_channel():
+    """True when interact() would reach a frontend right now.
+
+    True inside a scoped session (see attached) or while a global responder
+    is registered; false in headless runs with neither.
+    """
+    return _ACTIVE.get() is not None or _responder is not None
 
 
 @contextlib.contextmanager

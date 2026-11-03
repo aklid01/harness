@@ -1,6 +1,6 @@
-"""Headless sidecar: Python engine plus WebSocket transport for Electron.
+"""Headless sidecar: Python engine plus WebSocket transport for the desktop shell.
 
-Electron spawns `uv run python -m harness.server` and talks to it over
+The desktop shell spawns `uv run python -m harness.server` and talks to it over
 localhost. The engine itself is unchanged - this file puts the event bus
 (harness/events.py) on a socket, one session per client connection.
 """
@@ -968,14 +968,16 @@ class Session:
                 if not self.session_id:
                     return
                 with self.bound():
+                    from . import llm as llm_mod
+
                     messages = session_mod.load(self.session_id)
-                    if session_mod._titles().get(self.session_id):
+                    if session_mod.get_title(self.session_id):
                         return
                     first = session_mod.title(messages)
                     if first in ("(empty)", "New Session", ""):
                         return
-                    name = providers_mod.suggest_title(first)
-                    if name and not session_mod._titles().get(self.session_id):
+                    name = llm_mod.suggest_title(first)
+                    if name and not session_mod.get_title(self.session_id):
                         session_mod.set_title(self.session_id, name)
                         self.on_event("sessions_updated", {})
             except Exception:  # noqa: BLE001 - titles are best effort
@@ -990,7 +992,7 @@ class Harness:
     """The single backend service: owns all Sessions and the transport.
 
     One WebSocket connection drives every tab. Ops carry the session key so they
-    reach the right Session; events/requests/replies carry it back so Electron
+    reach the right Session; events/requests/replies carry it back so the shell
     can route them to the right tab.
     """
 
@@ -1018,7 +1020,7 @@ class Harness:
         req_id = obj.get("req_id")
         key = obj.get("session")
 
-        def R(result):
+        def _reply(result):
             result = dict(result)
             result["req_id"] = req_id
             if key is not None:
@@ -1035,7 +1037,7 @@ class Harness:
                 if s
                 else False
             )
-            return R({"reply": op, "ok": bool(ok)})
+            return _reply({"reply": op, "ok": bool(ok)})
 
         if op in (
             "list_providers",
@@ -1044,24 +1046,24 @@ class Harness:
             "test_provider",
             "migrate_keys",
         ):
-            return R(self._provider_op(op, obj))
+            return _reply(self._provider_op(op, obj))
 
         if op == "ws_sessions":
             workspace_root = obj.get("root") or ""
             if not workspace_root:
-                return R({"reply": op, "ok": False, "error": "no root"})
+                return _reply({"reply": op, "ok": False, "error": "no root"})
             with paths_mod.rooted(workspace_root):
                 data = {
                     "root": str(workspace_root),
                     "sessions": session_mod.all_sessions(),
                 }
-            return R({"reply": op, "ok": True, "data": data})
+            return _reply({"reply": op, "ok": True, "data": data})
 
         if op in ("get_agents", "set_agents"):
-            return R(self._agents_op(op, obj))
+            return _reply(self._agents_op(op, obj))
 
         if not key:
-            return R({"reply": op, "ok": False, "error": "missing session"})
+            return _reply({"reply": op, "ok": False, "error": "missing session"})
         s = self.session(key)
         root = obj.get("root")
         if root:
@@ -1069,11 +1071,11 @@ class Harness:
 
         if op == "open":
             s.open_chat(obj.get("id", ""), obj.get("mode", s.mode))
-            return R({"reply": "open", "ok": True})
+            return _reply({"reply": "open", "ok": True})
         if op in ("attach_begin", "attach_part", "attach_finish", "attach_discard"):
-            return R(self._attachment_op(op, obj, key))
+            return _reply(self._attachment_op(op, obj, key))
         if op == "submit":
-            return R(
+            return _reply(
                 {
                     "reply": "submit",
                     "ok": s.submit(
@@ -1085,7 +1087,7 @@ class Harness:
                 }
             )
         if op == "enqueue":
-            return R(
+            return _reply(
                 {
                     "reply": "enqueue",
                     "ok": s.enqueue(
@@ -1097,18 +1099,18 @@ class Harness:
                 }
             )
         if op == "pending_edit":
-            return R(
+            return _reply(
                 {
                     "reply": "pending_edit",
                     "ok": s.edit_pending(obj.get("id", ""), obj.get("text", "")),
                 }
             )
         if op == "pending_remove":
-            return R(
+            return _reply(
                 {"reply": "pending_remove", "ok": s.remove_pending(obj.get("id", ""))}
             )
         if op == "pending_remove_attachment":
-            return R(
+            return _reply(
                 {
                     "reply": "pending_remove_attachment",
                     "ok": s.remove_pending_attachment(
@@ -1118,29 +1120,29 @@ class Harness:
             )
         if op == "stop":
             s.stop()
-            return R({"reply": "stop", "ok": True})
+            return _reply({"reply": "stop", "ok": True})
         if op == "list_sessions":
-            return R({"reply": op, "ok": True, "data": s.list_sessions()})
+            return _reply({"reply": op, "ok": True, "data": s.list_sessions()})
         if op == "get_transcript":
             try:
                 with s.workspace():
                     data = session_mod.load(obj.get("id", ""))
-                return R({"reply": op, "ok": True, "data": data})
+                return _reply({"reply": op, "ok": True, "data": data})
             except OSError as failure:
-                return R({"reply": op, "ok": False, "error": str(failure)})
+                return _reply({"reply": op, "ok": False, "error": str(failure)})
         if op == "get_plan":
             from . import plan as plan_mod
 
             with s.workspace():
                 data = plan_mod.load(obj.get("id") or s.session_id or "")
-            return R({"reply": op, "ok": True, "data": data})
+            return _reply({"reply": op, "ok": True, "data": data})
         if op == "rename_session":
             with s.workspace():
                 session_mod.set_title(
                     obj.get("id", ""), (obj.get("title", "") or "")[:60]
                 )
             s.on_event("sessions_updated", {})
-            return R({"reply": op, "ok": True})
+            return _reply({"reply": op, "ok": True})
         if op == "delete_session":
             sid = obj.get("id", "")
             with s.workspace():
@@ -1150,9 +1152,9 @@ class Harness:
             # nothing else may reach them.
             attachments_mod.cleanup_session(sid, s.root)
             s.on_event("sessions_updated", {})
-            return R({"reply": op, "ok": True})
+            return _reply({"reply": op, "ok": True})
         if op == "rewind_preview":
-            return R(
+            return _reply(
                 {
                     "reply": op,
                     "ok": True,
@@ -1164,15 +1166,15 @@ class Harness:
             )
         if op == "rewind_to":
             if s.running:
-                return R(
+                return _reply(
                     {"reply": op, "ok": False, "error": "busy or invalid position"}
                 )
             ok, restored = s.rewind_to(obj.get("count", 0))
             if ok:
-                return R({"reply": op, "ok": True, "data": restored or []})
-            return R({"reply": op, "ok": False, "error": "invalid position"})
+                return _reply({"reply": op, "ok": True, "data": restored or []})
+            return _reply({"reply": op, "ok": False, "error": "invalid position"})
         if op == "resend":
-            return R(
+            return _reply(
                 {
                     "reply": "resend",
                     "ok": s.resubmit(
@@ -1200,9 +1202,9 @@ class Harness:
                     "project_root": str(s.root or ""),
                 }
             )
-            return R({"reply": op, "ok": True, "data": info})
+            return _reply({"reply": op, "ok": True, "data": info})
         if op == "git_status":
-            return R(
+            return _reply(
                 {
                     "reply": op,
                     "ok": True,
@@ -1211,9 +1213,9 @@ class Harness:
             )
         if op == "git_create_branch":
             if not s.root:
-                return R({"reply": op, "ok": False, "error": "no workspace"})
+                return _reply({"reply": op, "ok": False, "error": "no workspace"})
             ok, detail = git_create_branch(s.root, obj.get("name", ""))
-            return R(
+            return _reply(
                 {"reply": op, "ok": ok, "data": detail}
                 if ok
                 else {"reply": op, "ok": False, "error": detail}
@@ -1221,7 +1223,7 @@ class Harness:
         if op == "set_permissions":
             mode = obj.get("mode", "default")
             if mode not in permissions_mod.MODES:
-                return R(
+                return _reply(
                     {
                         "reply": op,
                         "ok": False,
@@ -1233,7 +1235,7 @@ class Harness:
             # Live: a turn already running will honour this on its next
             # permission check, so the user can relax or tighten mid-work.
             s._mode_ref.value = mode
-            return R({"reply": op, "ok": True})
+            return _reply({"reply": op, "ok": True})
         if op == "set_active":
             ok = providers_mod.set_active(obj.get("id"))
             if ok:
@@ -1246,12 +1248,12 @@ class Harness:
                         {"text": "model switched - the request in flight was stopped"},
                     )
                 s.active_provider = obj.get("id")
-            return R({"reply": op, "ok": bool(ok)})
+            return _reply({"reply": op, "ok": bool(ok)})
         if op == "set_effort":
             pid = s.active_provider or providers_mod.get_active_id() or obj.get("id")
             providers_mod.set_effort(pid, obj.get("effort") or None)
             s.effort = obj.get("effort") or "default"
-            return R({"reply": op, "ok": True})
+            return _reply({"reply": op, "ok": True})
         if op == "retry":
             ok = s.resubmit(
                 obj.get("count", 0),
@@ -1259,15 +1261,15 @@ class Harness:
                 obj.get("mode", s.mode),
                 restore_files=False,
             )
-            return R({"reply": "retry", "ok": bool(ok)})
+            return _reply({"reply": "retry", "ok": bool(ok)})
         if op in (
             "review_start",
             "review_cancel",
             "review_action",
             "review_report",
         ):
-            return R(self._review_op(op, obj, s))
-        return R({"reply": op, "ok": False, "error": f"unknown op: {op}"})
+            return _reply(self._review_op(op, obj, s))
+        return _reply({"reply": op, "ok": False, "error": f"unknown op: {op}"})
 
     def _review_op(self, op, obj, s):
         """The card's actions: start, cancel, dismiss, send to the agent.
@@ -1521,7 +1523,7 @@ async def serve(host="127.0.0.1", port=8765, auth_token=None):
 def main(argv=None):
 
     parser = argparse.ArgumentParser(
-        description="Harness backend service for Electron."
+        description="Harness backend service for the desktop shell."
     )
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--host", default="127.0.0.1")

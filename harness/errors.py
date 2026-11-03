@@ -225,7 +225,7 @@ def _matches(text, needles):
     return any(n in text for n in needles)
 
 
-def classify(exc, api_key=None, model=None, model_id=None, kind=None):
+def classify(exc, model=None, model_id=None, kind=None):
     """ModelError for whatever the SDK raised. Never raises, never leaks."""
     if isinstance(exc, ModelError):
         return exc
@@ -374,9 +374,7 @@ def no_key(model=None, provider=None):
     )
 
 
-def stream_interrupted(
-    failure=None, partial="", api_key=None, model=None, model_id=None
-):
+def stream_interrupted(failure=None, partial="", model=None, model_id=None):
     """The response broke after it started streaming.
 
     The streamed text is already on screen, so retrying would duplicate it.
@@ -406,10 +404,10 @@ def cancelled(model=None, model_id=None):
     )
 
 
-def explain(exc, api_key=None, model=None, model_id=None):
+def explain(exc, model=None, model_id=None):
     """One-line explanation for a log line or a status area."""
     if not isinstance(exc, ModelError):
-        exc = classify(exc, api_key=api_key, model=model, model_id=model_id)
+        exc = classify(exc, model=model, model_id=model_id)
     return exc.text()
 
 

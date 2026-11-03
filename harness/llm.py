@@ -49,6 +49,40 @@ def active_model():
     return providers.active_config()[2]
 
 
+def suggest_title(first_text, timeout=15):
+    """Name a session in a few words. Returns None on any failure.
+
+    Best effort by contract: a missing key, a busy provider or a broken
+    reply all leave the session untitled instead of disturbing the turn.
+    """
+    if not (first_text or "").strip():
+        return None
+    try:
+        reply = (
+            get_client()
+            .chat.completions.create(
+                model=active_model(),
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            "Title this coding task in 4 words max. Plain words only, "
+                            f"no quotes: {first_text[:300]}"
+                        ),
+                    }
+                ],
+                timeout=timeout,
+            )
+            .choices[0]
+            .message.content
+            or ""
+        )
+        title = " ".join(reply.strip().strip("\"'").split())
+        return title[:40] or None
+    except Exception:  # noqa: BLE001 - titles are best effort
+        return None
+
+
 def _params(messages, tools, caps):
     """Request body for the active model - only what it actually supports."""
     from . import tools as tools_mod
@@ -261,7 +295,6 @@ def call_llm(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None
                     raise stream_interrupted(
                         failure,
                         partial="".join(streamed),
-                        api_key=api_key,
                         model=label,
                         model_id=model_id,
                     ) from failure
@@ -290,7 +323,6 @@ def call_llm(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None
         cancel=cancel,
         model=label,
         model_id=model_id,
-        api_key=api_key,
         host=host,
         on_attempt=_progress(caps),
     )

@@ -189,7 +189,7 @@ class ServerCase(unittest.TestCase):
                 return_value=[{"role": "user", "content": "do things"}],
             ),
             mock.patch(
-                "harness.providers.suggest_title", return_value="First name"
+                "harness.llm.suggest_title", return_value="First name"
             ) as suggest,
             mock.patch.object(session_mod, "set_title") as set_title,
         ):
@@ -201,7 +201,7 @@ class ServerCase(unittest.TestCase):
             mock.patch.object(
                 session_mod, "_titles", return_value={s.session_id: "User name"}
             ),
-            mock.patch("harness.providers.suggest_title") as suggest2,
+            mock.patch("harness.llm.suggest_title") as suggest2,
             mock.patch.object(session_mod, "set_title") as set_title2,
         ):
             s._maybe_title()

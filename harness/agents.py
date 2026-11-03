@@ -42,24 +42,11 @@ DEFAULTS = {
         "intensity": DEFAULT_INTENSITY,
         "max_rounds": DEFAULT_MAX_ROUNDS,
     },
-    # The multi-model review role. It differs from the others in one way: it
-    # holds a *list* of models, not one, because the whole point is that
-    # several independent reviewers look at the same change.
-    "review": {
-        "enabled": False,
-        "auto_run": "off",
-        "mode": "parallel",
-        "reviewers": [],
-        "max_reviewers": 4,
-        "max_files": 40,
-        "max_diff_bytes": 200_000,
-        "max_file_bytes": 60_000,
-        "max_tokens": 150_000,
-        "severity_threshold": "low",
-        "full_context": False,
-        "exclusions": [],
-        "prompt": "",
-    },
+    # The multi-model review role is not here: its defaults are the review
+    # module's own constants, so the numbers exist in exactly one place (see
+    # _clean_review). It differs from the other roles in one way: it holds a
+    # *list* of models, not one, because the whole point is that several
+    # independent reviewers look at the same change.
 }
 
 
@@ -106,11 +93,36 @@ def _clean_role(raw, approve_default=None):
 
 
 def _clean_review(raw):
-    """The review role: a list of reviewers, and the limits around them."""
+    """The review role: a list of reviewers, and the limits around them.
+
+    The defaults come from review/config's constants so the limits are
+    owned there, not restated here.
+    """
+    from .review.config import (
+        DEFAULT_MAX_DIFF_BYTES,
+        DEFAULT_MAX_FILE_BYTES,
+        DEFAULT_MAX_FILES,
+        DEFAULT_MAX_REVIEWERS,
+        DEFAULT_MAX_TOKENS,
+    )
     from .review.scope import DEFAULT_EXCLUSIONS
 
     raw = raw if isinstance(raw, dict) else {}
-    clean = dict(DEFAULTS["review"])
+    clean = {
+        "enabled": False,
+        "auto_run": "off",
+        "mode": "parallel",
+        "reviewers": [],
+        "max_reviewers": DEFAULT_MAX_REVIEWERS,
+        "max_files": DEFAULT_MAX_FILES,
+        "max_diff_bytes": DEFAULT_MAX_DIFF_BYTES,
+        "max_file_bytes": DEFAULT_MAX_FILE_BYTES,
+        "max_tokens": DEFAULT_MAX_TOKENS,
+        "severity_threshold": "low",
+        "full_context": False,
+        "exclusions": list(DEFAULT_EXCLUSIONS),
+        "prompt": "",
+    }
     clean["enabled"] = _as_bool(raw.get("enabled"))
     auto = raw.get("auto_run")
     if isinstance(auto, bool):
@@ -137,28 +149,28 @@ def _clean_review(raw):
         )
     clean["reviewers"] = reviewers
 
-    clean["max_reviewers"] = _as_int(raw.get("max_reviewers"), 4, 1, 16)
-    clean["max_files"] = _as_int(raw.get("max_files"), 40, 1, 500)
-    clean["max_diff_bytes"] = _as_int(
-        raw.get("max_diff_bytes"), 200_000, 1_000, 20_000_000
+    clean["max_reviewers"] = _as_int(
+        raw.get("max_reviewers"), DEFAULT_MAX_REVIEWERS, 1, 16
     )
-    clean["max_file_bytes"] = _as_int(raw.get("max_file_bytes"), 60_000, 1_000, 5_000_000)
-    clean["max_tokens"] = _as_int(raw.get("max_tokens"), 150_000, 1_000, 10_000_000)
+    clean["max_files"] = _as_int(raw.get("max_files"), DEFAULT_MAX_FILES, 1, 500)
+    clean["max_diff_bytes"] = _as_int(
+        raw.get("max_diff_bytes"), DEFAULT_MAX_DIFF_BYTES, 1_000, 20_000_000
+    )
+    clean["max_file_bytes"] = _as_int(
+        raw.get("max_file_bytes"), DEFAULT_MAX_FILE_BYTES, 1_000, 5_000_000
+    )
+    clean["max_tokens"] = _as_int(
+        raw.get("max_tokens"), DEFAULT_MAX_TOKENS, 1_000, 10_000_000
+    )
     threshold = _as_text(raw.get("severity_threshold")) or "low"
     clean["severity_threshold"] = (
         threshold if threshold in ("blocker", "high", "medium", "low", "nit") else "low"
     )
     clean["full_context"] = _as_bool(raw.get("full_context"))
 
-    if "exclusions" in raw:
-        listed = raw.get("exclusions")
-        clean["exclusions"] = (
-            [_as_text(x) for x in listed if _as_text(x)]
-            if isinstance(listed, list)
-            else list(DEFAULT_EXCLUSIONS)
-        )
-    else:
-        clean["exclusions"] = list(DEFAULT_EXCLUSIONS)
+    listed = raw.get("exclusions")
+    if isinstance(listed, list):
+        clean["exclusions"] = [_as_text(x) for x in listed if _as_text(x)]
 
     clean["prompt"] = _as_text(raw.get("prompt"))[:8000]
     return clean

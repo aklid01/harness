@@ -1,7 +1,7 @@
 """Central path resolution: explicit project root plus app data dir.
 
 All cwd/home lookups live here. Other modules must not call Path.cwd()
-directly for storage - they ask this module instead, so the Electron sidecar
+directly for storage - they ask this module instead, so the desktop sidecar
 can pass an explicit project folder and user-data dir.
 """
 

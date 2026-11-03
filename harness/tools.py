@@ -47,9 +47,7 @@ def approval_channel_ready():
     """Is there a frontend that can answer an approval request?"""
     from . import events
 
-    if events._ACTIVE.get() is not None:
-        return True
-    return events._responder is not None
+    return events.has_interaction_channel()
 
 
 def shell_available():

@@ -25,7 +25,12 @@ import json
 from . import instructions, permissions, providers
 from .llm import call_llm
 
-VERDICTS = ("approve", "revise", "clarify", "escalate")
+# What the reviewer model may answer. "error" is engine-generated (a reviewer
+# that never answered) and deliberately absent: parse_verdict rejects it from a
+# model exactly like any other word it was not offered.
+MODEL_VERDICTS = ("approve", "revise", "clarify", "escalate")
+# Every verdict a Verdict object can carry, engine-generated ones included.
+VERDICTS = MODEL_VERDICTS + ("error",)
 
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
@@ -259,7 +264,7 @@ def parse_verdict(text):
             error="unparseable",
         )
     verdict = str(data.get("verdict", "")).strip().lower()
-    if verdict not in VERDICTS:
+    if verdict not in MODEL_VERDICTS:
         return Verdict(
             "clarify",
             reasoning=str(

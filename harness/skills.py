@@ -1,3 +1,10 @@
+"""Skill discovery: scan the skill dirs, expose names and read one on demand.
+
+A skill is a directory with a SKILL.md (frontmatter name/description plus
+instructions). Scanning happens per call so a workspace's own skills win
+over global ones of the same name.
+"""
+
 from pathlib import Path
 
 import yaml

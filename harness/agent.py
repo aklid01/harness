@@ -1,3 +1,10 @@
+"""The turn loop: one Runner drives a conversation with the model.
+
+A turn streams model replies, executes the tool calls it proposes through the
+permission and oversight layers, keeps the plan/todos/session context in step,
+and hands review requests to the hook the transport installed.
+"""
+
 import itertools
 import json
 from types import SimpleNamespace
@@ -23,6 +30,7 @@ from . import errors as errors_mod
 from . import plan as plan_mod
 from .context import reminder
 from .llm import call_llm, system_prompt
+from .review import command as review_command
 from .todos import active_form
 from .tools import available_tool_names, execute
 
@@ -200,19 +208,12 @@ class Runner:
         if mode == "off":
             return
         self.request_review(
-            {
-                "scope": "run",
-                "auto": True,
-                "offer": mode == "offer",
-                "paths": sorted(self._turn_touched),
-                "models": [],
-                "focus": "",
-                "severity": "",
-                "force": False,
-                "json": False,
-                "help": False,
-                "error": "",
-            }
+            review_command.new_args(
+                scope="run",
+                auto=True,
+                offer=mode == "offer",
+                paths=sorted(self._turn_touched),
+            )
         )
 
     def _receive_user_text(self, text, via=None, attachments=None):
@@ -1080,8 +1081,7 @@ class Runner:
 
     def _fail(self, failure):
         """Report a failed request without losing the message that caused it."""
-        api_key = providers.active_config()[1]
-        error = errors_mod.classify(failure, api_key=api_key, model=self._model_label())
+        error = errors_mod.classify(failure, model=self._model_label())
         if error.kind == "cancelled":
             events.emit(events.NOTE, {"text": "stopped"})
             return

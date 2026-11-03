@@ -11,7 +11,7 @@ import threading
 import unittest
 from unittest import mock
 
-from harness.review import engine, report
+from harness.review import engine, report, scope
 
 from tests.review_support import FakeLLM, ReviewCase
 
@@ -39,13 +39,19 @@ class EngineCase(ReviewCase):
     def run_review(self, fake, reviewers=None, settings=None, **kwargs):
         if reviewers is None:
             reviewers = [self.reviewer("mdl-a")]
+        use_settings = settings or self.settings()
         with mock.patch("harness.review.engine.call_llm", fake):
             return engine.run(
                 self.root,
                 self.session_id,
-                mode="run",
+                scope=scope.detect_for_settings(
+                    self.root,
+                    use_settings,
+                    mode="run",
+                    session_id=self.session_id,
+                ),
                 reviewers=reviewers,
-                settings=settings or self.settings(),
+                settings=use_settings,
                 **kwargs,
             )
 

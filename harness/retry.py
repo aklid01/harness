@@ -145,7 +145,6 @@ def run(
     on_attempt=None,
     model=None,
     model_id=None,
-    api_key=None,
     host="",
     attempts=MAX_ATTEMPTS,
     schedule=None,
@@ -171,7 +170,7 @@ def run(
             return request()
         except Exception as failure:
             err = errors_mod.classify(
-                failure, api_key=api_key, model=model, model_id=model_id
+                failure, model=model, model_id=model_id
             )
             if _stopped(cancel):
                 raise errors_mod.cancelled(model=model, model_id=model_id)

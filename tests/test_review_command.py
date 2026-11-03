@@ -1,4 +1,4 @@
-"""The command: the arguments of /multi-modeal-review, and the CLI.
+"""The command: the arguments of /multi-model-review, and the CLI.
 
 Two front doors lead into the same review: the slash command inside a
 session, and `python -m harness.review` for scripts and CI. Both are tested
@@ -124,7 +124,7 @@ class Wired(unittest.TestCase):
         self.messages = [{"role": "user", "content": "review this"}]
 
     def test_the_command_asks_the_session_for_a_review(self):
-        commands.handle("/multi-modeal-review", self.messages, self.ctx)
+        commands.handle("/multi-model-review", self.messages, self.ctx)
 
         self.assertEqual(len(self.ctx.calls), 1, "the session was asked to review")
         self.assertEqual(self.ctx.calls[0]["scope"], "run")
@@ -132,7 +132,7 @@ class Wired(unittest.TestCase):
 
     def test_the_command_passes_the_arguments_on(self):
         commands.handle(
-            "/multi-modeal-review uncommitted --models a,b --severity high",
+            "/multi-model-review uncommitted --models a,b --severity high",
             self.messages,
             self.ctx,
         )
@@ -143,22 +143,22 @@ class Wired(unittest.TestCase):
         self.assertEqual(args["severity"], "high")
 
     def test_the_command_without_a_session_says_so(self):
-        commands.handle("/multi-modeal-review", self.messages, None)
+        commands.handle("/multi-model-review", self.messages, None)
 
         kinds = [kind for kind, _ in self.notes]
         self.assertIn(events.NOTE, kinds, "the user is told why nothing happened")
 
     def test_help_emits_a_note_with_the_help_text(self):
-        commands.handle("/multi-modeal-review --help", self.messages, self.ctx)
+        commands.handle("/multi-model-review --help", self.messages, self.ctx)
 
         notes = [payload["text"] for kind, payload in self.notes if kind == events.NOTE]
         self.assertTrue(notes, "the help is shown")
-        self.assertIn("/multi-modeal-review", notes[0])
+        self.assertIn("/multi-model-review", notes[0])
         self.assertIn("--severity", notes[0])
         self.assertEqual(self.ctx.calls, [], "help does not start a review")
 
     def test_a_bad_argument_emits_a_note_and_starts_nothing(self):
-        commands.handle("/multi-modeal-review --wat", self.messages, self.ctx)
+        commands.handle("/multi-model-review --wat", self.messages, self.ctx)
 
         notes = [payload["text"] for kind, payload in self.notes if kind == events.NOTE]
         self.assertTrue(notes, "the error is shown")

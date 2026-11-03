@@ -234,9 +234,7 @@ def run(
     root,
     session_id="",
     *,
-    mode="run",
-    base="",
-    only_paths=None,
+    scope,
     reviewers=None,
     settings=None,
     emit=None,
@@ -247,6 +245,8 @@ def run(
 ):
     """Run a review and return the report.
 
+    ``scope`` is the parsed scope from ``review.scope.detect_for_settings``:
+    the caller decides what gets reviewed, the engine decides how.
     ``emit(stage, payload)`` is called as the review progresses; the stages
     are the ones in STAGES. ``cancel`` is a threading.Event: setting it stops
     outstanding model calls as soon as they notice.
@@ -275,7 +275,7 @@ def run(
             "models": [],
             "by_severity": {},
             "by_category": {},
-            "scope": {"mode": mode, "base": base, "files": [], "skipped": []},
+            "scope": {"mode": scope.mode, "base": scope.base, "files": [], "skipped": []},
             "error": "no reviewer model is configured",
             "action": "settings",
         }
@@ -291,15 +291,6 @@ def run(
                 {**entry, "state": state, "reason": config_mod.reason(state)}
             )
 
-    scope = scope_mod.detect(
-        root,
-        mode=mode,
-        base=base,
-        only_paths=only_paths,
-        session_id=session_id,
-        exclusions=tuple(settings.get("exclusions") or scope_mod.DEFAULT_EXCLUSIONS),
-        max_files=int(settings.get("max_files") or config_mod.DEFAULT_MAX_FILES),
-    )
     if scope.empty:
         emit(
             "nothing",

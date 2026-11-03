@@ -43,6 +43,11 @@ def new_id():
 def save(session_id, report, *, newest=True):
     """Write the report, record it as the newest, and return it.
 
+    Best effort, like the rest of the persistence layer: an unwritable
+    report is dropped silently and the report is still returned, because
+    the caller has it in hand and a review that saved nothing is still a
+    review that ran.
+
     Save order is recorded in index.json because file mtimes collide when
     two reports are written within one clock tick, and "latest" must
     still name the report that was saved last. Re-saves that only mutate

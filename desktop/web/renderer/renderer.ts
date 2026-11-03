@@ -5579,7 +5579,7 @@ function settingsReview(): [string, () => void] {
   }));
   const html =
     `<p class="sub">Let one or more independent reviewer models critique the change the agent just made. Each reviewer sees only the diff - never another reviewer's answer - and a review never edits anything. Models come from Settings &gt; Models and reuse that model's own key.</p>` +
-    `<div class="set-row"><div class="set-info"><div class="set-label">Enable multi-model review</div><div class="set-desc">Turn this on to use /multi-modeal-review and the review card. Off means the app behaves exactly as before.</div></div><div class="set-ctl"><span id="sw_review"></span></div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Enable multi-model review</div><div class="set-desc">Turn this on to use /multi-model-review and the review card. Off means the app behaves exactly as before.</div></div><div class="set-ctl"><span id="sw_review"></span></div></div>` +
     `<h4 class="card-title" style="margin-top:16px">Reviewer models</h4>` +
     `<div id="rvRows">${rows.map(reviewerRow).join("")}</div>` +
     `<div class="modal-actions" style="justify-content:flex-start;margin:8px 0 0"><button class="btn small" id="rvAdd">Add a reviewer</button></div>` +

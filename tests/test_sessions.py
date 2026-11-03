@@ -73,7 +73,7 @@ class SessionCase(unittest.TestCase):
         messages = [{"role": "user", "content": "fix the login bug"}]
         session.save(messages)
         with mock.patch(
-            "harness.providers.suggest_title", return_value="Login fix"
+            "harness.llm.suggest_title", return_value="Login fix"
         ) as suggest:
             session.ensure_title(messages)
             self.assertEqual(suggest.call_count, 1)

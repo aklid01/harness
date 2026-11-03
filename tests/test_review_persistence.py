@@ -187,15 +187,21 @@ class CachedReviews(ReviewCase):
         self.record_change("app.py", "value = 1\n", "value = 2\n")
 
     def review(self, fake, **kwargs):
+        settings = self.settings()
         with mock.patch("harness.review.engine.call_llm", fake):
             return engine.run(
                 self.root,
                 self.session_id,
-                mode="run",
+                scope=scope.detect_for_settings(
+                    self.root,
+                    settings,
+                    mode="run",
+                    session_id=self.session_id,
+                ),
                 reviewers=[
                     {"model_id": "mdl-a", "label": "", "enabled": True, "focus": ""}
                 ],
-                settings=self.settings(),
+                settings=settings,
                 **kwargs,
             )
 

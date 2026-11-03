@@ -225,7 +225,7 @@ is advisory and read-only: it never edits a file by itself.
 Run it by hand with:
 
 ```text
-/multi-modeal-review
+/multi-model-review
 ```
 
 The card appears in the conversation and follows the review: an offer, live
@@ -373,7 +373,7 @@ refer to findings by id (`R1`, `R2`, ...).
 ### Command reference
 
 ```text
-/multi-modeal-review [scope] [options]
+/multi-model-review [scope] [options]
 
   run | uncommitted | staged | base:<ref>   what to review
   --models a,b          review with these model ids

@@ -15,7 +15,7 @@ from .todos import todos_prompt
 LABELS = {"M": "modified", "D": "deleted", "A": "added", "??": "new"}
 
 
-def git(command):
+def git(*args):
     """Run a git command in the workspace; utf-8 output, failures are empty.
 
     Never raises: the injection is best-effort context, and a locked index or
@@ -23,8 +23,7 @@ def git(command):
     """
     try:
         result = subprocess.run(
-            f"git {command}",
-            shell=True,
+            ["git", *args],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -46,8 +45,7 @@ def is_git_worktree():
     """
     try:
         probe = subprocess.run(
-            "git rev-parse --is-inside-work-tree",
-            shell=True,
+            ["git", "rev-parse", "--is-inside-work-tree"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -97,7 +95,7 @@ def _porcelain_path(raw):
 def git_state():
     """path -> (status, content hash) for every file git sees as changed."""
     state = {}
-    for line in git("status --porcelain").splitlines():
+    for line in git("status", "--porcelain").splitlines():
         if len(line) < 4:
             continue
         path = _porcelain_path(line[3:])

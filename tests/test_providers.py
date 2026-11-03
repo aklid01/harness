@@ -49,7 +49,7 @@ class ProviderCase(unittest.TestCase):
         }
 
     def test_crud_and_active(self):
-        self.assertEqual(providers.list_providers(), [])
+        self.assertEqual(providers.list_models(), [])
         providers.save_provider(self.entry())
         providers.save_provider(self.entry("p2"))
         self.assertEqual(providers.get_active_id(), "p1")

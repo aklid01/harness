@@ -166,8 +166,7 @@ def main(argv=None):
         document = engine.run(
             root,
             "",
-            mode=mode,
-            base=base,
+            scope=scope_mod.detect_for_settings(root, settings, mode=mode, base=base),
             reviewers=reviewers,
             settings=settings,
             force=args.force,

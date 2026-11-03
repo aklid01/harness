@@ -7,7 +7,7 @@ COMMANDS = {
     "/rewind": "jump back to an earlier point in this chat",
     "/sessions": "open a past chat",
     "/compact": "summarise the history so far and free up the context window",
-    "/multi-modeal-review": "have independent reviewer models critique the change",
+    "/multi-model-review": "have independent reviewer models critique the change",
 }
 
 
@@ -105,8 +105,8 @@ def handle(command, messages, ctx=None):
         return rewind(messages)
     if command == "/sessions":
         return sessions(messages)
-    if command == "/multi-modeal-review" or command.startswith("/multi-modeal-review "):
-        argument = command[len("/multi-modeal-review") :].strip()
+    if command == "/multi-model-review" or command.startswith("/multi-model-review "):
+        argument = command[len("/multi-model-review") :].strip()
         return review(messages, ctx, argument)
     events.emit(
         events.NOTE,

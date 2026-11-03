@@ -235,7 +235,7 @@ class ModelCase(unittest.TestCase):
 
     def test_legacy_file_migrates_without_losing_entries(self):
         self.write(LEGACY)
-        models = providers.list_providers()
+        models = providers.list_models()
         self.assertEqual([m["model"] for m in models], ["flash-1", "flash-2"])
         self.assertEqual(len(providers.list_groups()), 2)
         self.assertEqual(providers.get_active_id(), models[0]["id"])
@@ -254,7 +254,7 @@ class ModelCase(unittest.TestCase):
         raw = json.loads(self.file.read_text())
         self.assertEqual(raw["version"], providers.FORMAT_VERSION)
         self.assertEqual(
-            [m["model"] for m in providers.list_providers()], ["flash-1", "flash-2"]
+            [m["model"] for m in providers.list_models()], ["flash-1", "flash-2"]
         )
 
     def test_legacy_colliding_entries_become_siblings(self):
@@ -263,7 +263,7 @@ class ModelCase(unittest.TestCase):
         data["providers"][1]["model"] = "flash-2"
         self.write(data)
 
-        models = providers.list_providers()
+        models = providers.list_models()
         self.assertEqual([m["model"] for m in models], ["flash-1", "flash-2"])
         self.assertEqual(len(providers.list_groups()), 1)
         self.assertEqual(len(providers.list_groups()[0]["models"]), 2)
@@ -287,7 +287,7 @@ class ModelCase(unittest.TestCase):
     def test_migration_never_stamps_settings_the_entry_never_had(self):
         """Identical chips in the UI must be stored values, not invented ones."""
         self.write(LEGACY)
-        models = providers.list_providers()
+        models = providers.list_models()
         plain = next(m for m in models if m["model"] == "flash-2")
         self.assertIsNone(plain["reasoning_effort"])
         self.assertIsNone(plain["context_window"])
@@ -299,17 +299,17 @@ class ModelCase(unittest.TestCase):
 
     def test_migration_is_reported(self):
         self.write(LEGACY)
-        providers.list_providers()
+        providers.list_models()
         self.assertEqual(providers.migration_report(), [])
-        providers.set_active(providers.list_providers()[1]["id"])
+        providers.set_active(providers.list_models()[1]["id"])
         report = providers.migration_report()
         self.assertTrue(report)
         self.assertIn("providers.json.bak", report[0])
 
     def test_migration_report_counts_the_migration_not_the_live_registry(self):
         self.write(LEGACY)
-        providers.list_providers()
-        providers.set_active(providers.list_providers()[1]["id"])  # writes the backup
+        providers.list_models()
+        providers.set_active(providers.list_models()[1]["id"])  # writes the backup
         first = providers.migration_report()[0]
         self.assertIn(
             "moved 2 legacy entries into 2 model(s) under 2 provider(s)", first
@@ -317,8 +317,8 @@ class ModelCase(unittest.TestCase):
 
     def test_migration_report_is_shown_once(self):
         self.write(LEGACY)
-        providers.list_providers()
-        providers.set_active(providers.list_providers()[1]["id"])
+        providers.list_models()
+        providers.set_active(providers.list_models()[1]["id"])
         self.assertTrue(providers.migration_report(), "the first read shows the note")
         self.assertEqual(
             providers.migration_report(), [], "it must not reappear on every launch"
@@ -326,8 +326,8 @@ class ModelCase(unittest.TestCase):
 
     def test_adding_models_after_migration_does_not_inflate_the_report(self):
         self.write(LEGACY)
-        providers.list_providers()
-        providers.set_active(providers.list_providers()[1]["id"])
+        providers.list_models()
+        providers.set_active(providers.list_models()[1]["id"])
         group = providers.list_groups()[0]["id"]
         providers.save_model(
             {"id": "mdl-new", "name": "New", "model": "new-model"}, group

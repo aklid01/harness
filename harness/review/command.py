@@ -1,20 +1,20 @@
-"""The arguments of ``/multi-modeal-review``.
+"""The arguments of ``/multi-model-review``.
 
 Parsing lives here, apart from the command that runs it, so the argument
 rules can be tested without a model, a workspace or a session.
 
-    /multi-modeal-review
-    /multi-modeal-review uncommitted
-    /multi-modeal-review base:main --models mdl-a,mdl-b --severity high
+    /multi-model-review
+    /multi-model-review uncommitted
+    /multi-model-review base:main --models mdl-a,mdl-b --severity high
 """
 
 from . import findings as findings_mod
 from . import scope as scope_mod
 
 HELP = """\
-/multi-modeal-review - run independent reviewer models over the change
+/multi-model-review - run independent reviewer models over the change
 
-  /multi-modeal-review [scope] [options]
+  /multi-model-review [scope] [options]
 
 Scope (what gets reviewed):
   run              the files this agent run changed (the default)
@@ -35,13 +35,13 @@ Reviewers never see each other's answers, and a review never edits anything:
 it reads the change and reports what it found."""
 
 
-def parse_args(text):
-    """Parse the argument text of the command.
+def new_args(**overrides):
+    """The one shape of a review request, with defaults.
 
-    Returns a dict with: scope, base, models, focus, severity, force, json,
-    help and error. An unrecognised argument is an error rather than a
-    silent fallback, because a typo that widened the scope would send more
-    code to a provider than the user meant to send.
+    Every writer of review args - this parser, the review card's op, the
+    automatic post-run review - starts here, so the option set exists once
+    and a key cannot drift between writers. ``help``/``error`` are the
+    parser's own report and belong to its return value only.
     """
     args = {
         "scope": "run",
@@ -51,9 +51,28 @@ def parse_args(text):
         "severity": "",
         "force": False,
         "json": False,
-        "help": False,
-        "error": "",
+        "paths": None,
+        "auto": False,
+        "offer": False,
     }
+    unknown = set(overrides) - set(args)
+    if unknown:
+        raise TypeError(f"unknown review args: {', '.join(sorted(unknown))}")
+    args.update(overrides)
+    return args
+
+
+def parse_args(text):
+    """Parse the argument text of the command.
+
+    Returns a ``new_args()`` request plus the parser's own ``help`` and
+    ``error`` report. An unrecognised argument is an error rather than a
+    silent fallback, because a typo that widened the scope would send more
+    code to a provider than the user meant to send.
+    """
+    args = new_args()
+    args["help"] = False
+    args["error"] = ""
     tokens = (text or "").split()
     index = 0
     while index < len(tokens):

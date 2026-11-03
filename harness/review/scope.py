@@ -529,6 +529,27 @@ def detect(
     return _journal_scope(root, session_id, mode, only_paths, exclusions, max_files)
 
 
+def detect_for_settings(
+    root, settings, *, mode="run", base="", only_paths=None, session_id=""
+):
+    """detect() with the exclusions and file cap a review's settings name.
+
+    One home for that juggling, so the engine and both of its front doors
+    (the sidecar and the CLI) parse the scope identically.
+    """
+    from . import config as config_mod
+
+    return detect(
+        root,
+        mode=mode,
+        base=base,
+        only_paths=only_paths,
+        session_id=session_id,
+        exclusions=tuple(settings.get("exclusions") or DEFAULT_EXCLUSIONS),
+        max_files=int(settings.get("max_files") or config_mod.DEFAULT_MAX_FILES),
+    )
+
+
 def valid_scope(text):
     """True when the text names a scope the engine understands."""
     raw = (text or "").strip().lower()

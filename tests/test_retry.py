@@ -121,7 +121,6 @@ class ClassifyCase(unittest.TestCase):
         secret = "sk-abcdefghijklmnopqrstuvwxyz012345"
         error = errors.classify(
             http(401, f"Incorrect API key provided: {secret}", body=None),
-            api_key=secret,
         )
         self.assertNotIn(secret, error.text())
         self.assertNotIn(secret, str(error))

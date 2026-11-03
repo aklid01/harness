@@ -110,6 +110,11 @@ def _titles():
     return data if isinstance(data, dict) else {}
 
 
+def get_title(session_id):
+    """The saved title for one session, or None."""
+    return _titles().get(session_id)
+
+
 def set_title(session_id, title):
     titles = _titles()
     titles[session_id] = title
@@ -258,14 +263,14 @@ def title(messages, session_id=None):
 
 def ensure_title(messages):
     """Ask the model for a short name once per session. Best effort."""
-    from . import providers
+    from . import llm
 
     if _titles().get(current_id()):
         return None
     first = title(messages)
     if first in ("(empty)", "New Session"):
         return None
-    name = providers.suggest_title(first)
+    name = llm.suggest_title(first)
     if name:
         set_title(current_id(), name)
     return name
