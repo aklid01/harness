@@ -140,6 +140,14 @@ BASH_RULES = {
 }
 
 
+def _ends_with_redirect(text):
+    """Does the text so far end on a redirect operator ('>')?"""
+    for char in reversed(text):
+        if not char.isspace():
+            return char == ">"
+    return False
+
+
 def split_command(command):
     """Split a compound command on the separators that actually separate.
 
@@ -164,6 +172,12 @@ def split_command(command):
         elif char in "\"'":
             quote = char
             current.append(char)
+        elif char == "&" and _ends_with_redirect(current):
+            # fd duplication (2>&1, >&2): the '&' belongs to the redirect, not
+            # to a command separator. Cutting it there left a bare "2>" that
+            # read as a file write and an orphan "1" that matched no rule, so
+            # a read-only probe was rated as a mutating one.
+            current.append(char)
         elif char in "&|;\n\r":
             parts.append("".join(current))
             current = []
@@ -175,6 +189,27 @@ def split_command(command):
 
     parts.append("".join(current))
     return [part.strip() for part in parts if part.strip()]
+
+
+def _is_assignment(word):
+    """True for `NAME=value`: a shell variable assignment, not a command."""
+    name, sep, _ = word.partition("=")
+    if not sep or not name:
+        return False
+    head = name[0]
+    if not (head.isascii() and (head.isalpha() or head == "_")):
+        return False
+    return all(char.isascii() and (char.isalnum() or char == "_") for char in name)
+
+
+def _assignment_only(words):
+    """True when the words are nothing but shell variable assignments.
+
+    `P1=/tmp/x` changes nothing on disk, but judged as an unknown executable
+    it fell through to "ask" - so a read-only probe that set a variable first
+    was refused in Ask mode.
+    """
+    return bool(words) and all(_is_assignment(word) for word in words)
 
 
 # Allow-listed commands that can hide a write or a second command. Checked on
@@ -223,6 +258,11 @@ def decide(command):
         for pattern, rule in BASH_RULES.items():
             if fnmatch(part, pattern):
                 action = rule
+        # Setting a shell variable is not a command and touches nothing on
+        # disk, so a segment that only assigns is read-only. A deny rule
+        # still wins.
+        if action != "deny" and _assignment_only(_shell_words(part)):
+            action = "allow"
         # A read-only command that redirects into a real file overwrites data,
         # so an "allow" it earned disappears the moment it writes one.
         if action == "allow" and redirect_writes_file(part):
@@ -503,9 +543,12 @@ def redirect_writes_file(command):
                 j += 1
             while j < n and seg[j] in " \t":
                 j += 1
-            if j < n and seg[j] == "&":  # 2>&1  /  >&2 : duplicate fd
-                i = j + 1
-                continue
+            if j < n and seg[j] == "&":
+                # 2>&1 / >&2 duplicate a descriptor, which is not a write.
+                # `>&file` instead sends both streams into the file.
+                if j + 1 < n and seg[j + 1].isdigit():
+                    i = j + 1
+                    continue
             target = []
             while j < n and not seg[j].isspace() and seg[j] not in ";|&<>":
                 target.append(seg[j])
@@ -526,6 +569,9 @@ def _classify_segment(segment):
     words = _shell_words(segment)
     base = _base_command(words)
     args = [w for w in words[1:]]
+
+    if _assignment_only(words):
+        return "low"  # a shell variable touches nothing on disk
 
     if base == "sed":
         return "high" if any(a.startswith("-i") for a in args) else "low"

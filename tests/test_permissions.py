@@ -194,5 +194,67 @@ class BypassRegression(unittest.TestCase):
             )
 
 
+class ReadonlyShapeRegression(unittest.TestCase):
+    """A read-only command is judged by what it does, not by its shape.
+
+    Ask mode refuses every bash command the permission layer does not rate as
+    read-only, and it refuses it before execution - there is no approval
+    dialog to save the run. A probe that merges stderr into stdout, or that
+    sets a shell variable first, was rated as an unknown command, so the
+    refusal landed on commands that changed nothing: the shape an agent
+    naturally uses when it inspects a file outside the workspace.
+    """
+
+    def setUp(self):
+        permissions.set_mode("default")
+        self.addCleanup(permissions.set_mode, "default")
+
+    def verdict(self, command):
+        return permissions.check("bash", {"command": command})[0]
+
+    def test_merging_stderr_into_stdout_is_not_a_write(self):
+        self.assertEqual(self.verdict("ls -la src 2>&1"), "allow")
+        self.assertEqual(self.verdict("cat notes.txt 2>&1 | head -5"), "allow")
+
+    def test_setting_a_shell_variable_is_not_a_command(self):
+        self.assertEqual(self.verdict("P1='/tmp/x'"), "allow")
+        self.assertEqual(self.verdict('P1="/tmp/x"; ls -la "$P1"'), "allow")
+
+    def test_the_probe_ask_mode_refused_is_allowed(self):
+        # The command Ask mode refused: a variable, a stderr merge and an
+        # absolute path outside the workspace.
+        command = (
+            "P1='/tmp/attached.html'; P2='/tmp/attached.html'; "
+            "ls -la \"$P1\" 2>&1; echo '---'; ls -la \"$P2\" 2>&1; "
+            "head -c 400 \"$P2\" 2>/dev/null || head -c 400 \"$P1\" 2>&1"
+        )
+        self.assertEqual(self.verdict(command), "allow")
+
+    def test_the_risk_classifier_agrees_with_the_permission_layer(self):
+        self.assertEqual(permissions.classify_bash("ls -la src 2>&1")[0], "low")
+        self.assertEqual(permissions.classify_bash("P1='/tmp/x'")[0], "low")
+
+    def test_the_shape_fix_does_not_loosen_the_fence(self):
+        # Everything that changes something still asks or denies.
+        self.assertEqual(self.verdict("echo hi > out.txt"), "ask")
+        self.assertEqual(self.verdict("cat 2>&1 > out.txt"), "ask")
+        self.assertEqual(self.verdict("ls 2>&1 | rm -rf ~"), "deny")
+        self.assertEqual(self.verdict("P1=x rm -rf /"), "ask")
+        self.assertEqual(self.verdict("P1=$(rm -rf ~)"), "ask")
+        self.assertEqual(self.verdict("export P1=/tmp/x"), "ask")
+
+    def test_a_descriptor_redirect_into_a_file_is_still_a_write(self):
+        # `>&file` sends both streams into the file; only `>&2` duplicates a
+        # descriptor. Keeping the `&` with its redirect must not confuse the
+        # two.
+        self.assertEqual(self.verdict("echo hi >& out.txt"), "ask")
+        self.assertEqual(self.verdict("echo hi >&out.txt"), "ask")
+        self.assertEqual(self.verdict("cmd &> out.txt"), "ask")
+        self.assertEqual(self.verdict("cmd 2>&1 > out.txt"), "ask")
+        # the descriptor duplication itself stays read-only
+        self.assertEqual(self.verdict("echo hi >&2"), "allow")
+        self.assertEqual(self.verdict("cat f 2>&1"), "allow")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

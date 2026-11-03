@@ -107,6 +107,12 @@ mojibake, and the agent is told to report that rather than guess. Images are
 passed to the model as images when the model is marked as able to see them
 (Settings > Models); otherwise they are delivered as a path only.
 
+The manifest also gives the agent the staged path, so it can look at an
+attachment with the shell (`ls`, `head`) as well as with `read_file`. That
+works in Ask mode too: a command the permission layer rates as read-only
+runs there without a prompt, whatever shape it has - a merged stderr and a
+shell variable included.
+
 Attached files are read-only: the agent cannot edit them in place, and any
 change it makes goes to a copy in the workspace. Reading them needs no
 permission prompt in any permission mode, in every workflow (Build, Ask, Plan

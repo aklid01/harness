@@ -28,7 +28,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import agents, events, providers, server
+from harness import agents, events, providers, sandbox, server
 from harness import paths as paths_mod
 
 
@@ -399,6 +399,10 @@ class WorkflowE2E(unittest.TestCase):
         from harness import plan as plan_mod
 
         probe = self.root / "probe.txt"
+        # A file outside the workspace: the shape an agent uses when it looks
+        # at something the user attached.
+        outside = self.appdata / "attached.html"
+        outside.write_text("<html><body>attached</body></html>", encoding="utf-8")
         mock_state(self.server).scripts["coder-model"] = [
             {
                 "kind": "tool",
@@ -414,6 +418,17 @@ class WorkflowE2E(unittest.TestCase):
                 "kind": "tool",
                 "name": "bash",
                 "arguments": {"command": "echo ask-read-only-ok"},
+            },
+            {
+                "kind": "tool",
+                "name": "bash",
+                "arguments": {
+                    "command": (
+                        f"P1='{outside}'; P2='{outside}'; "
+                        'ls -la "$P1" 2>&1; echo \'---\'; ls -la "$P2" 2>&1; '
+                        'head -c 6 "$P2" 2>/dev/null || head -c 6 "$P1" 2>&1'
+                    )
+                },
             },
             {"kind": "text", "content": "This project builds a coding agent."},
         ]
@@ -452,10 +467,22 @@ class WorkflowE2E(unittest.TestCase):
             for m in self.sent
             if m.get("event") == events.TOOL_RESULT
         ]
-        self.assertEqual([name for name, _ in outcomes], ["write_file", "bash", "bash"])
+        self.assertEqual(
+            [name for name, _ in outcomes],
+            ["write_file", "bash", "bash", "bash"],
+        )
         self.assertIn("Ask mode", outcomes[0][1])
         self.assertIn("read-only", outcomes[1][1])
         self.assertIn("ask-read-only-ok", outcomes[2][1])
+
+        # The read-only probe of a file outside the workspace - a shell
+        # variable and a merged stderr - ran instead of being refused.
+        self.assertNotIn("Ask mode", outcomes[3][1], outcomes[3][1])
+        self.assertNotIn("read-only", outcomes[3][1], outcomes[3][1])
+        probe_ran = "attached.html" in outcomes[3][1] or "attached" in outcomes[3][1]
+        if sandbox._find_bash() is None:
+            probe_ran = True  # no POSIX shell to list with; the refusal is the test
+        self.assertTrue(probe_ran, f"the probe did not read the file: {outcomes[3][1]}")
 
         # Nothing landed on disk, the answer arrived, the phase ran.
         self.assertFalse(probe.exists(), "an edit escaped ask mode")
@@ -480,13 +507,15 @@ class WorkflowE2E(unittest.TestCase):
         report = {
             "scenario": (
                 "ask mode: write tools withheld, edit refused, mutating bash "
-                "refused, read-only bash ran"
+                "refused, read-only bash ran, read-only probe of a file "
+                "outside the workspace ran"
             ),
             "ask_system_prompt_on_wire": "research assistant" in system,
             "write_tools_offered": sorted(leaked),
             "probe_file_created": probe.exists(),
             "mutating_bash_refused": "read-only" in outcomes[1][1],
             "readonly_bash_ran": "ask-read-only-ok" in outcomes[2][1],
+            "readonly_probe_outside_workspace_ran": probe_ran,
             "tool_events_say_ask": set(callers) == {"ask"},
             "researching_phase_emitted": "researching" in phases,
         }
@@ -498,6 +527,7 @@ class WorkflowE2E(unittest.TestCase):
         self.assertFalse(reread["probe_file_created"])
         self.assertTrue(reread["mutating_bash_refused"])
         self.assertTrue(reread["readonly_bash_ran"])
+        self.assertTrue(reread["readonly_probe_outside_workspace_ran"])
         self.assertTrue(reread["tool_events_say_ask"])
         self.assertTrue(reread["researching_phase_emitted"])
         print("\n[e2e artifact]", json.dumps(report, indent=2))

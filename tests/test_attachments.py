@@ -150,11 +150,21 @@ class AttachHandler(BaseHTTPRequestHandler):
             self.state.count += 1
             index = self.state.count
 
-        if index <= len(paths):
+        # A probe step, when a test asks for one: the model looks at the file
+        # with a shell command before it reads it.
+        probe = self.state.probe
+        file_index = index - 1 - (1 if probe else 0)
+        if probe and index == 1:
+            step = {
+                "kind": "tool",
+                "name": "bash",
+                "arguments": {"command": probe(paths[0])},
+            }
+        elif file_index < len(paths):
             step = {
                 "kind": "tool",
                 "name": "read_file",
-                "arguments": {"path": paths[index - 1]},
+                "arguments": {"path": paths[file_index]},
             }
         else:
             seen = []
@@ -190,6 +200,7 @@ class AttachState:
         self.requests = []
         self.count = 0
         self.lock = threading.Lock()
+        self.probe = None  # optional: a shell probe of the file, before the read
 
 
 class AttachE2E(unittest.TestCase):
@@ -423,6 +434,74 @@ class AttachE2E(unittest.TestCase):
                 "manifest_in_first_request": True,
                 "agent_read_the_file": "the notes the user attached"
                 in self.assistant_text(),
+            }
+        )
+
+    def test_ask_mode_probes_an_attachment_outside_the_workspace(self):
+        """Ask mode can look at a file the user attached.
+
+        The attachment is staged outside the workspace, and the probe is the
+        shape an agent reaches for: a shell variable and a merged stderr. Ask
+        mode refuses every bash command the permission layer does not rate as
+        read-only, and it refuses it before execution - so a probe read as a
+        mutation never reaches the file.
+        """
+        from harness import sandbox
+
+        meta = self.attach(
+            "attached.html", b"<html><body>attached body</body></html>", "text/html"
+        )
+
+        def probe(path):
+            return (
+                f"P1='{path}'; P2='{path}'; "
+                'ls -la "$P1" 2>&1; echo \'---\'; '
+                'head -c 6 "$P2" 2>/dev/null || head -c 6 "$P1" 2>&1'
+            )
+
+        self.state.probe = probe
+        self.open_and_submit("what is in this", attachments=[meta], mode="ask")
+        self.assertTrue(self.done())
+
+        staged = None
+        for message in self.transcript():
+            if message.get("role") != "user":
+                continue
+            for attachment in message.get("attachments") or []:
+                staged = Path(attachment["path"])
+        self.assertIsNotNone(staged, "the transcript kept the attachment metadata")
+        self.assertFalse(
+            str(staged).startswith(str(self.root)),
+            "the attachment is staged outside the workspace",
+        )
+
+        results = [
+            (str(m["payload"].get("name") or ""), str(m["payload"].get("result") or ""))
+            for m in self.sent
+            if m.get("event") == events.TOOL_RESULT
+        ]
+        probes = [result for name, result in results if name == "bash"]
+        self.assertTrue(probes, f"the probe never ran: {results}")
+        for result in probes:
+            self.assertNotIn("Ask mode", result, result)
+            self.assertNotIn("read-only", result, result)
+        if sandbox._find_bash() is not None:
+            self.assertIn(
+                "attached.html",
+                probes[0],
+                f"the probe did not read the attachment: {probes[0]}",
+            )
+
+        # The file itself was read too, and its bytes reached the answer.
+        answer = self.assistant_text()
+        self.assertIn("attached body", answer)
+
+        self.report(
+            {
+                "ask_mode_probe_outside_workspace_ran": True,
+                "ask_mode_probe_saw_the_attachment": (
+                    sandbox._find_bash() is None or "attached.html" in probes[0]
+                ),
             }
         )
 

@@ -4,6 +4,8 @@
   "a_steer_carries_its_attachment_to_the_next_call": true,
   "oversize_file_refused_by_name": true,
   "message_still_sent_after_a_refused_file": true,
+  "ask_mode_probe_outside_workspace_ran": true,
+  "ask_mode_probe_saw_the_attachment": true,
   "staged_outside_the_workspace": true,
   "source_untouched": true,
   "manifest_in_first_request": true,
