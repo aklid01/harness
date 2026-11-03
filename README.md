@@ -216,6 +216,196 @@ state, and while a request is in flight it stops that request first rather
 than letting two models write into one session. No restart is ever needed to
 recover from an upstream failure.
 
+## Multi-model review
+
+One or more reviewer models critique the change the agent just made. Each
+reviewer sees only the diff, never another reviewer's answer, and the review
+is advisory and read-only: it never edits a file by itself.
+
+Run it by hand with:
+
+```text
+/multi-modeal-review
+```
+
+The card appears in the conversation and follows the review: an offer, live
+per-model progress, the results, a partial result when one model failed, a
+failure, or a plain "nothing to review". It never blocks the agent - you can
+keep chatting, steer or queue messages while it runs, and a new agent run
+cancels a review that is still going (the card says so).
+
+Before a multi-model run the card shows what it is about to spend, in
+tokens, so the cost is never a surprise.
+
+### Settings
+
+Settings > Review holds the whole feature. Nothing is on by default.
+
+- **Reviewer models** - one row per reviewer: the model (from Settings >
+  Models, so it reuses that model's own key and settings), an optional
+  **focus** (one of the twelve targets below, or all of them), and an
+  on/off switch. A reviewer whose provider is missing, switched off or has
+  no key is flagged in the list and skipped at run time, with a note - never
+  silently dropped.
+- **After a run that edited files** - `Off` (a review only happens when you
+  ask), `Offer a card` (the card asks first) or `Start it` (it runs by
+  itself and spends a model's tokens without asking).
+- **Run the reviewers** - in parallel (they finish together and cost the
+  same) or one after another (easier to follow while they run).
+- **Severity to report** - findings below this are counted but not shown.
+- **Show the reviewers the whole file** - off sends only the diff.
+- **Limits** - maximum reviewers, maximum files, maximum diff size and
+  maximum tokens. Files over a limit are left out and named in the report.
+- **Excluded files** - one glob per line. Lockfiles, generated and vendored
+  code, build output and binary files are excluded already.
+- **Extra instructions for the reviewers** - added to every reviewer's
+  prompt.
+
+The settings live with the other role configuration in `agents.json`, which
+holds no secrets: a reviewer is named by the id it already has in
+`providers.json` and borrows the same keyring entry.
+
+### What gets reviewed
+
+| Scope | What it covers |
+| --- | --- |
+| `run` (default) | the files this agent run changed |
+| `uncommitted` | everything the working tree changed against HEAD |
+| `staged` | what is in the index, ready to commit |
+| `base:<ref>` | everything that differs from a branch or commit |
+
+In a git repository the diff comes from git itself, so a reviewer sees the
+same change `git diff` shows. Outside a repository there is no diff engine,
+so the change is reconstructed from the checkpoint journal - the before and
+after bytes the engine already keeps for every edit it makes - and the scope
+is exactly the files changed since the run's checkpoint. A repository with no
+commits, a detached HEAD and untracked files are all handled. With nothing to
+review, the engine says so and does nothing.
+
+### Review targets
+
+Every finding carries a category tag, and the reviewers must cover all
+twelve:
+
+1. `correctness` - logic errors, off-by-one, wrong conditions, unhandled
+   states, broken invariants, regressions.
+2. `error-handling` - swallowed exceptions, missing failure paths, unchecked
+   return values, unhelpful error text, missing retries or timeouts.
+3. `security` - injection, unsafe deserialization, path traversal, secrets in
+   code or logs, unsafe shell construction, missing validation, weak crypto.
+4. `performance` - needless complexity, repeated work in loops, N+1 access,
+   blocking calls in async paths, unbounded memory growth.
+5. `concurrency` - races, deadlocks, shared mutable state, leaked files or
+   processes, missing cleanup, non-idempotent retries.
+6. `quality` - duplication, dead code, god functions, deep nesting, magic
+   values, unclear names, misleading comments, leaky abstractions.
+7. `maintainability` - deviations from the project's own conventions, its
+   `AGENTS.md` rules or the patterns in neighbouring code.
+8. `tests` - new behaviour without tests, weak or tautological assertions,
+   missing edge cases, flaky patterns, tests that mask the exit code.
+9. `dependencies` - unnecessary new dependencies, version or platform
+   assumptions (including Windows paths and encoding), breaking changes to
+   stored data, missing migrations.
+10. `documentation` - undocumented behaviour, stale docs, unclear config
+    options, poor error text for developers.
+11. `observability` - missing or noisy logging, no diagnostic context,
+    sensitive data in logs.
+12. `agent-experience` - unclear tool schemas, ambiguous prompts, unbounded
+    tool output, missing budget handling, behaviour that would confuse a
+    model consuming it.
+
+The prompt that asks for all of this lives in one place:
+`harness/review/prompt.py`. That is the file to edit when the reviewers
+should look harder or softer at something.
+
+### Report format
+
+A reviewer answers with one JSON object:
+
+```json
+{
+  "findings": [
+    {
+      "category": "security",
+      "severity": "high",
+      "file": "harness/server.py",
+      "line": 812,
+      "end_line": 818,
+      "summary": "The reviewer's one-sentence summary.",
+      "why": "Why it matters: the failure it causes.",
+      "fix": "A concrete fix - a patch or a snippet.",
+      "confidence": "high"
+    }
+  ],
+  "note": "optional note about the change as a whole"
+}
+```
+
+Severity is one of `blocker`, `high`, `medium`, `low`, `nit`; confidence is
+one of `high`, `medium`, `low`. A finding must cite a line that really
+appears in the diff it was shown - anything else is discarded before it can
+reach a user, an agent or a report. A malformed reply is retried once and
+then reported as a failed review for that model rather than passed on.
+
+The merged report carries the verdict (`clean`, `suggestions` or `changes
+requested`), counts by severity and by category, the findings sorted by
+severity and then by agreement, and the per-model status (ran, skipped or
+failed, with tokens and duration). Findings two models raised at the same
+place are merged and marked as agreeing; findings two models read
+differently at the same place are both kept and labelled with each other.
+
+The report is saved with the session, so reopening a chat restores the card,
+the report and the dismissed findings. A rewind marks any review made after
+the rewind point as stale. Reports belong to one session and are never
+reachable from another.
+
+### Sending findings to the agent
+
+The card's **Apply fix** and **Send findings to the agent** hand the
+findings to the agent, which fixes them with its ordinary tools - so the
+ordinary permission check and the ordinary checkpoint both still apply. The
+card itself never edits a file. The findings reach the agent as a tool
+result, so they enter the context budget the way any tool output does:
+capped while the turn runs, stubbed once it is over, and summarised if the
+history is compacted. The agent can be told to "address the review" and
+refer to findings by id (`R1`, `R2`, ...).
+
+### Command reference
+
+```text
+/multi-modeal-review [scope] [options]
+
+  run | uncommitted | staged | base:<ref>   what to review
+  --models a,b          review with these model ids
+  --focus <target>      point one reviewer at one target
+  --severity <s>        the lowest severity to report
+  --force               run again even when nothing changed
+  --json                print the structured report
+  --help                the full text
+```
+
+The same review runs headless, for scripts and CI:
+
+```powershell
+python -m harness.review --scope uncommitted --json
+```
+
+The exit code is the verdict: `0` clean or suggestions, `1` changes
+requested, `2` no reviewer configured or none reachable, `3` nothing to
+review, `4` every reviewer failed.
+
+### Safety
+
+- Reviewed code is untrusted data. The prompt says so explicitly, and the
+  reviewers hold no tools and no shell, so an instruction inside a diff has
+  nothing to act on. The same framing protects the agent when it reads the
+  report.
+- Secrets detected in the diff are redacted before any reviewer sees them,
+  and the card says that a redaction happened. The line count never changes,
+  so a finding still points at the line it pointed at.
+- A review never reads or re-sends attached files unless they are in scope.
+- Reviewing never modifies the workspace.
+
 ## Sessions
 
 Chats live under the app data dir (`%APPDATA%\Harness\sessions\<project>\`
@@ -258,6 +448,11 @@ Tauri webview (renderer)  <-- WebSocket -->  harness/server.py  <-- events -->  
   request body for the active model.
 - `harness/errors.py` + `harness/retry.py`: failure classification and the
   bounded retry loop `call_llm` runs inside.
+- `harness/review/`: the multi-model review - what to review (`scope`), what
+  must not be sent (`redact`), the reviewer's instructions (`prompt`), what
+  a finding is and what survives validation (`findings`), merging several
+  reviewers (`aggregate`), running them (`engine`) and the saved report
+  (`report`).
 
 Possible future API clients can attach to the same event layer; none is built.
 
@@ -293,6 +488,13 @@ uv run python tests/test_paths.py             # workspace/app-data resolution
 uv run python tests/test_sandbox.py           # sandbox wrap/run
 uv run python tests/test_server_protocol.py   # sidecar ops and replies
 uv run python tests/test_attachments.py       # attach, stage, manifest, limits
+uv run python tests/test_review_scope.py      # what gets reviewed, what is skipped
+uv run python tests/test_review_prompt.py     # the twelve targets, untrusted framing
+uv run python tests/test_review_findings.py   # parsing, validation against the diff
+uv run python tests/test_review_aggregate.py  # merge, agreement, disagreement
+uv run python tests/test_review_engine.py     # parallel, partial failure, redaction
+uv run python tests/test_review_persistence.py # saved report, dismissed, stale, cache
+uv run python tests/test_review_command.py    # the command's arguments and exit codes
 ```
 
 The renderer has no unit harness, so its rules are checked end to end:
@@ -305,7 +507,13 @@ next step and surviving both the post-turn reconcile and a session switch,
 a deleted session leaving the sidebar at once (tab or no tab, workspace open
 or not), the workspace removal, the plan panel starting closed, and the
 attachment flow: picking files, taking one back, a file over the limit
-refused by name, and the accepted file travelling with its message.
+refused by name, and the accepted file travelling with its message. It
+also drives the multi-model review: the review settings and their save, a
+review with two reviewers that agree, the grouping switch, dismissing a
+finding, sending the findings to the agent and applying one fix, a partial
+result when a reviewer fails, a failed review, nothing to review, the
+automatic run after the agent edits a file, and the card coming back with
+its session.
 
 ## Notes
 
