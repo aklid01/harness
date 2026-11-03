@@ -26,3 +26,6 @@ node_modules/
 desktop/dist/
 electron/
 skills-lock.json
+
+# Code quality tooling local state
+.desloppify/
