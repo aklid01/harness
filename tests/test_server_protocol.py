@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -18,7 +19,7 @@ from harness import (
     paths,
     todos,
 )
-from harness.server import EngineService, handle_op
+from harness.server import Harness
 
 
 def fake_message(content=None, calls=()):
@@ -57,16 +58,21 @@ class ServerCase(unittest.TestCase):
         Path(self.tmp.name, "proj").mkdir(exist_ok=True)
         self.addCleanup(paths.reset)
         self.sent = []
-        self.service = EngineService(self.sent.append)
+        self.backend = Harness()
+        self.backend.attach(self.sent.append)
         for name in ("save", "compacted", "rewind_to", "ensure_title"):
             mock.patch("harness.session." + name).start()
         mock.patch("harness.session.all_sessions", return_value=[]).start()
         mock.patch("harness.session.load", return_value=[]).start()
         self.llm = mock.patch("harness.agent.call_llm").start()
         self.addCleanup(mock.patch.stopall)
+        self._req_seq = 0
 
     def tearDown(self):
-        self.service.shutdown()
+        for s in list(self.backend.sessions.values()):
+            for box, gate in list(s.pending.values()):
+                box["result"] = False
+                gate.set()
         events.reset()
         todos.TODOS[:] = []
 
@@ -78,11 +84,27 @@ class ServerCase(unittest.TestCase):
             time.sleep(0.05)
         return False
 
+    def session(self, key="tab1"):
+        s = self.backend.session(key)
+        s.root = Path(self.tmp.name) / "proj"
+        return s
+
+    def dispatch(self, obj, key="tab1"):
+        """Run one op through the backend and return its reply message."""
+        self._req_seq += 1
+        obj = dict(obj)
+        obj["req_id"] = self._req_seq
+        obj["session"] = key
+        before = len(self.sent)
+        self.backend.dispatch(obj)
+        for m in reversed(self.sent[before:]):
+            if m.get("req_id") == self._req_seq and "reply" in m:
+                return m
+        return None
+
     def test_submit_streams_events_then_done(self):
         self.llm.return_value = (fake_message("hello-sidecar"), USAGE)
-        reply = handle_op(
-            self.service, {"op": "submit", "text": "hi", "mode": "build", "req_id": 1}
-        )
+        reply = self.dispatch({"op": "submit", "text": "hi", "mode": "build"})
         self.assertTrue(reply["ok"])
         self.assertTrue(self.wait_done())
         kinds = [m.get("event") for m in self.sent]
@@ -90,63 +112,66 @@ class ServerCase(unittest.TestCase):
         self.assertIn("done", kinds)
 
     def test_second_submit_while_running_is_rejected(self):
-        self.service.running = True
-        reply = handle_op(self.service, {"op": "submit", "text": "hi", "req_id": 2})
+        self.session().running = True
+        reply = self.dispatch({"op": "submit", "text": "hi"})
         self.assertFalse(reply["ok"])
 
     def test_unknown_op_errors(self):
-        reply = handle_op(self.service, {"op": "nope", "req_id": 3})
+        reply = self.dispatch({"op": "nope"})
         self.assertFalse(reply["ok"])
 
     def test_get_context_reports_project_and_git(self):
-        reply = handle_op(self.service, {"op": "get_context", "req_id": 4})
+        self.session()
+        reply = self.dispatch({"op": "get_context"})
         self.assertTrue(reply["ok"])
         self.assertIn("project", reply["data"])
         for key in ("has_git", "branch", "default_branch", "is_protected"):
             self.assertIn(key, reply["data"])
 
     def test_git_status_without_repo(self):
-        reply = handle_op(self.service, {"op": "git_status", "req_id": 5})
+        self.session()
+        reply = self.dispatch({"op": "git_status"})
         self.assertTrue(reply["ok"])
         self.assertFalse(reply["data"]["has_git"])
         self.assertFalse(reply["data"]["is_protected"])
 
     def test_rewind_to_truncates_runner(self):
-
-        self.service.runner = SimpleNamespace(
+        s = self.session()
+        s.session_id = "abc"
+        s.runner = SimpleNamespace(
             messages=[{"role": "user", "content": c} for c in "abcd"]
         )
-        reply = handle_op(self.service, {"op": "rewind_to", "count": 2, "req_id": 6})
+        reply = self.dispatch({"op": "rewind_to", "count": 2})
         self.assertTrue(reply["ok"])
-        self.assertEqual(len(self.service.runner.messages), 2)
+        self.assertEqual(len(s.runner.messages), 2)
         kinds = [m.get("event") for m in self.sent]
         self.assertIn(events.SESSION, kinds)
 
     def test_rewind_to_rejected_while_running(self):
-        self.service.running = True
-        reply = handle_op(self.service, {"op": "rewind_to", "count": 1, "req_id": 7})
+        self.session().running = True
+        reply = self.dispatch({"op": "rewind_to", "count": 1})
         self.assertFalse(reply["ok"])
 
     def test_resend_rewinds_then_turns(self):
         self.llm.return_value = (fake_message("redone"), USAGE)
-        self.service.runner = SimpleNamespace(
+        s = self.session()
+        s.session_id = "abc"
+        s.runner = SimpleNamespace(
             messages=[
                 {"role": "user", "content": "a"},
                 {"role": "assistant", "content": "b"},
             ],
             mode="build",
-            handle_input=lambda text: self.service.runner.messages.append(
+            handle_input=lambda text, attachments=None: s.runner.messages.append(
                 {"role": "user", "content": text}
             ),
         )
-        reply = handle_op(
-            self.service, {"op": "resend", "count": 1, "text": "a2", "req_id": 8}
-        )
+        reply = self.dispatch({"op": "resend", "count": 1, "text": "a2"})
         self.assertTrue(reply["ok"])
         self.assertTrue(self.wait_done())
         bodies = [
             m.get("content")
-            for m in self.service.runner.messages
+            for m in s.runner.messages
             if m.get("role") == "user"
         ]
         self.assertEqual(bodies, ["a", "a2"])
@@ -154,6 +179,8 @@ class ServerCase(unittest.TestCase):
     def test_title_set_once_and_never_overwritten(self):
         from harness import session as session_mod
 
+        s = self.session()
+        s.session_id = "abc"
         with (
             mock.patch.object(session_mod, "_titles", return_value={}),
             mock.patch.object(
@@ -166,36 +193,37 @@ class ServerCase(unittest.TestCase):
             ) as suggest,
             mock.patch.object(session_mod, "set_title") as set_title,
         ):
-            self.service._maybe_title()
-            for _ in range(100):
-                if set_title.called:
-                    break
-                time.sleep(0.05)
+            s._maybe_title()
+            s.join_background(timeout=5)
             self.assertTrue(set_title.called)
             self.assertEqual(suggest.call_count, 1)
         with (
             mock.patch.object(
-                session_mod, "_titles", return_value={session_mod.CURRENT: "User name"}
+                session_mod, "_titles", return_value={s.session_id: "User name"}
             ),
             mock.patch("harness.providers.suggest_title") as suggest2,
             mock.patch.object(session_mod, "set_title") as set_title2,
         ):
-            self.service._maybe_title()
-            time.sleep(0.3)
+            s._maybe_title()
+            s.join_background(timeout=5)
             suggest2.assert_not_called()
             set_title2.assert_not_called()
 
     def test_approval_reply_unblocks_engine(self):
-        import threading
-
+        s = self.session()
         seen = []
-        orig = self.service._send
-        self.service._send = lambda obj: (seen.append(obj), orig(obj))
+        orig = s._send
+
+        def spy(body):
+            seen.append(body)
+            orig(body)
+
+        s._send = spy
 
         outcome = {}
 
         def asker():
-            outcome["value"] = self.service._respond(
+            outcome["value"] = s.on_interact(
                 events.APPROVAL, {"reason": "run: echo hi"}
             )
 
@@ -210,9 +238,8 @@ class ServerCase(unittest.TestCase):
                     break
             time.sleep(0.05)
         self.assertIsNotNone(req_id)
-        reply = handle_op(
-            self.service,
-            {"op": "approval_reply", "id": req_id, "allow": False, "req_id": 9},
+        reply = self.dispatch(
+            {"op": "approval_reply", "id": req_id, "allow": False}
         )
         self.assertTrue(reply["ok"])
         waiter.join(timeout=5)
