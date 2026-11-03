@@ -57,9 +57,10 @@ pub fn start(
     project_root: &Path,
     data_dir: &Path,
     log_path: &Path,
+    auth_token: &str,
 ) -> std::io::Result<Sidecar> {
     let log = open_log(log_path);
-    let args = backend_args(port, project_root, data_dir);
+    let args = backend_args(port, project_root, data_dir, auth_token);
     let venv = crate::paths::venv_python(repo);
     log_line(
         &log,
@@ -93,7 +94,7 @@ pub fn start(
     Ok(Sidecar { child })
 }
 
-fn backend_args(port: u16, project_root: &Path, data_dir: &Path) -> Vec<String> {
+fn backend_args(port: u16, project_root: &Path, data_dir: &Path, auth_token: &str) -> Vec<String> {
     vec![
         "-m".to_string(),
         "harness.server".to_string(),
@@ -103,7 +104,18 @@ fn backend_args(port: u16, project_root: &Path, data_dir: &Path) -> Vec<String> 
         project_root.to_string_lossy().to_string(),
         "--app-data-dir".to_string(),
         data_dir.to_string_lossy().to_string(),
+        "--auth-token".to_string(),
+        auth_token.to_string(),
     ]
+}
+
+/* One-time token for the loopback socket: 128 bits from the OS. A browser
+page can open a websocket to 127.0.0.1 but cannot know this, so the sidecar
+only talks to the shell that spawned it. */
+pub fn new_token() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("OS entropy for the sidecar auth token");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn uv_available() -> bool {

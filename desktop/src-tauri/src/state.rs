@@ -16,6 +16,7 @@ pub struct AppState {
     pub project_root: PathBuf,
     pub data_root: PathBuf,
     pub log_path: PathBuf,
+    pub auth_token: String,
     pub sidecar: Mutex<Option<Sidecar>>,
     shutting_down: AtomicBool,
 }
@@ -56,6 +57,7 @@ pub fn bootstrap() -> AppState {
         project_root,
         data_root,
         log_path: logs.join("sidecar.log"),
+        auth_token: sidecar::new_token(),
         sidecar: Mutex::new(None),
         shutting_down: AtomicBool::new(false),
     }
@@ -74,6 +76,7 @@ pub fn spawn_sidecar(app: AppHandle) {
             &state.project_root,
             &data_dir,
             &state.log_path,
+            &state.auth_token,
         );
 
         match started {
@@ -168,6 +171,7 @@ fn monitor_sidecar(app: AppHandle) {
             &state.project_root,
             &data_dir,
             &state.log_path,
+            &state.auth_token,
         ) {
             Ok(child) => {
                 if let Ok(mut slot) = state.sidecar.lock() {

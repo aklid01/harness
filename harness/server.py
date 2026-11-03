@@ -814,12 +814,18 @@ class Session:
                         body.update(payload or {})
                         self.on_event(events.REVIEW, body)
 
-                    document = review_engine.run(
+                    scope = review_scope.detect_for_settings(
                         root,
-                        session_id,
+                        settings,
                         mode=mode,
                         base=base,
                         only_paths=only_paths,
+                        session_id=session_id,
+                    )
+                    document = review_engine.run(
+                        root,
+                        session_id,
+                        scope=scope,
                         reviewers=reviewers,
                         settings=settings,
                         emit=emit,
@@ -1214,11 +1220,19 @@ class Harness:
             )
         if op == "set_permissions":
             mode = obj.get("mode", "default")
-            if mode in permissions_mod.MODES:
-                s.perms = mode
-                # Live: a turn already running will honour this on its next
-                # permission check, so the user can relax or tighten mid-work.
-                s._mode_ref.value = mode
+            if mode not in permissions_mod.MODES:
+                return R(
+                    {
+                        "reply": op,
+                        "ok": False,
+                        "error": f"unknown permission mode: {mode} - use one of "
+                        + ", ".join(permissions_mod.MODES),
+                    }
+                )
+            s.perms = mode
+            # Live: a turn already running will honour this on its next
+            # permission check, so the user can relax or tighten mid-work.
+            s._mode_ref.value = mode
             return R({"reply": op, "ok": True})
         if op == "set_active":
             ok = providers_mod.set_active(obj.get("id"))
@@ -1272,16 +1286,22 @@ class Harness:
             return {"reply": op, "ok": bool(cancelled)}
 
         if op == "review_start":
-            args = dict(obj.get("args") or {})
-            args.setdefault("scope", "run")
-            if obj.get("models"):
-                args["models"] = list(obj["models"])
-            if obj.get("focus"):
-                args["focus"] = obj["focus"]
-            if obj.get("severity"):
-                args["severity"] = obj["severity"]
-            if obj.get("force"):
-                args["force"] = True
+            from .review import command as review_command
+
+            # The card sends its own preset plus top-level overrides; only
+            # keys of the shared request shape survive, anything else the
+            # renderer adds is dropped rather than passed on blind.
+            preset = obj.get("args") or {}
+            args = review_command.new_args(
+                scope=preset.get("scope") or "run",
+                base=preset.get("base") or "",
+                json=bool(preset.get("json")),
+                paths=preset.get("paths"),
+                models=list(obj.get("models") or []),
+                focus=obj.get("focus") or "",
+                severity=obj.get("severity") or "",
+                force=bool(obj.get("force")),
+            )
             started = s.start_review(args, triggered_by="manual")
             return {"reply": op, "ok": bool(started)}
 
@@ -1424,7 +1444,7 @@ def get_backend() -> Harness:
     return _BACKEND
 
 
-async def serve(host="127.0.0.1", port=8765):
+async def serve(host="127.0.0.1", port=8765, auth_token=None):
     import websockets
 
     backend = get_backend()
@@ -1432,48 +1452,59 @@ async def serve(host="127.0.0.1", port=8765):
     async def handler(ws):
         loop = asyncio.get_running_loop()
 
+        if auth_token:
+            # The loopback socket would otherwise answer any local process -
+            # or any web page, which may open websockets to 127.0.0.1. The
+            # shell that spawned us knows a one-time token; until a connection
+            # presents it, nothing is sent and no op is dispatched. A wrong
+            # token is closed silently: with 128 bits there is nothing to
+            # guess and no oracle to help a guesser.
+            try:
+                first = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+            except (asyncio.TimeoutError, ValueError, OSError):
+                return
+            if not (isinstance(first, dict) and first.get("auth") == auth_token):
+                return
+
         def send_json(obj):
             asyncio.run_coroutine_threadsafe(
                 ws.send(json.dumps(obj, ensure_ascii=False)), loop
             )
 
         backend.attach(send_json)
-        try:
-            await ws.send(
-                json.dumps(
-                    {
-                        "ready": {
-                            "project": paths_mod.project_name(),
-                            "project_root": str(paths_mod.project_root()),
-                        }
+        await ws.send(
+            json.dumps(
+                {
+                    "ready": {
+                        "project": paths_mod.project_name(),
+                        "project_root": str(paths_mod.project_root()),
                     }
-                )
+                }
             )
-            async for raw in ws:
+        )
+        async for raw in ws:
+            try:
+                obj = json.loads(raw)
+            except ValueError:
+                continue
+            try:
+                await loop.run_in_executor(None, backend.dispatch, obj)
+            except Exception as failure:  # noqa: BLE001 - one bad op must
+                # never take down the shared socket: every tab loses its
+                # stream and any running turn's output with it.
                 try:
-                    obj = json.loads(raw)
-                except ValueError:
-                    continue
-                try:
-                    await loop.run_in_executor(None, backend.dispatch, obj)
-                except Exception as failure:  # noqa: BLE001 - one bad op must
-                    # never take down the shared socket: every tab loses its
-                    # stream and any running turn's output with it.
-                    try:
-                        await ws.send(
-                            json.dumps(
-                                {
-                                    "event": "error",
-                                    "payload": {
-                                        "text": f"{type(failure).__name__}: {failure}"
-                                    },
-                                }
-                            )
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "event": "error",
+                                "payload": {
+                                    "text": f"{type(failure).__name__}: {failure}"
+                                },
+                            }
                         )
-                    except Exception:
-                        pass
-        finally:
-            pass
+                    )
+                except Exception:
+                    pass
 
     try:
         server = await websockets.serve(handler, host, port)
@@ -1496,6 +1527,12 @@ def main(argv=None):
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--project-root", default=None)
     parser.add_argument("--app-data-dir", default=None)
+    parser.add_argument(
+        "--auth-token",
+        default=None,
+        help="one-time token the shell passes; required as the first frame on "
+        "every connection. Omitted only by dev/test runs.",
+    )
     args = parser.parse_args(argv)
 
     from . import config as config_mod
@@ -1510,7 +1547,7 @@ def main(argv=None):
     # it any more, and it must not outlive the process that owned it.
     attachments_mod.clear_staging()
     get_backend()
-    asyncio.run(serve(args.host, args.port))
+    asyncio.run(serve(args.host, args.port, auth_token=args.auth_token))
 
 
 if __name__ == "__main__":

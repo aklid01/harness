@@ -394,6 +394,9 @@ let bootPort = location.search
   ? (new URLSearchParams(location.search).get("port") ?? "8765")
   : "8765";
 let bootRoot = new URLSearchParams(location.search).get("projectRoot") ?? "";
+/* Set by the shell config; a dev/test host booted from the URL has none, and
+   the sidecar it points at was started without --auth-token too. */
+let bootToken = "";
 
 /* shared (app-wide) */
 let recents: WorkspaceRef[] = [];
@@ -3902,6 +3905,9 @@ function connect(): void {
   sharedWs = sock;
   sock.onopen = () => {
     if (gen !== wsGen) return;
+    // Frame one must be the auth token: the sidecar reads exactly one frame
+    // before it accepts anything else, so this goes out before any op can.
+    if (bootToken) sock.send(JSON.stringify({ auth: bootToken }));
     connected = true;
     dlog("ws", "WS-OPEN");
     if (activeCtx)
@@ -6248,6 +6254,7 @@ function boot(source: string): void {
 window.harness?.onConfig((cfg) => {
   if (cfg.projectRoot) bootRoot = cfg.projectRoot;
   if (cfg.port) bootPort = String(cfg.port);
+  if (cfg.authToken) bootToken = cfg.authToken;
   boot("ipc");
 });
 setTimeout(() => {

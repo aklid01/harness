@@ -12,6 +12,7 @@ use crate::state::AppState;
 pub struct SidecarConfig {
     pub port: u16,
     pub project_root: String,
+    pub auth_token: String,
 }
 
 #[derive(serde::Serialize)]
@@ -42,6 +43,7 @@ pub fn sidecar_config(state: State<'_, AppState>) -> SidecarConfig {
     SidecarConfig {
         port: state.port,
         project_root: state.project_root.to_string_lossy().to_string(),
+        auth_token: state.auth_token.clone(),
     }
 }
 
