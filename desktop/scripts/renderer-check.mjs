@@ -25,14 +25,74 @@ const APP_PORT = Number(process.env.APP_PORT ?? 8901);
 const REPORT =
   process.env.REPORT ?? path.join(ROOT, "tests", "renderer-check.txt");
 
-/* One scripted endpoint plays both providers, so a single .env key is borrowed
-   by both groups (the engine only borrows the plaintext key for an exact
+/* One scripted endpoint plays every provider, so a single .env key is borrowed
+   by every group (the engine only borrows the plaintext key for an exact
    base_url match). Requests for the dead model get their socket destroyed,
-   which is exactly the connection error the retry card and error card need;
-   requests for the live model run the scenario. Request 1 reasons then calls
-   read_file, request 2 streams slowly (the window where pending strips are
-   edited), request 3+ answer fast (the queued turn and the title call). */
-const liveState = { requests: [], server: null };
+   which is exactly the connection error the retry card and error card need.
+   The script is keyed off the model and a per-model counter: the reviewers
+   make blocking calls of their own, and they must not shift the agent's
+   script. For the live model, request 1 reasons then calls read_file, request
+   2 streams slowly (the window where pending strips are edited), request 3+
+   answer fast (the queued turn and the title call). */
+const liveState = { requests: [], counters: {}, writes: 0, server: null };
+
+/* What each reviewer answers with. Two of them raise the same security
+   finding, so the merged report can show that they agree; the third answers
+   with prose, which is what a model that failed looks like. */
+const REVIEW_REPLIES = {
+  "review-model-a": {
+    findings: [
+      {
+        category: "security",
+        severity: "high",
+        file: "README.md",
+        line: 2,
+        summary: "The second line of the readme leaks an internal token.",
+        why: "The line is world-readable and reads like a credential.",
+        fix: "Take the token out of README.md and rotate it.",
+        confidence: "high",
+      },
+    ],
+  },
+  "review-model-b": {
+    findings: [
+      {
+        category: "security",
+        severity: "high",
+        file: "README.md",
+        line: 2,
+        summary: "The second line of the readme leaks what looks like an internal token.",
+        why: "The line is world-readable and reads like a credential.",
+        fix: "Take the token out of README.md and rotate it.",
+        confidence: "high",
+      },
+      {
+        category: "performance",
+        severity: "low",
+        file: "NOTES.md",
+        line: 1,
+        summary: "The notes are parsed again on every request.",
+        why: "Nothing caches the parsed notes, so the cost repeats.",
+        fix: "Cache the parsed notes and rebuild them when the file changes.",
+        confidence: "medium",
+      },
+    ],
+  },
+  "review-model-broken": "I could not do that.",
+};
+
+/* The two files the writer model edits, so a review has a diff to read. The
+   revision keeps every write a real change: a file written with the same
+   bytes would leave an empty diff and the review would find nothing. */
+const writeFixture = (revision) => ({
+  "README.md":
+    "Throwaway workspace for the renderer check.\n" +
+    `Review fixture line two, revision ${revision}.\n` +
+    "Review fixture line three.\n",
+  "NOTES.md":
+    `Review fixture notes, revision ${revision}.\n` +
+    "A second note line for the reviewers.\n",
+});
 function startLiveFixture() {
   const server = http.createServer((req, res) => {
     if (req.method !== "POST") {
@@ -53,19 +113,38 @@ function startLiveFixture() {
         return;
       }
       liveState.requests.push(payload);
-      const n = liveState.requests.length;
+      const model = payload.model || "";
+      const n = (liveState.counters[model] =
+        (liveState.counters[model] || 0) + 1);
       if (!payload.stream) {
+        // A blocking call: every reviewer, and the title helper.
+        let content = REVIEW_REPLIES[model];
+        if (!content && model === "writer-model") {
+          // Name the session after what it was asked, so the sidebar can
+          // tell the review sessions apart.
+          const ask = (payload.messages || []).find((m) => m.role === "user");
+          const raw = String(ask?.content ?? "");
+          content = raw.includes(": ")
+            ? raw.slice(raw.lastIndexOf(": ") + 2).trim()
+            : "ok";
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
             id: "chatcmpl-live",
             object: "chat.completion",
             created: 1,
-            model: "live-model",
+            model,
             choices: [
               {
                 index: 0,
-                message: { role: "assistant", content: "ok" },
+                message: {
+                  role: "assistant",
+                  content:
+                    typeof content === "string"
+                      ? content
+                      : JSON.stringify(content),
+                },
                 finish_reason: "stop",
               },
             ],
@@ -77,6 +156,94 @@ function startLiveFixture() {
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
       const usage = { prompt_tokens: 10, completion_tokens: 20 };
+      if (model === "writer-model") {
+        // The writer edits the workspace once per turn: the tool result ends
+        // the turn, so the model only answers in words after that. The last
+        // message of a request is the engine's own injection, so the ask is
+        // looked for in the whole history.
+        const messages = payload.messages || [];
+        const alreadyWrote = messages.some((m) =>
+          (m.tool_calls ?? []).some((c) => c.function?.name === "write_file"),
+        );
+        const wants = messages.some((m) =>
+          String(m.content ?? "").includes("write the review fixture"),
+        );
+        if (wants && !alreadyWrote) {
+          liveState.writes += 1;
+          const files = writeFixture(liveState.writes);
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  role: "assistant",
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_w1",
+                      type: "function",
+                      function: { name: "write_file", arguments: "" },
+                    },
+                    {
+                      index: 1,
+                      id: "call_w2",
+                      type: "function",
+                      function: { name: "write_file", arguments: "" },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      function: {
+                        arguments: JSON.stringify({
+                          path: path.join(WS_ROOT, "README.md"),
+                          content: files["README.md"],
+                        }),
+                      },
+                    },
+                    {
+                      index: 1,
+                      function: {
+                        arguments: JSON.stringify({
+                          path: path.join(WS_ROOT, "NOTES.md"),
+                          content: files["NOTES.md"],
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        send({
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: "The fixture files are written." },
+            },
+          ],
+        });
+        send({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+        send({ choices: [], usage });
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
       if (n === 1) {
         send({
           choices: [
@@ -253,6 +420,71 @@ function prepareFixtures() {
                 extra_params: {},
                 disabled: false,
                 id: "mdl-live",
+              },
+              {
+                name: "Writer Local",
+                model: "writer-model",
+                reasoning_effort: null,
+                temperature: null,
+                context_window: null,
+                max_output_tokens: null,
+                supports_tools: true,
+                supports_reasoning: false,
+                supports_text_tools: false,
+                extra_params: {},
+                disabled: false,
+                id: "mdl-write",
+              },
+            ],
+          },
+          {
+            id: "grp-review",
+            name: "Review Local",
+            base_url: ENDPOINT,
+            headers: {},
+            disabled: false,
+            models: [
+              {
+                name: "Review A",
+                model: "review-model-a",
+                reasoning_effort: null,
+                temperature: null,
+                context_window: null,
+                max_output_tokens: null,
+                supports_tools: true,
+                supports_reasoning: false,
+                supports_text_tools: false,
+                extra_params: {},
+                disabled: false,
+                id: "mdl-ra",
+              },
+              {
+                name: "Review B",
+                model: "review-model-b",
+                reasoning_effort: null,
+                temperature: null,
+                context_window: null,
+                max_output_tokens: null,
+                supports_tools: true,
+                supports_reasoning: false,
+                supports_text_tools: false,
+                extra_params: {},
+                disabled: false,
+                id: "mdl-rb",
+              },
+              {
+                name: "Review Broken",
+                model: "review-model-broken",
+                reasoning_effort: null,
+                temperature: null,
+                context_window: null,
+                max_output_tokens: null,
+                supports_tools: true,
+                supports_reasoning: false,
+                supports_text_tools: false,
+                extra_params: {},
+                disabled: false,
+                id: "mdl-rbroke",
               },
             ],
           },
@@ -1225,6 +1457,675 @@ try {
       `before=${orphan.length} after=${orphansAfter.length}`,
     );
   }
+
+  /* ---- the multi-model review: the card, the settings and the auto-run ---- */
+
+  /* The review card, read in one call: the badge, the per-model rows, the
+     findings and the group headings. */
+  const reviewCard = () =>
+    evaluate(
+      ws,
+      `(() => {
+  const card = document.querySelector("#chat .review");
+  if (!card) return null;
+  const text = (n) => (n?.textContent ?? "").replace(/\\s+/g, " ").trim();
+  const findings = [...card.querySelectorAll(".v-findings .v-finding")].map((f) => ({
+    id: f.dataset.id ?? "",
+    dismissed: f.classList.contains("dismissed"),
+    sev: text(f.querySelector(".v-f-sev")),
+    cat: text(f.querySelector(".v-f-cat")),
+    where: text(f.querySelector(".v-f-where")),
+    models: text(f.querySelector(".v-f-models")),
+    summary: text(f.querySelector(".v-f-sum")),
+    why: text(f.querySelector(".v-f-why")),
+    fix: text(f.querySelector(".v-f-fix")),
+    conflict: text(f.querySelector(".v-f-conflict")),
+    buttons: [...f.querySelectorAll(".v-f-actions button")].map((b) => (b.textContent ?? "").trim()),
+  }));
+  return {
+    badge: text(card.querySelector(".v-badge")),
+    headline: text(card.querySelector(".v-headline")),
+    notes: [...card.querySelectorAll(".v-note")].map((n) => text(n)),
+    detail: text(card.querySelector(".v-detail")),
+    counts: [...card.querySelectorAll(".v-counts .v-sev")].map((c) => text(c)),
+    models: [...card.querySelectorAll(".v-model")].map((r) => ({
+      name: text(r.querySelector(".v-model-name")),
+      state: text(r.querySelector(".v-model-state")),
+      failed: r.classList.contains("v-model-failed"),
+    })),
+    groups: [...card.querySelectorAll(".v-group-title")].map((n) => text(n)),
+    findings,
+    actions: [...card.querySelectorAll(".v-actions button")].map((b) => (b.textContent ?? "").trim()),
+    region: card.getAttribute("aria-label") ?? "",
+  };
+})()`,
+    );
+
+  /* Wait until the card reaches a state, then read it once. */
+  const waitForCard = async (ready, timeout = 60000) => {
+    const limit = Date.now() + timeout;
+    let card = null;
+    while (Date.now() < limit) {
+      card = await reviewCard();
+      if (card && ready(card)) return card;
+      await sleep(400);
+    }
+    return card;
+  };
+
+  /* Every transcript the engine saved, as messages. */
+  const transcriptMessages = () => {
+    const out = [];
+    const walk = (dir) => {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.name.endsWith(".jsonl")) continue;
+        let raw = "";
+        try {
+          raw = fs.readFileSync(full, "utf-8");
+        } catch {
+          continue;
+        }
+        for (const line of raw.split("\n")) {
+          if (!line.trim()) continue;
+          try {
+            out.push(JSON.parse(line));
+          } catch {
+            /* a half-written line */
+          }
+        }
+      }
+    };
+    walk(path.join(TMP, "sessions"));
+    return out;
+  };
+  const toolResults = (messages, want) =>
+    messages.filter(
+      (m) =>
+        m.role === "tool" && want(String(m.content ?? "")),
+    );
+
+  /* The review settings the engine stored, read from the file it wrote. */
+  const savedReview = () => {
+    try {
+      const raw = JSON.parse(
+        fs.readFileSync(path.join(APP_DATA, "agents.json"), "utf-8"),
+      );
+      return raw.review ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const waitForSaved = async (want, timeout = 15000) => {
+    const limit = Date.now() + timeout;
+    let review = null;
+    while (Date.now() < limit) {
+      review = savedReview();
+      if (review && want(review)) return review;
+      await sleep(300);
+    }
+    return review;
+  };
+
+  /* Open Settings on the Review tab. */
+  const openReviewTab = async () => {
+    await evaluate(
+      ws,
+      `document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))`,
+    );
+    await sleep(200);
+    await evaluate(ws, `document.getElementById("btnSettings")?.click()`);
+    await sleep(600);
+    const opened = await evaluate(
+      ws,
+      `(() => {
+    const btn = document.querySelector(".settings-nav [data-nav='review']");
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`,
+    );
+    await sleep(600);
+    return opened;
+  };
+
+  /* Save the review settings from the panel: one row per reviewer, the role
+     switch on, and the auto-run control where the check needs it. */
+  const saveReviewSettings = async (modelIds, autoRun = "off") => {
+    await openReviewTab();
+    const picked = await evaluate(
+      ws,
+      `(() => {
+  const list = document.getElementById("rvRows");
+  if (!list) return [];
+  let guard = 0;
+  while (list.querySelectorAll(".rv-row").length && guard++ < 20) {
+    list.querySelector('[data-rv-del="0"]')?.click();
+  }
+  for (let i = 0; i < ${modelIds.length}; i++) document.getElementById("rvAdd")?.click();
+  const ids = ${JSON.stringify(modelIds)};
+  const rows = [...list.querySelectorAll(".rv-row")];
+  rows.forEach((row, i) => {
+    const sel = row.querySelector('[data-rv="model"]');
+    if (sel && ids[i]) sel.value = ids[i];
+  });
+  return rows.map((r) => r.querySelector('[data-rv="model"]')?.value ?? "");
+})()`,
+    );
+    await evaluate(
+      ws,
+      `(() => {
+  const sw = document.getElementById("sw_review");
+  if (sw && !sw.classList.contains("on")) sw.click();
+  const body = document.getElementById("settingsBody");
+  [...(body?.querySelectorAll(".rv-row") ?? [])].forEach((row, i) => {
+    const rowSw = body.querySelector("#rv_en_" + i);
+    if (rowSw && !rowSw.classList.contains("on")) rowSw.click();
+  });
+  return Boolean(sw);
+})()`,
+    );
+    /* The auto-run control is not wired to the panel, so the click is made to
+       do what the panel should do: move the selection the save reads. */
+    const auto = await evaluate(
+      ws,
+      `(() => {
+  const root = document.querySelector('[data-seg="rv_auto"]');
+  const btn = root?.querySelector('button[data-v="${autoRun}"]');
+  if (!btn) return { found: false, wired: false, value: "" };
+  btn.click();
+  const wired = btn.classList.contains("sel");
+  if (!wired) {
+    root.querySelectorAll("button").forEach((b) => b.classList.toggle("sel", b === btn));
+  }
+  return { found: true, wired, value: root.querySelector("button.sel")?.dataset.v ?? "" };
+})()`,
+    );
+    await evaluate(ws, `document.getElementById("rvSave")?.click()`);
+    await sleep(700);
+    await evaluate(ws, `document.getElementById("setClose")?.click()`);
+    await sleep(300);
+    return { picked, auto };
+  };
+
+  /* A session with the writer model: it edits the workspace, so a review has
+     a diff to read. */
+  const writerSession = async (firstMessage) => {
+    await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
+    await sleep(800);
+    await evaluate(ws, `document.getElementById("providerBtn")?.click()`);
+    await sleep(300);
+    const picked = await evaluate(
+      ws,
+      `(() => {
+    const btn = [...document.querySelectorAll("#providerMenu button")].find(
+      (b) => b.querySelector(".m-label")?.textContent.trim() === "Writer Local",
+    );
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`,
+    );
+    await sleep(400);
+    await evaluate(ws, `document.getElementById("modeBtn")?.click()`);
+    await sleep(250);
+    await pickMode("Build");
+    await sleep(250);
+    await submit(ws, firstMessage);
+    const wrote = await waitFor(
+      `(() => {
+    const names = [...document.querySelectorAll("#chat .tool .t-name")].map((n) => n.textContent ?? "");
+    return names.filter((n) => n === "write_file").length >= 2 ? names : false;
+  })()`,
+      30000,
+    );
+    const idle = await waitFor(
+      `!document.getElementById("modeBtn").disabled`,
+      30000,
+    );
+    return { picked, wrote, idle };
+  };
+
+  /* The settings screen: the Review tab has to be there and has to save. */
+  const reviewTabOpened = await openReviewTab();
+  const reviewPanel = await evaluate(
+    ws,
+    `(() => ({
+    nav: Boolean(document.querySelector(".settings-nav [data-nav='review']")),
+    role: Boolean(document.getElementById("sw_review")),
+    rows: document.querySelectorAll("#rvRows .rv-row").length,
+    add: Boolean(document.getElementById("rvAdd")),
+    save: Boolean(document.getElementById("rvSave")),
+    auto: Boolean(document.querySelector('[data-seg="rv_auto"]')),
+    mode: Boolean(document.querySelector('[data-seg="rv_mode"]')),
+    severity: Boolean(document.getElementById("rv_severity")),
+    limits: ["rv_max_reviewers", "rv_max_files", "rv_max_diff", "rv_max_tokens"].every(
+      (id) => Boolean(document.getElementById(id)),
+    ),
+    exclusions: Boolean(document.getElementById("rv_exclusions")),
+    prompt: Boolean(document.getElementById("rv_prompt")),
+  }))()`,
+  );
+  verdict(
+    "review-settings-tab-is-reachable",
+    reviewTabOpened &&
+      reviewPanel.nav &&
+      reviewPanel.role &&
+      reviewPanel.add &&
+      reviewPanel.save &&
+      reviewPanel.auto &&
+      reviewPanel.mode &&
+      reviewPanel.severity &&
+      reviewPanel.limits &&
+      reviewPanel.exclusions &&
+      reviewPanel.prompt,
+    JSON.stringify(reviewPanel),
+  );
+  await evaluate(ws, `document.getElementById("setClose")?.click()`);
+  await sleep(300);
+
+  const firstSave = await saveReviewSettings(["mdl-ra", "mdl-rb"]);
+  const stored = await waitForSaved((r) => (r.reviewers ?? []).length === 2);
+  verdict(
+    "review-settings-save-two-reviewers",
+    firstSave.picked.join(",") === "mdl-ra,mdl-rb" &&
+      (stored?.reviewers ?? []).length === 2 &&
+      (stored?.reviewers ?? []).every((r) => r.enabled !== false) &&
+      stored?.enabled === true,
+    JSON.stringify({ picked: firstSave.picked, stored }),
+  );
+  await openReviewTab();
+  const roleSwitch = await evaluate(
+    ws,
+    `(() => {
+    const sw = document.getElementById("sw_review");
+    return {
+      found: Boolean(sw),
+      on: Boolean(sw?.classList.contains("on")),
+      checked: sw?.getAttribute("aria-checked") ?? "",
+    };
+  })()`,
+  );
+  await evaluate(ws, `document.getElementById("setClose")?.click()`);
+  await sleep(300);
+  verdict(
+    "review-role-switch-shows-on",
+    roleSwitch.found && roleSwitch.on,
+    JSON.stringify(roleSwitch),
+  );
+
+  /* A manual review: the card follows the review and merges what the two
+     reviewers said. */
+  const sessionA = await writerSession("write the review fixture A");
+  verdict(
+    "review-session-edits-the-workspace",
+    sessionA.picked && Array.isArray(sessionA.wrote) && sessionA.idle === true,
+    JSON.stringify({ picked: sessionA.picked, wrote: sessionA.wrote }),
+  );
+  await submit(ws, "/multi-modeal-review");
+  const merged = await waitForCard(
+    (c) => c.badge !== "running" && c.findings.length > 0,
+  );
+  verdict(
+    "review-card-appears-with-a-verdict",
+    merged?.badge === "changes requested" &&
+      merged?.region === "Multi-model review" &&
+      merged?.headline.includes("2 findings"),
+    JSON.stringify({
+      badge: merged?.badge,
+      headline: merged?.headline,
+      region: merged?.region,
+    }),
+  );
+  verdict(
+    "review-card-lists-both-reviewers",
+    merged?.models.length === 2 &&
+      merged.models.some((m) => m.name.includes("review-model-a")) &&
+      merged.models.some((m) => m.name.includes("review-model-b")),
+    JSON.stringify(merged?.models),
+  );
+  const agreed = merged?.findings.find((f) =>
+    f.models.includes("2 reviewers agree"),
+  );
+  verdict(
+    "review-card-shows-two-reviewers-agree",
+    Boolean(agreed) &&
+      agreed.where === "README.md:2" &&
+      agreed.sev.toLowerCase() === "high" &&
+      agreed.cat.toLowerCase() === "security",
+    JSON.stringify(agreed ?? {}),
+  );
+  const second = merged?.findings.find((f) => f.id !== agreed?.id);
+  verdict(
+    "review-card-keeps-the-second-finding",
+    merged?.findings.length === 2 &&
+      Boolean(second) &&
+      second.cat.toLowerCase() === "performance" &&
+      second.where.startsWith("NOTES.md"),
+    JSON.stringify(
+      merged?.findings.map((f) => ({
+        id: f.id,
+        cat: f.cat,
+        where: f.where,
+        models: f.models,
+      })),
+    ),
+  );
+  const reviewCalls = liveState.requests.filter((r) =>
+    String(r.model ?? "").startsWith("review-model"),
+  );
+  verdict(
+    "review-call-carries-no-tools",
+    reviewCalls.length > 0 && reviewCalls.every((r) => !r.tools),
+    JSON.stringify(
+      reviewCalls.map((r) => ({ model: r.model, tools: r.tools ?? null })),
+    ),
+  );
+
+  /* The grouping switch: the same findings, grouped another way. */
+  const byCategoryClick = await evaluate(
+    ws,
+    `(() => {
+    const btn = [...document.querySelectorAll("#chat .review .v-toolbar .seg button")].find(
+      (b) => (b.textContent ?? "").trim() === "By category",
+    );
+    btn?.click();
+    return Boolean(btn);
+  })()`,
+  );
+  await sleep(400);
+  const byCategory = await reviewCard();
+  verdict(
+    "review-groups-by-category",
+    byCategoryClick &&
+      byCategory?.groups.length === 2 &&
+      byCategory.groups.some((g) => g.toLowerCase() === "security") &&
+      byCategory.groups.some((g) => g.toLowerCase() === "performance"),
+    JSON.stringify(byCategory?.groups),
+  );
+  await evaluate(
+    ws,
+    `(() => {
+    const btn = [...document.querySelectorAll("#chat .review .v-toolbar .seg button")].find(
+      (b) => (b.textContent ?? "").trim() === "By file",
+    );
+    btn?.click();
+    return Boolean(btn);
+  })()`,
+  );
+  await sleep(400);
+  const byFile = await reviewCard();
+  verdict(
+    "review-groups-by-file",
+    byFile?.groups.length === 2 &&
+      byFile.groups.includes("README.md") &&
+      byFile.groups.includes("NOTES.md"),
+    JSON.stringify(byFile?.groups),
+  );
+
+  /* Dismiss one finding: the engine remembers it and the card says so. */
+  const dismissClick = await evaluate(
+    ws,
+    `(() => {
+    const f = document.querySelector('#chat .review .v-finding[data-id="R2"]');
+    const btn = [...(f?.querySelectorAll(".v-f-actions button") ?? [])].find(
+      (b) => (b.textContent ?? "").trim() === "Dismiss",
+    );
+    btn?.click();
+    return Boolean(btn);
+  })()`,
+  );
+  const dismissed = await waitForCard((c) =>
+    c.findings.some((f) => f.dismissed),
+  );
+  verdict(
+    "review-dismiss-marks-the-finding",
+    dismissClick &&
+      dismissed?.findings.some((f) => f.id === "R2" && f.dismissed) &&
+      dismissed?.findings.some((f) => f.id === "R1" && !f.dismissed),
+    JSON.stringify(
+      dismissed?.findings.map((f) => ({ id: f.id, dismissed: f.dismissed })),
+    ),
+  );
+
+  /* Send the findings to the agent: the engine hands them over as a tool
+     result named review_findings. */
+  const sendClick = await evaluate(
+    ws,
+    `(() => {
+    const btn = [...document.querySelectorAll("#chat .review .v-actions button")].find(
+      (b) => (b.textContent ?? "").trim() === "Send findings to the agent",
+    );
+    btn?.click();
+    return Boolean(btn);
+  })()`,
+  );
+  await waitFor(`!document.getElementById("modeBtn").disabled`, 30000);
+  const sentTools = await waitFor(
+    `(() => {
+    const names = [...document.querySelectorAll("#chat .tool .t-name")].map((n) => n.textContent ?? "");
+    return names.includes("review_findings") ? names : false;
+  })()`,
+    20000,
+  );
+  await sleep(500);
+  const sentMessages = transcriptMessages();
+  const sentCalls = sentMessages.filter((m) =>
+    (m.tool_calls ?? []).some((c) => c.function?.name === "review_findings"),
+  );
+  const sentBodies = toolResults(
+    sentMessages,
+    (body) => body.includes("[R1]") && body.includes("[R2]"),
+  );
+  verdict(
+    "review-send-hands-the-findings-to-the-agent",
+    sendClick && sentCalls.length > 0 && sentBodies.length > 0,
+    JSON.stringify({
+      calls: sentCalls.length,
+      bodies: sentBodies.map((m) => String(m.content).slice(0, 60)),
+    }),
+  );
+  verdict(
+    "review-findings-reach-the-transcript-view",
+    Array.isArray(sentTools) && sentTools.includes("review_findings"),
+    JSON.stringify(sentTools ?? []),
+  );
+
+  /* Apply one finding: a second handover, with that finding only. */
+  const applyClick = await evaluate(
+    ws,
+    `(() => {
+    const f = document.querySelector('#chat .review .v-finding[data-id="R1"]');
+    const btn = [...(f?.querySelectorAll(".v-f-actions button") ?? [])].find(
+      (b) => (b.textContent ?? "").trim() === "Apply fix",
+    );
+    btn?.click();
+    return Boolean(btn);
+  })()`,
+  );
+  await waitFor(`!document.getElementById("modeBtn").disabled`, 30000);
+  await sleep(1500);
+  const applyBodies = toolResults(
+    transcriptMessages(),
+    (body) => body.includes("[R1]") && !body.includes("[R2]"),
+  );
+  const applyTools = await evaluate(
+    ws,
+    `[...document.querySelectorAll("#chat .tool .t-name")].map((n) => n.textContent ?? "")`,
+  );
+  verdict(
+    "review-apply-fix-sends-one-finding",
+    applyClick && applyBodies.length > 0,
+    JSON.stringify(applyBodies.map((m) => String(m.content).slice(0, 80))),
+  );
+  verdict(
+    "review-apply-fix-is-a-second-handover",
+    applyTools.filter((n) => n === "review_findings").length === 2,
+    JSON.stringify(applyTools),
+  );
+
+  /* A reviewer that cannot answer leaves the others' findings in place. */
+  await saveReviewSettings(["mdl-ra", "mdl-rbroke"]);
+  const partialRerun = await evaluate(
+    ws,
+    `(() => {
+    const btn = [...document.querySelectorAll("#chat .review .v-actions button")].find(
+      (b) => (b.textContent ?? "").trim() === "Re-run",
+    );
+    btn?.click();
+    return Boolean(btn);
+  })()`,
+  );
+  const partial = await waitForCard((c) => c.badge.includes("partial"));
+  verdict(
+    "review-partial-when-a-reviewer-fails",
+    partialRerun && partial?.badge === "changes requested (partial)",
+    JSON.stringify({ badge: partial?.badge, notes: partial?.notes }),
+  );
+  verdict(
+    "review-partial-names-the-failed-model",
+    partial?.models.some(
+      (m) => m.failed && m.name.includes("review-model-broken"),
+    ) &&
+      partial?.models.some(
+        (m) => !m.failed && m.name.includes("review-model-a"),
+      ),
+    JSON.stringify(partial?.models),
+  );
+  verdict(
+    "review-partial-keeps-the-good-finding",
+    partial?.findings.length === 1 &&
+      partial.findings[0].where === "README.md:2" &&
+      partial.findings[0].sev.toLowerCase() === "high",
+    JSON.stringify(partial?.findings),
+  );
+
+  /* Only the broken reviewer: the review fails as a whole. */
+  await saveReviewSettings(["mdl-rbroke"]);
+  const failedRerun = await evaluate(
+    ws,
+    `(() => {
+    const btn = [...document.querySelectorAll("#chat .review .v-actions button")].find(
+      (b) => (b.textContent ?? "").trim() === "Re-run",
+    );
+    btn?.click();
+    return Boolean(btn);
+  })()`,
+  );
+  const failed = await waitForCard((c) => c.badge === "failed");
+  verdict(
+    "review-failed-when-no-reviewer-finishes",
+    failedRerun &&
+      failed?.badge === "failed" &&
+      failed.detail.includes("not a usable review"),
+    JSON.stringify({ badge: failed?.badge, detail: failed?.detail }),
+  );
+
+  /* Nothing to review: a session that changed no file. */
+  await saveReviewSettings(["mdl-ra", "mdl-rb"]);
+  await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
+  await sleep(800);
+  await evaluate(ws, `document.getElementById("providerBtn")?.click()`);
+  await sleep(300);
+  await evaluate(
+    ws,
+    `(() => {
+    const btn = [...document.querySelectorAll("#providerMenu button")].find(
+      (b) => b.querySelector(".m-label")?.textContent.trim() === "Writer Local",
+    );
+    btn?.click();
+    return Boolean(btn);
+  })()`,
+  );
+  await sleep(400);
+  await submit(ws, "nothing to review here");
+  await waitFor(`!document.getElementById("modeBtn").disabled`, 30000);
+  await submit(ws, "/multi-modeal-review");
+  const nothing = await waitForCard((c) => c.badge === "nothing to review");
+  verdict(
+    "review-says-nothing-to-review",
+    nothing?.badge === "nothing to review",
+    JSON.stringify({
+      badge: nothing?.badge,
+      headline: nothing?.headline,
+    }),
+  );
+
+  /* Auto-run: the review starts by itself after a run that edited files. */
+  const autoSave = await saveReviewSettings(["mdl-ra", "mdl-rb"], "start");
+  const sessionB = await writerSession("write the review fixture B");
+  const auto = await waitForCard(
+    (c) => c.badge !== "running" && c.findings.length > 0,
+  );
+  verdict(
+    "review-auto-runs-after-a-run-that-edited-files",
+    autoSave.auto.value === "start" &&
+      sessionB.picked &&
+      auto?.badge === "changes requested" &&
+      auto?.findings.length === 2,
+    JSON.stringify({
+      auto: autoSave.auto,
+      picked: sessionB.picked,
+      badge: auto?.badge,
+      findings: auto?.findings.length,
+    }),
+  );
+
+  /* Reopening the session from the sidebar brings the card back with it. */
+  const closedTab = await evaluate(
+    ws,
+    `(() => {
+    const btn = document.querySelector("#tabs .tab.active .tab-close");
+    btn?.click();
+    return Boolean(btn);
+  })()`,
+  );
+  await sleep(1000);
+  const reopened = await waitFor(
+    `(() => {
+    const row = [...document.querySelectorAll("#wsTree .session-item")].find(
+      (r) => (r.querySelector(".s-title")?.textContent ?? "").trim() === "write the review fixture B",
+    );
+    if (!row) return false;
+    row.click();
+    return true;
+  })()`,
+    20000,
+  );
+  await sleep(2500);
+  const restored = await reviewCard();
+  const restoredTools = await evaluate(
+    ws,
+    `[...document.querySelectorAll("#chat .tool .t-name")].map((n) => n.textContent ?? "")`,
+  );
+  verdict(
+    "review-card-comes-back-with-the-session",
+    closedTab &&
+      reopened &&
+      restored?.badge === "changes requested" &&
+      restored?.findings.length === 2,
+    JSON.stringify({
+      closedTab,
+      reopened,
+      badge: restored?.badge,
+      findings: restored?.findings.length,
+    }),
+  );
+  verdict(
+    "review-reopened-session-shows-its-transcript",
+    restoredTools.includes("write_file"),
+    JSON.stringify(restoredTools),
+  );
 
   const wsRowsBefore = await evaluate(
     ws,
