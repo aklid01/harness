@@ -140,10 +140,168 @@ export interface AgentOversight extends AgentRole {
   intensity: string;
   max_rounds: number;
 }
+
+/* The multi-model review role (harness/review/). It holds a LIST of models,
+   not one: several reviewers look at the same change independently. Each
+   names a model by the id it already has in Settings, so no credential is
+   ever stored here. */
+export interface ReviewerConfig {
+  model_id: string;
+  label: string;
+  enabled: boolean;
+  /* The category this reviewer concentrates on, or "" for every target. */
+  focus: string;
+  /* Set by the engine when the model behind this reviewer is unusable. */
+  state?: string;
+  usable?: boolean;
+  reason?: string;
+}
+
+export interface ReviewConfig {
+  enabled: boolean;
+  /* "off" | "offer" | "start" - what happens after a run that edited files. */
+  auto_run: string;
+  /* "parallel" | "sequential" */
+  mode: string;
+  reviewers: ReviewerConfig[];
+  max_reviewers: number;
+  max_files: number;
+  max_diff_bytes: number;
+  max_file_bytes: number;
+  max_tokens: number;
+  severity_threshold: string;
+  full_context: boolean;
+  exclusions: string[];
+  prompt: string;
+}
+
 export interface AgentConfig {
   plan: AgentRole;
   build: AgentRole;
   oversight: AgentOversight;
+  review: ReviewConfig;
+}
+
+export type ReviewSeverity = "blocker" | "high" | "medium" | "low" | "nit";
+
+export interface ReviewFinding {
+  id: string;
+  category: string;
+  category_label: string;
+  severity: ReviewSeverity;
+  file: string;
+  line: number;
+  end_line: number;
+  summary: string;
+  why: string;
+  fix: string;
+  confidence: string;
+  /* The models that raised this finding. More than one means they agree. */
+  models: string[];
+  /* The ids of findings other models read differently at the same place. */
+  conflict_with: string[];
+}
+
+export interface ReviewModelStatus {
+  model_id: string;
+  label: string;
+  status: "ran" | "skipped" | "failed" | "cancelled";
+  error: string;
+  note: string;
+  finding_count: number;
+  rejected_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  tokens: number;
+  seconds: number;
+}
+
+export interface ReviewScope {
+  mode: string;
+  base: string;
+  is_repo: boolean;
+  total_files: number;
+  files: Array<{
+    path: string;
+    status: string;
+    added: number;
+    removed: number;
+  }>;
+  skipped: Array<{ path: string; reason: string }>;
+}
+
+export interface ReviewReport {
+  review_id: string;
+  created_at: number;
+  verdict: "clean" | "suggestions" | "changes_requested" | "failed" | "nothing";
+  verdict_label: string;
+  findings: ReviewFinding[];
+  suppressed_count: number;
+  by_severity: Record<string, number>;
+  by_category: Record<string, number>;
+  models: ReviewModelStatus[];
+  threshold: string;
+  redacted: number;
+  seconds: number;
+  message_index: number;
+  cache_key: string;
+  triggered_by: string;
+  stale: boolean;
+  dismissed: string[];
+  scope: ReviewScope;
+  cached?: boolean;
+  error?: string;
+  action?: string;
+  message?: string;
+}
+
+/* One event carries every stage of a review, so a frontend follows a whole
+   review with a single case in its switch. */
+export type ReviewStage =
+  | "offer"
+  | "started"
+  | "running"
+  | "progress"
+  | "finding"
+  | "results"
+  | "completed"
+  | "failed"
+  | "nothing"
+  | "cancelled"
+  | "stale"
+  | "updated";
+
+/* What the review is about to cost, in tokens. There is no pricing table in
+   the engine, so the budget is counted in the unit it is enforced in. */
+export interface ReviewEstimate {
+  tokens_per_model: number;
+  tokens_total: number;
+  limit: number;
+  over_limit: boolean;
+}
+
+export interface ReviewEventPayload {
+  stage: ReviewStage;
+  review_id?: string;
+  message?: string;
+  error?: string;
+  action?: string;
+  cached?: boolean;
+  redacted?: number;
+  files?: string[];
+  reviewers?: Array<{ model_id: string; label: string }>;
+  skipped?: Array<{ model_id: string; reason: string }>;
+  model_id?: string;
+  label?: string;
+  state?: string;
+  findings?: number;
+  rejected?: number;
+  seconds?: number;
+  tokens?: number;
+  limit?: number;
+  finding?: ReviewFinding;
+  report?: ReviewReport;
+  estimate?: ReviewEstimate;
 }
 
 export interface PlanEventPayload {
@@ -279,7 +437,26 @@ export type OpPayload =
   | { op: "ws_sessions"; root: string }
   | { op: "approval_reply"; id: string; allow: boolean }
   | { op: "pick_reply"; id: string; index: number | null }
-  | { op: "retry"; count: number; text: string; mode: Mode };
+  | { op: "retry"; count: number; text: string; mode: Mode }
+  | {
+      op: "review_start";
+      args?: Record<string, unknown>;
+      models?: string[];
+      focus?: string;
+      severity?: string;
+      force?: boolean;
+    }
+  | { op: "review_cancel" }
+  | {
+      op: "review_action";
+      action: "dismiss" | "send";
+      review_id: string;
+      finding_id?: string;
+      finding_ids?: string[];
+      /* "apply" asks the agent to apply that one suggested fix. */
+      apply?: boolean;
+    }
+  | { op: "review_report" };
 
 export type ClientOp = SessionOp & OpPayload;
 

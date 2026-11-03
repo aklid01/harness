@@ -19,6 +19,13 @@ import type {
   ProviderState,
   RetryInfo,
   RetryProgress,
+  ReviewEventPayload,
+  ReviewEstimate,
+  ReviewFinding,
+  ReviewReport,
+  ReviewSeverity,
+  ReviewStage,
+  ReviewerConfig,
   ServerEnvelope,
   SessionListItem,
   TabRef,
@@ -89,6 +96,9 @@ const ICONS = {
   ),
   branch: stroke(
     '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  ),
+  eye: stroke(
+    '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>',
   ),
   storage: stroke(
     '<line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/>',
@@ -352,6 +362,8 @@ interface Ctx {
     discarded?: string[];
   } | null;
   retryCard: HTMLDivElement | null;
+  reviewCard: HTMLDivElement | null;
+  review: ReviewView | null;
   phaseEl: string | null;
   phaseCard: HTMLDivElement | null;
   retryTick: RetryTick | null;
@@ -405,6 +417,21 @@ const DEFAULT_AGENT_CONFIG: AgentConfig = {
     instructions: "",
     intensity: "medium",
     max_rounds: 2,
+  },
+  review: {
+    enabled: false,
+    auto_run: "off",
+    mode: "parallel",
+    reviewers: [],
+    max_reviewers: 4,
+    max_files: 40,
+    max_diff_bytes: 200000,
+    max_file_bytes: 60000,
+    max_tokens: 150000,
+    severity_threshold: "low",
+    full_context: false,
+    exclusions: [],
+    prompt: "",
   },
 };
 const OVERSIGHT_INTENSITIES = [
@@ -531,6 +558,8 @@ function makeCtx(
     editingPendingId: null,
     failure: null,
     retryCard: null,
+    reviewCard: null,
+    review: null,
     retryTick: null,
     retryTimer: null,
     phaseEl: null,
@@ -1578,9 +1607,702 @@ function retryFailedRequest(ctx: Ctx): void {
   setBusy(ctx, true);
   showThinking(ctx);
 }
+/* ---------------- multi-model review card ---------------- */
+/* The card follows a review from its offer to its findings. It never edits a
+   file: "apply" and "send" hand the work to the agent, which fixes it with
+   its ordinary tools - so the permission check and the checkpoint both still
+   apply. The card itself only reads the report and asks the engine to act. */
+
+interface ReviewModelRow {
+  model_id: string;
+  label: string;
+  state: string;
+  findings?: number;
+  rejected?: number;
+  error?: string;
+  seconds?: number;
+  tokens?: number;
+}
+
+interface ReviewView {
+  stage: string;
+  reviewId: string;
+  report: ReviewReport | null;
+  group: "file" | "category";
+  selected: Set<string>;
+  models: ReviewModelRow[];
+  files: string[];
+  message: string;
+  error: string;
+  redacted: number;
+  estimate: ReviewEstimate | null;
+}
+
+const REVIEW_CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "", label: "All targets" },
+  { value: "correctness", label: "Correctness" },
+  { value: "error-handling", label: "Error handling" },
+  { value: "security", label: "Security" },
+  { value: "performance", label: "Performance" },
+  { value: "concurrency", label: "Concurrency" },
+  { value: "quality", label: "Code quality" },
+  { value: "maintainability", label: "Maintainability" },
+  { value: "tests", label: "Tests" },
+  { value: "dependencies", label: "Dependencies" },
+  { value: "documentation", label: "Documentation" },
+  { value: "observability", label: "Observability" },
+  { value: "agent-experience", label: "Agent experience" },
+];
+
+const REVIEW_SEVERITY_ORDER: ReviewSeverity[] = [
+  "blocker",
+  "high",
+  "medium",
+  "low",
+  "nit",
+];
+
+const REVIEW_GROUP_OPTIONS: Array<{ value: "file" | "category"; label: string }> =
+  [
+    { value: "file", label: "By file" },
+    { value: "category", label: "By category" },
+  ];
+
+function reviewView(ctx: Ctx): ReviewView {
+  if (!ctx.review) {
+    ctx.review = {
+      stage: "",
+      reviewId: "",
+      report: null,
+      group: "file",
+      selected: new Set<string>(),
+      models: [],
+      files: [],
+      message: "",
+      error: "",
+      redacted: 0,
+      estimate: null,
+    };
+  }
+  return ctx.review;
+}
+
+function reviewSeverityRank(severity: string): number {
+  const index = REVIEW_SEVERITY_ORDER.indexOf(severity as ReviewSeverity);
+  return index === -1 ? REVIEW_SEVERITY_ORDER.length : index;
+}
+
+function reviewBadgeClass(severity: string): string {
+  return `v-sev v-sev-${severity}`;
+}
+
+/* The severity chip inside a finding carries its own class too, so it can be
+   found either by the shared "v-sev" or by the finding-local "v-f-sev". */
+function reviewFindingSeverityClass(severity: string): string {
+  return `v-f-sev v-sev v-sev-${severity}`;
+}
+
+/* The findings, grouped the way the user asked to see them. */
+function reviewGroups(
+  report: ReviewReport,
+  group: "file" | "category",
+): Array<[string, ReviewFinding[]]> {
+  const buckets = new Map<string, ReviewFinding[]>();
+  for (const finding of report.findings) {
+    const key =
+      group === "file" ? finding.file : finding.category_label || finding.category;
+    const list = buckets.get(key);
+    if (list) list.push(finding);
+    else buckets.set(key, [finding]);
+  }
+  return [...buckets.entries()];
+}
+
+function reviewAction(
+  ctx: Ctx,
+  action: "dismiss" | "send",
+  findingIds: string[],
+  findingId?: string,
+  apply?: boolean,
+): void {
+  send(ctx, {
+    op: "review_action",
+    action,
+    review_id: reviewView(ctx).reviewId,
+    finding_ids: findingIds,
+    finding_id: findingId,
+    apply,
+  });
+}
+
+function reviewRerun(ctx: Ctx, force: boolean, models?: string[]): void {
+  send(ctx, {
+    op: "review_start",
+    args: { scope: "run" },
+    force,
+    models: models ?? [],
+  });
+}
+
+function reviewSelectedIds(view: ReviewView): string[] {
+  if (view.selected.size) return [...view.selected];
+  return (view.report?.findings ?? []).map((f) => f.id);
+}
+
+function clearReviewCard(ctx: Ctx): void {
+  ctx.reviewCard?.remove();
+  ctx.reviewCard = null;
+}
+
+/* One finding: a summary line that expands into the detail. */
+function reviewFindingNode(
+  ctx: Ctx,
+  finding: ReviewFinding,
+  dismissed: Set<string>,
+): HTMLElement {
+  const node = document.createElement("details");
+  node.className = "v-finding";
+  node.dataset["id"] = finding.id;
+  if (dismissed.has(finding.id)) node.classList.add("dismissed");
+
+  const head = document.createElement("summary");
+  head.className = "v-f-head";
+
+  const id = document.createElement("span");
+  id.className = "v-f-id";
+  id.textContent = finding.id;
+
+  const sev = document.createElement("span");
+  sev.className = reviewFindingSeverityClass(finding.severity);
+  sev.textContent = finding.severity;
+
+  const cat = document.createElement("span");
+  cat.className = "v-f-cat";
+  cat.textContent = finding.category_label || finding.category;
+
+  const where = document.createElement("span");
+  where.className = "v-f-where";
+  where.textContent = finding.line
+    ? `${finding.file}:${finding.line}`
+    : finding.file;
+
+  const models = document.createElement("span");
+  models.className = "v-f-models";
+  if (finding.models?.length > 1) {
+    models.textContent = `${finding.models.length} reviewers agree`;
+    models.title = finding.models.join(", ");
+  } else if (finding.models?.length === 1) {
+    models.textContent = finding.models[0];
+  }
+
+  head.append(id, sev, cat, where, models);
+
+  const body = document.createElement("div");
+  body.className = "v-f-body";
+
+  const summary = document.createElement("div");
+  summary.className = "v-f-sum";
+  summary.textContent = finding.summary;
+  body.appendChild(summary);
+
+  if (finding.why) {
+    const why = document.createElement("div");
+    why.className = "v-f-why";
+    why.textContent = finding.why;
+    body.appendChild(why);
+  }
+  if (finding.fix) {
+    const fix = document.createElement("pre");
+    fix.className = "v-f-fix";
+    fix.textContent = finding.fix;
+    body.appendChild(fix);
+  }
+  if (finding.conflict_with?.length) {
+    const clash = document.createElement("div");
+    clash.className = "v-f-conflict";
+    clash.textContent = `Another reviewer read this differently: ${finding.conflict_with.join(", ")}`;
+    body.appendChild(clash);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "v-f-actions";
+  const apply = document.createElement("button");
+  apply.className = "btn small primary";
+  apply.textContent = "Apply fix";
+  apply.setAttribute(
+    "aria-label",
+    `Ask the agent to apply the suggested fix for ${finding.id}`,
+  );
+  apply.onclick = (event) => {
+    event.stopPropagation();
+    reviewAction(ctx, "send", [finding.id], finding.id, true);
+    setActivity(`sent ${finding.id} to the agent`);
+  };
+  const pick = document.createElement("button");
+  pick.className = "btn small";
+  pick.textContent = "Select";
+  pick.setAttribute("aria-label", `Select finding ${finding.id} to send to the agent`);
+  pick.onclick = (event) => {
+    event.stopPropagation();
+    const view = reviewView(ctx);
+    if (view.selected.has(finding.id)) view.selected.delete(finding.id);
+    else view.selected.add(finding.id);
+    pick.textContent = view.selected.has(finding.id) ? "Selected" : "Select";
+    pick.setAttribute("aria-pressed", String(view.selected.has(finding.id)));
+  };
+  const dismiss = document.createElement("button");
+  dismiss.className = "btn small";
+  dismiss.textContent = "Dismiss";
+  dismiss.setAttribute("aria-label", `Dismiss finding ${finding.id}`);
+  dismiss.onclick = (event) => {
+    event.stopPropagation();
+    reviewAction(ctx, "dismiss", [], finding.id);
+  };
+  const open = document.createElement("button");
+  open.className = "btn small";
+  open.textContent = "Open file";
+  open.setAttribute(
+    "aria-label",
+    `Open ${finding.file} at line ${finding.line || 1}`,
+  );
+  open.onclick = (event) => {
+    event.stopPropagation();
+    const root = ctx.root.replace(/\\/g, "/");
+    const target = `${root}/${finding.file}`;
+    void window.harness?.openPath(target);
+  };
+  actions.append(apply, pick, dismiss, open);
+
+  node.append(head, body, actions);
+  return node;
+}
+
+/* The card itself. Rebuilt on every event - a review has a handful of
+   states, and rebuilding keeps the DOM honest about which one it is in. */
+function reviewCardNode(ctx: Ctx, view: ReviewView): HTMLDivElement {
+  const card = document.createElement("div");
+  card.className = "review";
+  card.setAttribute("role", "region");
+  card.setAttribute("aria-label", "Multi-model review");
+
+  const head = document.createElement("div");
+  head.className = "v-head";
+  const ico = document.createElement("span");
+  ico.className = "v-ico";
+  ico.setAttribute("aria-hidden", "true");
+  ico.innerHTML = ICONS.branch;
+  const title = document.createElement("div");
+  title.className = "v-title";
+  title.textContent = "Multi-model review";
+  const badge = document.createElement("span");
+  badge.className = "v-badge";
+  head.append(ico, title, badge);
+  card.appendChild(head);
+
+  const report = view.report;
+  const state = view.stage;
+
+  if (state === "offer") {
+    badge.textContent = "not started";
+    const headline = document.createElement("div");
+    headline.className = "v-headline";
+    headline.textContent =
+      view.message || "the agent changed some files - run a multi-model review?";
+    const actions = document.createElement("div");
+    actions.className = "v-actions";
+    const start = document.createElement("button");
+    start.className = "btn small primary";
+    start.textContent = "Run review";
+    start.onclick = () => reviewRerun(ctx, false);
+    const skip = document.createElement("button");
+    skip.className = "btn small";
+    skip.textContent = "Not now";
+    skip.onclick = () => clearReviewCard(ctx);
+    actions.append(start, skip);
+    card.append(headline, actions);
+    return card;
+  }
+
+  if (state === "running") {
+    badge.textContent = "running";
+    const headline = document.createElement("div");
+    headline.className = "v-headline";
+    headline.textContent = "Reviewing the change with independent models…";
+    const cost = document.createElement("div");
+    cost.className = "v-note";
+    if (view.estimate) {
+      // The spend is shown before it happens, not after.
+      const per = view.estimate.tokens_per_model ?? 0;
+      const total = view.estimate.tokens_total ?? 0;
+      cost.textContent = view.estimate.over_limit
+        ? `About ${total} tokens (limit ${view.estimate.limit}) - this review is over its budget.`
+        : `About ${per} tokens per model, ${total} in total.`;
+    }
+    const list = document.createElement("div");
+    list.className = "v-models";
+    for (const model of view.models) {
+      const row = document.createElement("div");
+      row.className = `v-model v-model-${model.state}`;
+      const name = document.createElement("span");
+      name.className = "v-model-name";
+      name.textContent = model.label || model.model_id;
+      const status = document.createElement("span");
+      status.className = "v-model-state";
+      status.textContent =
+        model.state === "running"
+          ? "reviewing…"
+          : model.state === "done"
+            ? `${model.findings ?? 0} finding(s)`
+            : model.state === "failed"
+              ? "failed"
+              : "skipped";
+      row.append(name, status);
+      list.appendChild(row);
+    }
+    const actions = document.createElement("div");
+    actions.className = "v-actions";
+    const cancel = document.createElement("button");
+    cancel.className = "btn small";
+    cancel.textContent = "Cancel";
+    cancel.onclick = () => send(ctx, { op: "review_cancel" });
+    actions.appendChild(cancel);
+    card.append(headline, cost, list, actions);
+    return card;
+  }
+
+  if (state === "nothing") {
+    badge.textContent = "nothing to review";
+    const headline = document.createElement("div");
+    headline.className = "v-headline";
+    headline.textContent =
+      view.message || "there was nothing to review - no files changed";
+    card.appendChild(headline);
+    return card;
+  }
+
+  if (state === "failed") {
+    badge.textContent = "failed";
+    const headline = document.createElement("div");
+    headline.className = "v-headline";
+    headline.textContent = "The review did not finish.";
+    const detail = document.createElement("div");
+    detail.className = "v-detail";
+    detail.textContent = view.error || view.message || "";
+    card.append(headline, detail);
+    if (view.error?.includes("no reviewer model")) {
+      const actions = document.createElement("div");
+      actions.className = "v-actions";
+      const open = document.createElement("button");
+      open.className = "btn small primary";
+      open.textContent = "Open review settings";
+      open.onclick = () => openSettings("review");
+      actions.appendChild(open);
+      card.appendChild(actions);
+    }
+    return card;
+  }
+
+  if (state === "cancelled") {
+    badge.textContent = "cancelled";
+    const headline = document.createElement("div");
+    headline.className = "v-headline";
+    headline.textContent = "The review was cancelled - a new run took over.";
+    card.appendChild(headline);
+    return card;
+  }
+
+  // Results.
+  if (!report) {
+    badge.textContent = "no report";
+    const headline = document.createElement("div");
+    headline.className = "v-headline";
+    headline.textContent = "There is no review report to show.";
+    card.appendChild(headline);
+    return card;
+  }
+  const findings = report.findings ?? [];
+  const models = report?.models ?? [];
+  const failed = models.filter((m) => m.status === "failed");
+  const skipped = models.filter((m) => m.status === "skipped");
+  const partial = failed.length > 0 || skipped.length > 0;
+  const verdict = report?.verdict ?? "clean";
+  badge.textContent = partial
+    ? `${report?.verdict_label ?? verdict} (partial)`
+    : (report?.verdict_label ?? verdict);
+  if (verdict === "changes_requested") badge.classList.add("v-badge-warn");
+  if (verdict === "clean") badge.classList.add("v-badge-ok");
+
+  const headline = document.createElement("div");
+  headline.className = "v-headline";
+  headline.textContent = findings.length
+    ? `${findings.length} finding${findings.length === 1 ? "" : "s"} across ${report?.scope?.files?.length ?? 0} file(s).`
+    : "No issues were found.";
+  card.appendChild(headline);
+
+  if (report?.stale) {
+    const stale = document.createElement("div");
+    stale.className = "v-note";
+    stale.textContent =
+      "This review is out of date - the work it looked at was rewound.";
+    card.appendChild(stale);
+  }
+  if (view.redacted || report?.redacted) {
+    const redacted = document.createElement("div");
+    redacted.className = "v-note";
+    redacted.textContent = `${report?.redacted ?? view.redacted} secret-looking value(s) were redacted before the reviewers saw them.`;
+    card.appendChild(redacted);
+  }
+  if (partial) {
+    const note = document.createElement("div");
+    note.className = "v-note";
+    const names = [
+      ...failed.map((m) => `${m.label || m.model_id} (failed)`),
+      ...skipped.map((m) => `${m.label || m.model_id} (skipped)`),
+    ];
+    note.textContent = `Not every reviewer finished: ${names.join(", ")}.`;
+    card.appendChild(note);
+  }
+
+  const counts = document.createElement("div");
+  counts.className = "v-counts";
+  for (const severity of REVIEW_SEVERITY_ORDER) {
+    const count = report?.by_severity?.[severity] ?? 0;
+    if (!count) continue;
+    const chip = document.createElement("span");
+    chip.className = reviewBadgeClass(severity);
+    chip.textContent = `${count} ${severity}`;
+    counts.appendChild(chip);
+  }
+  if (counts.childElementCount) card.appendChild(counts);
+
+  // Per-model status.
+  if (models.length) {
+    const list = document.createElement("div");
+    list.className = "v-models";
+    for (const model of models) {
+      const row = document.createElement("div");
+      row.className = `v-model v-model-${model.status}`;
+      const name = document.createElement("span");
+      name.className = "v-model-name";
+      name.textContent = model.label || model.model_id;
+      const status = document.createElement("span");
+      status.className = "v-model-state";
+      status.textContent =
+        model.status === "ran"
+          ? `${model.finding_count} finding(s) · ${model.tokens} tokens · ${model.seconds}s`
+          : model.status === "failed"
+            ? `failed: ${model.error}`
+            : `skipped: ${model.error}`;
+      row.append(name, status);
+      list.appendChild(row);
+    }
+    card.appendChild(list);
+  }
+
+  // The findings.
+  if (findings.length) {
+    const toolbar = document.createElement("div");
+    toolbar.className = "v-toolbar";
+    const groups = document.createElement("div");
+    groups.className = "seg";
+    groups.setAttribute("role", "group");
+    groups.setAttribute("aria-label", "Group findings");
+    for (const option of REVIEW_GROUP_OPTIONS) {
+      const button = document.createElement("button");
+      button.textContent = option.label;
+      button.className = view.group === option.value ? "sel" : "";
+      button.setAttribute("aria-pressed", String(view.group === option.value));
+      button.onclick = () => {
+        reviewView(ctx).group = option.value;
+        showReview(ctx, { stage: "results" });
+      };
+      groups.appendChild(button);
+    }
+    toolbar.appendChild(groups);
+    card.appendChild(toolbar);
+
+    const dismissed = new Set(report?.dismissed ?? []);
+    const list = document.createElement("div");
+    list.className = "v-findings";
+    for (const [key, group] of reviewGroups(report!, view.group)) {
+      const section = document.createElement("div");
+      section.className = "v-group";
+      const heading = document.createElement("div");
+      heading.className = "v-group-title";
+      heading.textContent = key;
+      section.appendChild(heading);
+      for (const finding of group) {
+        section.appendChild(reviewFindingNode(ctx, finding, dismissed));
+      }
+      list.appendChild(section);
+    }
+    card.appendChild(list);
+  }
+
+  // Actions.
+  const actions = document.createElement("div");
+  actions.className = "v-actions";
+  const sendBtn = document.createElement("button");
+  sendBtn.className = "btn small primary";
+  const chosen = reviewSelectedIds(view);
+  // The label stays the same however many are chosen: the count lives in the
+  // accessible name, and the Select buttons already say what is picked.
+  sendBtn.textContent = "Send findings to the agent";
+  sendBtn.setAttribute(
+    "aria-label",
+    `Send ${chosen.length} review finding(s) to the agent`,
+  );
+  sendBtn.disabled = !findings.length;
+  sendBtn.onclick = () => {
+    reviewAction(ctx, "send", chosen);
+    setActivity("findings sent to the agent");
+  };
+  const rerun = document.createElement("button");
+  rerun.className = "btn small";
+  rerun.textContent = "Re-run";
+  rerun.onclick = () => reviewRerun(ctx, true);
+  const other = document.createElement("button");
+  other.className = "btn small";
+  other.textContent = "Re-run with other models";
+  other.onclick = () => askReviewModels(ctx);
+  const close = document.createElement("button");
+  close.className = "btn small";
+  close.textContent = "Dismiss card";
+  close.onclick = () => clearReviewCard(ctx);
+  actions.append(sendBtn, rerun, other, close);
+  card.appendChild(actions);
+  return card;
+}
+
+/* Pick the models a re-run should use. */
+function askReviewModels(ctx: Ctx): void {
+  const configured = (agentConfig?.review?.reviewers ?? []).filter(
+    (r) => r.enabled,
+  );
+  const options = configured.length
+    ? configured
+    : providerOptions.map((o) => ({
+        model_id: o.id,
+        label: o.label,
+        enabled: false,
+        focus: "",
+      }));
+  if (!options.length) {
+    setActivity("no model to review with - add one in Settings, Review");
+    return;
+  }
+  const body = options
+    .map(
+      (o, i) =>
+        `<label class="rv-model"><input type="checkbox" data-i="${i}"${o.enabled ? " checked" : ""}> ` +
+        `<span>${escapeHtml(o.label || o.model_id)}</span></label>`,
+    )
+    .join("");
+  showModal(
+    `<div class="modal-head"><h3>Review with</h3></div>` +
+      `<div class="rv-models">${body}</div>` +
+      `<div class="modal-actions"><button class="btn primary" id="rvGo">Run review</button>` +
+      `<button class="btn" id="rvCancel">Cancel</button></div>`,
+    "keep",
+  );
+  el<HTMLButtonElement>("rvCancel").onclick = hideModal;
+  el<HTMLButtonElement>("rvGo").onclick = () => {
+    const picked: string[] = [];
+    document
+      .querySelectorAll<HTMLInputElement>(".rv-models input[type=checkbox]")
+      .forEach((box) => {
+        if (box.checked) {
+          const option = options[Number(box.dataset["i"] ?? 0)];
+          if (option) picked.push(option.model_id);
+        }
+      });
+    hideModal();
+    if (!picked.length) {
+      setActivity("pick at least one model");
+      return;
+    }
+    reviewRerun(ctx, true, picked);
+  };
+}
+
+/* Follow one review event. */
+function showReview(ctx: Ctx, p: ReviewEventPayload): void {
+  const view = reviewView(ctx);
+  const stage = p.stage ?? "started";
+  // The stage a reviewer event carries is not the phase the card is in: a
+  // progress or a finding event still means the review is running.
+  const phase: ReviewStage =
+    stage === "offer"
+      ? "offer"
+      : stage === "completed" || stage === "results" || stage === "stale" || stage === "updated"
+        ? "results"
+        : stage === "failed"
+          ? "failed"
+          : stage === "nothing"
+            ? "nothing"
+            : stage === "cancelled"
+              ? "cancelled"
+              : "running";
+  view.stage = phase;
+  if (p.review_id) view.reviewId = p.review_id;
+  if (p.message) view.message = p.message;
+  if (p.error) view.error = p.error;
+  if (p.redacted) view.redacted = p.redacted;
+  if (p.files) view.files = p.files;
+  if (p.model_id) {
+    const row = view.models.find((m) => m.model_id === p.model_id);
+    const label = p.label || row?.label || p.model_id;
+    if (!row) {
+      view.models.push({
+        model_id: p.model_id,
+        label,
+        state: p.state ?? "running",
+      });
+    } else {
+      row.state = p.state ?? row.state;
+      row.label = label;
+    }
+    const current = view.models.find((m) => m.model_id === p.model_id);
+    if (current && p.state === "done") {
+      current.findings = p.findings ?? current.findings;
+      current.rejected = p.rejected ?? current.rejected;
+      current.seconds = p.seconds ?? current.seconds;
+    }
+    if (current && p.state === "failed") current.error = p.error ?? current.error;
+  }
+  if (stage === "started" && p.reviewers) {
+    view.models = p.reviewers.map((r) => ({
+      model_id: r.model_id,
+      label: r.label,
+      state: "running",
+    }));
+  }
+  if (p.estimate) view.estimate = p.estimate;
+  if (stage === "completed" && p.report) {
+    view.report = p.report;
+    view.reviewId = p.report.review_id || view.reviewId;
+    view.selected = new Set<string>();
+  }
+  if (stage === "updated" && p.report) view.report = p.report;
+  if (stage === "stale" && p.report) view.report = p.report;
+
+  clearReviewCard(ctx);
+  const card = reviewCardNode(ctx, view);
+  ctx.chatBody.appendChild(card);
+  ctx.reviewCard = card;
+  scrollBottom(ctx);
+  if (ctx === activeCtx) {
+    if (phase === "results")
+      setActivity(
+        `review: ${view.report?.verdict_label ?? "done"} (${view.report?.findings?.length ?? 0} finding(s))`,
+      );
+    else if (phase === "failed") setActivity("the review did not finish");
+    else if (phase === "running") setActivity("reviewing the change…");
+  }
+}
+
 /* Switching models after a failure: the session, its history and any unsaved
-   composer text stay exactly where they are. */
-function openModelPicker(ctx: Ctx): void {
+   composer text stay exactly where they are. */function openModelPicker(ctx: Ctx): void {
   const usable = providerGroups.filter(
     (g) => !g.disabled && g.models.some((m) => !m.disabled),
   );
@@ -1899,6 +2621,9 @@ function renderTranscript(
   // The failure belongs to the turn that just ended, not to the transcript, so
   // a reconcile that rebuilds the body has to put it back.
   if (ctx.failure) ctx.chatBody.appendChild(failureCard(ctx, ctx.failure));
+  // The review card is not part of the transcript either: it is built from
+  // the saved report, so a rebuild of the body has to put it back too.
+  if (ctx.reviewCard) ctx.chatBody.appendChild(ctx.reviewCard);
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
 }
@@ -3386,6 +4111,9 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       case "retry":
         showRetry(ctx, p as unknown as RetryProgress);
         break;
+      case "review":
+        showReview(ctx, p as unknown as ReviewEventPayload);
+        break;
       case "error":
         clearRetryCard(ctx);
         addError(ctx, String(p["text"] ?? ""), p);
@@ -3419,6 +4147,22 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         );
         renderPendingStrip(ctx);
         primeContext(ctx);
+        // A saved review comes back with the session: reopening a chat
+        // restores the card, the report and the dismissed findings.
+        const savedReview = p["review"] as ReviewReport | null;
+        if (savedReview && savedReview.review_id) {
+          const view = reviewView(ctx);
+          view.report = savedReview;
+          view.reviewId = savedReview.review_id;
+          view.stage = "results";
+          showReview(ctx, {
+            stage: "results",
+            review_id: savedReview.review_id,
+            report: savedReview,
+          });
+        } else {
+          clearReviewCard(ctx);
+        }
         // Load this session's plan artifact so a reload shows the plan that was
         // actually made (inspectable, and never a stale plan from another tab).
         if (id) send(ctx, { op: "get_plan", id });
@@ -3601,10 +4345,16 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
   ) {
     agentConfig = msg.data as AgentConfig;
     refreshModelButton();
-    // If the agents panel is already open (from a settings load that raced the
+    // If a settings panel is already open (from a settings load that raced the
     // config), swap in the real values now instead of leaving defaults.
     if (document.getElementById("agSave")) {
       const [h, w] = settingsAgents();
+      el<HTMLDivElement>("settingsBody").innerHTML =
+        `<div class="settings-panel">${h}</div>`;
+      w();
+    }
+    if (document.getElementById("rvSave")) {
+      const [h, w] = settingsReview();
       el<HTMLDivElement>("settingsBody").innerHTML =
         `<div class="settings-panel">${h}</div>`;
       w();
@@ -3613,7 +4363,8 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
     if (msg.ok && msg.data && typeof msg.data === "object")
       agentConfig = msg.data as AgentConfig;
     refreshModelButton();
-    const status = document.getElementById("agStatus");
+    const status =
+      document.getElementById("agStatus") ?? document.getElementById("rvStatus");
     if (status) {
       status.textContent = msg.ok
         ? "Saved."
@@ -4464,6 +5215,7 @@ function providerForm(
 const SETTINGS_TABS = [
   { id: "models", label: "Models", icon: ICONS.layers },
   { id: "agents", label: "Agents", icon: ICONS.branch },
+  { id: "review", label: "Review", icon: ICONS.eye },
   { id: "themes", label: "Themes", icon: ICONS.palette },
   { id: "general", label: "General", icon: ICONS.sliders },
   { id: "workspace", label: "Workspace", icon: ICONS.folder },
@@ -4488,7 +5240,8 @@ function openSettings(tab = settingsLastTab): void {
   el<HTMLDivElement>("settingsBody").innerHTML =
     `<div class="settings-panel">${html}</div>`;
   wire();
-  if (tab === "agents") send(ensureAppCtx(), { op: "get_agents" });
+  if (tab === "agents" || tab === "review")
+    send(ensureAppCtx(), { op: "get_agents" });
 }
 function seg(
   current: string,
@@ -4534,6 +5287,7 @@ function settingsPanel(tab: string): [string, () => void] {
   if (tab === "storage") return settingsStorage();
   if (tab === "interface") return settingsInterface();
   if (tab === "agents") return settingsAgents();
+  if (tab === "review") return settingsReview();
   return settingsModels();
 }
 function settingsModels(): [string, () => void] {
@@ -4758,8 +5512,162 @@ function settingsAgents(): [string, () => void] {
             Math.min(6, parseInt(val("ag_oversight_rounds"), 10) || 2),
           ),
         },
+        // The review role has its own tab; saving the agents must not wipe
+        // it, so the loaded section rides along unchanged.
+        review: cfg.review,
       };
       const status = document.getElementById("agStatus");
+      if (status) {
+        status.textContent = "Saving…";
+        status.className = "status-line";
+      }
+      send(ensureAppCtx(), { op: "set_agents", config: next });
+    };
+  };
+  return [html, wire];
+}
+function settingsReview(): [string, () => void] {
+  const cfg = agentConfig ?? DEFAULT_AGENT_CONFIG;
+  const rv = cfg.review;
+  const modelOpts = (current: string): string =>
+    `<option value="">Pick a model…</option>` +
+    providerOptions
+      .map(
+        (o) =>
+          `<option value="${o.id}"${o.id === current ? " selected" : ""}>${escapeHtml(o.label)} · ${escapeHtml(o.sub)}</option>`,
+      )
+      .join("");
+  const focusOpts = (current: string): string =>
+    REVIEW_CATEGORY_OPTIONS.map(
+      (c) =>
+        `<option value="${c.value}"${c.value === current ? " selected" : ""}>${escapeHtml(c.label)}</option>`,
+    ).join("");
+  const rows: ReviewerConfig[] = (rv.reviewers ?? []).map((r) => ({ ...r }));
+  const reviewerRow = (r: ReviewerConfig, i: number): string => {
+    const flag =
+      r.usable === false
+        ? `<span class="rv-flag">${escapeHtml(r.reason ?? "this model cannot be reached")}</span>`
+        : "";
+    return (
+      `<div class="rv-row" data-i="${i}">` +
+      `<select class="sel-inline" data-rv="model" data-i="${i}" aria-label="Reviewer model ${i + 1}">${modelOpts(r.model_id)}</select>` +
+      `<select class="sel-inline" data-rv="focus" data-i="${i}" aria-label="Focus for reviewer ${i + 1}">${focusOpts(r.focus)}</select>` +
+      `<span id="rv_en_${i}"></span>` +
+      `<button class="btn small danger" data-rv-del="${i}" aria-label="Remove reviewer ${i + 1}">Remove</button>` +
+      flag +
+      `</div>`
+    );
+  };
+  const autoOptions = [
+    { value: "off", label: "Off" },
+    { value: "offer", label: "Offer a card" },
+    { value: "start", label: "Start it" },
+  ];
+  const modeOptions = [
+    { value: "parallel", label: "In parallel" },
+    { value: "sequential", label: "One after another" },
+  ];
+  const severityOptions = REVIEW_SEVERITY_ORDER.map((s) => ({
+    value: s,
+    label: s,
+  }));
+  const html =
+    `<p class="sub">Let one or more independent reviewer models critique the change the agent just made. Each reviewer sees only the diff - never another reviewer's answer - and a review never edits anything. Models come from Settings &gt; Models and reuse that model's own key.</p>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Enable multi-model review</div><div class="set-desc">Turn this on to use /multi-modeal-review and the review card. Off means the app behaves exactly as before.</div></div><div class="set-ctl"><span id="sw_review"></span></div></div>` +
+    `<h4 class="card-title" style="margin-top:16px">Reviewer models</h4>` +
+    `<div id="rvRows">${rows.map(reviewerRow).join("")}</div>` +
+    `<div class="modal-actions" style="justify-content:flex-start;margin:8px 0 0"><button class="btn small" id="rvAdd">Add a reviewer</button></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">After a run that edited files</div><div class="set-desc">Off means a review only happens when you ask for it. Offering a card asks first; starting it spends a model's tokens without asking.</div></div><div class="set-ctl">${seg(rv.auto_run || "off", autoOptions, "rv_auto")}</div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Run the reviewers</div><div class="set-desc">In parallel they finish together and cost the same; one after another is easier to follow while they run.</div></div><div class="set-ctl">${seg(rv.mode || "parallel", modeOptions, "rv_mode")}</div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Severity to report</div><div class="set-desc">Findings below this are counted but not shown.</div></div><div class="set-ctl"><select class="sel-inline" id="rv_severity">${severityOptions.map((o) => `<option value="${o.value}"${o.value === rv.severity_threshold ? " selected" : ""}>${escapeHtml(o.label)}</option>`).join("")}</select></div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Show the reviewers the whole file</div><div class="set-desc">Off sends only the diff. On adds the file around the change, which costs more tokens but lets a reviewer judge the code rather than the patch.</div></div><div class="set-ctl"><span id="rv_full"></span></div></div>` +
+    `<h4 class="card-title" style="margin-top:22px">Limits</h4>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Maximum reviewers</div><div class="set-desc">How many models may review one change.</div></div><div class="set-ctl"><input class="sel-inline" id="rv_max_reviewers" type="number" min="1" max="16" value="${rv.max_reviewers ?? 4}" style="width:80px"></div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Maximum files</div><div class="set-desc">Files past this are left out and named in the report.</div></div><div class="set-ctl"><input class="sel-inline" id="rv_max_files" type="number" min="1" max="500" value="${rv.max_files ?? 40}" style="width:80px"></div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Maximum diff size (KB)</div><div class="set-desc">The whole change a reviewer may be sent.</div></div><div class="set-ctl"><input class="sel-inline" id="rv_max_diff" type="number" min="1" max="20000" value="${Math.round((rv.max_diff_bytes ?? 200000) / 1024)}" style="width:90px"></div></div>` +
+    `<div class="set-row"><div class="set-info"><div class="set-label">Maximum tokens</div><div class="set-desc">The whole run's token budget across every reviewer.</div></div><div class="set-ctl"><input class="sel-inline" id="rv_max_tokens" type="number" min="1000" max="10000000" step="1000" value="${rv.max_tokens ?? 150000}" style="width:110px"></div></div>` +
+    `<div class="set-row" style="align-items:flex-start"><div class="set-info"><div class="set-label">Excluded files</div><div class="set-desc">One glob per line. Lockfiles, generated code and build output are excluded already; add your own.</div></div><div class="set-ctl" style="flex:1"><textarea id="rv_exclusions" class="set-text" rows="3" placeholder="*.min.js&#10;docs/**">${escapeHtml((rv.exclusions ?? []).join("\n"))}</textarea></div></div>` +
+    `<div class="set-row" style="align-items:flex-start"><div class="set-info"><div class="set-label">Extra instructions for the reviewers</div><div class="set-desc">Added to every reviewer's prompt. The targets each reviewer must cover live in the engine, in one place.</div></div><div class="set-ctl" style="flex:1"><textarea id="rv_prompt" class="set-text" rows="3" placeholder="Optional extra guidance">${escapeHtml(rv.prompt ?? "")}</textarea></div></div>` +
+    `<div class="modal-actions" style="justify-content:flex-start;margin-top:8px"><button class="btn primary" id="rvSave">Save review settings</button></div><div id="rvStatus" class="status-line"></div>`;
+  const wire = (): void => {
+    const body = el<HTMLDivElement>("settingsBody");
+    const list = el<HTMLDivElement>("rvRows");
+    const wireRows = (): void => {
+      list.innerHTML = rows.map(reviewerRow).join("");
+      rows.forEach((r, i) => {
+        wireSwitch(body, `rv_en_${i}`, r.enabled !== false, () => {});
+      });
+      list.querySelectorAll<HTMLButtonElement>("[data-rv-del]").forEach((b) => {
+        b.onclick = () => {
+          const index = Number(b.dataset["rvDel"] ?? 0);
+          rows.splice(index, 1);
+          wireRows();
+        };
+      });
+    };
+    wireRows();
+    el<HTMLButtonElement>("rvAdd").onclick = () => {
+      rows.push({ model_id: "", label: "", enabled: true, focus: "" });
+      wireRows();
+    };
+    wireSwitch(body, "sw_review", rv.enabled, () => {});
+    wireSwitch(body, "rv_full", rv.full_context, () => {});
+    const val = (id: string): string =>
+      (
+        document.getElementById(id) as
+          | HTMLInputElement
+          | HTMLSelectElement
+          | HTMLTextAreaElement
+          | null
+      )?.value ?? "";
+    const isOn = (id: string): boolean =>
+      body.querySelector<HTMLElement>(`#${id}`)?.classList.contains("on") ??
+      false;
+    const segValue = (hook: string): string =>
+      body
+        .querySelector<HTMLElement>(`[data-seg="${hook}"] button.sel`)
+        ?.dataset["v"] ?? "";
+    const num = (id: string, fallback: number): number => {
+      const parsed = parseInt(val(id), 10);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    el<HTMLButtonElement>("rvSave").onclick = () => {
+      const picked: ReviewerConfig[] = [];
+      list.querySelectorAll<HTMLElement>(".rv-row").forEach((row, i) => {
+        const model_id =
+          row.querySelector<HTMLSelectElement>('[data-rv="model"]')?.value ?? "";
+        if (!model_id) return;
+        picked.push({
+          model_id,
+          label: "",
+          enabled: isOn(`rv_en_${i}`),
+          focus: row.querySelector<HTMLSelectElement>('[data-rv="focus"]')
+            ?.value ?? "",
+        });
+      });
+      const next: AgentConfig = {
+        ...cfg,
+        review: {
+          ...rv,
+          enabled: isOn("sw_review"),
+          auto_run: segValue("rv_auto") || "off",
+          mode: segValue("rv_mode") || "parallel",
+          reviewers: picked,
+          max_reviewers: num("rv_max_reviewers", 4),
+          max_files: num("rv_max_files", 40),
+          max_diff_bytes: num("rv_max_diff", 200) * 1024,
+          max_file_bytes: rv.max_file_bytes ?? 60000,
+          max_tokens: num("rv_max_tokens", 150000),
+          severity_threshold: val("rv_severity") || "low",
+          full_context: isOn("rv_full"),
+          exclusions: val("rv_exclusions")
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean),
+          prompt: val("rv_prompt"),
+        },
+      };
+      const status = document.getElementById("rvStatus");
       if (status) {
         status.textContent = "Saving…";
         status.className = "status-line";
