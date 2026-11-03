@@ -21,6 +21,10 @@ def _dir(session_id):
     return paths.session_dir() / REVIEW_DIR / str(session_id or "default")
 
 
+def _index(session_id):
+    return _dir(session_id) / "index.json"
+
+
 def _path(session_id, review_id):
     return _dir(session_id) / f"{review_id}.json"
 
@@ -36,8 +40,14 @@ def new_id():
     return "rv-" + secrets.token_hex(6)
 
 
-def save(session_id, report):
-    """Write the report and return it."""
+def save(session_id, report, *, newest=True):
+    """Write the report, record it as the newest, and return it.
+
+    Save order is recorded in index.json because file mtimes collide when
+    two reports are written within one clock tick, and "latest" must
+    still name the report that was saved last. Re-saves that only mutate
+    an old report (dismiss, mark_stale) pass newest=False.
+    """
     try:
         target = _path(session_id, report.get("review_id") or new_id())
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -45,7 +55,15 @@ def save(session_id, report):
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
         )
     except OSError:
-        pass
+        return report
+    if newest and report.get("review_id"):
+        try:
+            _index(session_id).write_text(
+                json.dumps({"latest": report["review_id"]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
     return report
 
 
@@ -59,7 +77,21 @@ def load(session_id, review_id):
 
 
 def latest(session_id):
-    """The most recent report for this session, or None."""
+    """The most recent report for this session, or None.
+
+    The recorded save order wins because mtimes can collide within one
+    clock tick; a missing index (or one pointing at a deleted report)
+    falls back to mtime order for directories written by older builds.
+    """
+    try:
+        data = json.loads(_index(session_id).read_text(encoding="utf-8"))
+        review_id = data.get("latest") if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        review_id = None
+    if review_id:
+        document = load(session_id, review_id)
+        if document is not None:
+            return document
     try:
         entries = [
             item
@@ -70,7 +102,7 @@ def latest(session_id):
         return None
     if not entries:
         return None
-    newest = max(entries, key=lambda item: item.stat().st_mtime)
+    newest = max(entries, key=lambda item: item.stat().st_mtime_ns)
     try:
         data = json.loads(newest.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -84,7 +116,7 @@ def all_reports(session_id):
         entries = [item for item in _dir(session_id).glob("rv-*.json") if item.is_file()]
     except OSError:
         return []
-    entries.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+    entries.sort(key=lambda item: item.stat().st_mtime_ns, reverse=True)
     reports = []
     for item in entries:
         try:
@@ -104,7 +136,7 @@ def dismiss(session_id, review_id, finding_id):
     dismissed = set(report.get("dismissed") or [])
     dismissed.add(str(finding_id))
     report["dismissed"] = sorted(dismissed)
-    save(session_id, report)
+    save(session_id, report, newest=False)
     return report
 
 
@@ -120,7 +152,7 @@ def mark_stale(session_id, upto_index):
         index = int(report.get("message_index") or 0)
         if index >= int(upto_index) and not report.get("stale"):
             report["stale"] = True
-            save(session_id, report)
+            save(session_id, report, newest=False)
             changed.append(report)
     return changed
 
