@@ -43,10 +43,16 @@ class InstructionsCase(unittest.TestCase):
         prompt = llm.system_prompt("build")
         self.assertNotIn("{instructions}", prompt)
         self.assertIn("## Project rules", prompt)
-        # The bound is the shared base prompt - rules, skills, the attachment
-        # rules - and then some slack. It catches the instructions loader
-        # injecting a blob; it is not a cap on the prompt's own text.
-        self.assertLess(len(prompt), 4400, "an empty instructions block stays small")
+        # The bound is the shared base prompt - rules, the attachment rules -
+        # and then some slack. It catches the instructions loader injecting a
+        # blob; it is not a cap on the prompt's own text. Installed skills'
+        # descriptions ride along with whichever checkout runs this, so their
+        # exact bytes are excluded from the count.
+        skills = llm.skills_prompt()
+        without_skills = len(prompt) - (len(skills) if skills else 0)
+        self.assertLess(
+            without_skills, 4400, "an empty instructions block stays small"
+        )
 
     def test_the_global_file_is_the_fallback(self):
         home = Path(self.tmp.name) / "home"
