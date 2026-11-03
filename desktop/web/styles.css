@@ -1570,6 +1570,78 @@ button {
   letter-spacing: 0.04em;
 }
 
+/* attachments: the files the user attached to the message being written */
+.attach-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.attach-bar.hidden {
+  display: none;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 4px 4px 4px 8px;
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: var(--t-caption);
+  color: var(--text-2);
+}
+.attach-chip.error {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+.attach-chip .a-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 170px;
+}
+.attach-chip .a-meta {
+  flex: none;
+  color: var(--text-3);
+  font-size: var(--t-micro);
+}
+.attach-chip .a-progress {
+  flex: none;
+  color: var(--accent);
+  font-size: var(--t-micro);
+}
+.attach-chip .a-error {
+  flex: none;
+  color: var(--danger);
+  font-size: var(--t-micro);
+}
+.attach-x {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.attach-x:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+.attach-btn {
+  flex: none;
+  align-self: flex-end;
+}
+.composer.dragging .composer-box {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 /* pending strip: messages filed against the running turn */
 .pending-bar {
   display: flex;

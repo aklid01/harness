@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 
 from . import checkpoints, events
+from . import attachments as attachments_mod
 
 
 class EngineService:
@@ -87,7 +88,7 @@ class EngineService:
             self._submissions.pop(next(iter(self._submissions)))
         return False
 
-    def submit(self, text, mode="build", submission_id=None):
+    def submit(self, text, mode="build", submission_id=None, attachments=None):
         with self._lock:
             if self._seen_submission(submission_id):
                 self._send(
@@ -107,13 +108,15 @@ class EngineService:
                 return False
             self.running = True
         self.cancel.clear()
-        threading.Thread(target=self._turn, args=(text, mode), daemon=True).start()
+        threading.Thread(
+            target=self._turn, args=(text, mode, attachments), daemon=True
+        ).start()
         return True
 
-    def _turn(self, text, mode):
+    def _turn(self, text, mode, attachments=None):
         try:
             self._ensure_runner(mode)
-            self.runner.handle_input(text)
+            self.runner.handle_input(text, attachments=attachments)
         finally:
             with self._lock:
                 self.running = False
@@ -571,12 +574,17 @@ class Mailbox:
         if self.on_change is not None:
             self.on_change(self.items())
 
-    def add(self, text, kind):
+    def add(self, text, kind, attachments=None):
         """File one message; None when the mailbox is full."""
         with self._lock:
             if len(self._items) >= self.MAX_ITEMS:
                 return None
-            item = {"id": f"m{next(self._ids)}", "kind": kind, "text": text}
+            item = {
+                "id": f"m{next(self._ids)}",
+                "kind": kind,
+                "text": text,
+                "attachments": list(attachments or []),
+            }
             self._items.append(item)
         self._notify()
         return item["id"]
@@ -586,6 +594,18 @@ class Mailbox:
             for item in self._items:
                 if item["id"] == item_id:
                     item["text"] = text
+                    break
+            else:
+                return False
+        self._notify()
+        return True
+
+    def set_attachments(self, item_id, attachments):
+        """Replace the files of one pending message."""
+        with self._lock:
+            for item in self._items:
+                if item["id"] == item_id:
+                    item["attachments"] = list(attachments or [])
                     break
             else:
                 return False
@@ -790,7 +810,7 @@ class Session:
             self._submissions.pop(next(iter(self._submissions)))
         return False
 
-    def submit(self, text, mode, submission_id=None):
+    def submit(self, text, mode, submission_id=None, attachments=None):
         with self.lock:
             if self._seen_submission(submission_id):
                 self.on_event(events.NOTE, {"text": "that submission was already sent"})
@@ -802,10 +822,26 @@ class Session:
                 return False
             self.running = True
         self.cancel.clear()
-        self._thread(self._turn, text, mode)
+        self._thread(self._turn, text, mode, None, self._keep_attachments(attachments))
         return True
 
-    def enqueue(self, text, kind, submission_id=None):
+    def _keep_attachments(self, items):
+        """The files of one message that fit the limit; the rest are named."""
+        kept, dropped = attachments_mod.within_limit(items)
+        for item in dropped:
+            self.on_event(
+                events.NOTE,
+                {
+                    "text": (
+                        f"{item.get('name') or 'file'} was not attached - the "
+                        f"limit is {attachments_mod.MAX_FILES_PER_MESSAGE} "
+                        "files per message"
+                    )
+                },
+            )
+        return kept
+
+    def enqueue(self, text, kind, submission_id=None, attachments=None):
         """File a message against the running turn.
 
         A steer joins the conversation at the next model-call boundary; a
@@ -826,7 +862,8 @@ class Session:
             if not text or kind is None:
                 self.on_event(events.NOTE, {"text": "empty message or unknown kind"})
                 return False
-            if self.mailbox.add(text, kind) is None:
+            kept = self._keep_attachments(attachments)
+            if self.mailbox.add(text, kind, kept) is None:
                 self.on_event(
                     events.NOTE,
                     {"text": "too many pending messages - remove one first"},
@@ -843,6 +880,28 @@ class Session:
 
     def remove_pending(self, item_id):
         return self.mailbox.remove(str(item_id))
+
+    def remove_pending_attachment(self, item_id, attachment_id):
+        """Take one file back from a pending message.
+
+        The file has not been sent yet, so it is still a staged upload and
+        goes away with the removal.
+        """
+        for item in self.mailbox.items():
+            if item["id"] != str(item_id):
+                continue
+            kept = []
+            taken = None
+            for meta in item.get("attachments") or []:
+                if str(meta.get("id")) == str(attachment_id):
+                    taken = meta
+                else:
+                    kept.append(meta)
+            if taken is None:
+                return False
+            attachments_mod.discard(taken)
+            return self.mailbox.set_attachments(item["id"], kept)
+        return False
 
     def _materialise(self):
         """Create this tab's session once, and hand back the new id.
@@ -865,7 +924,7 @@ class Session:
             self.written = 0
             return new_id
 
-    def _turn(self, text, mode, via=None):
+    def _turn(self, text, mode, via=None, attachments=None):
         crashed = None
         try:
             # Materialise INSIDE the try: a failing first prompt (read-only
@@ -888,7 +947,7 @@ class Session:
                     )
                 self.ensure_runner(mode)
                 self.runner.mailbox = self.mailbox
-                self.runner.handle_input(text, via=via)
+                self.runner.handle_input(text, via=via, attachments=attachments)
                 # Keep the append cursor in step with what was just written.
                 # Losing it made the next turn re-save the whole prefix, which
                 # is how a transcript ended up holding its opening turn twice.
@@ -923,7 +982,13 @@ class Session:
                 follow = self.mailbox.take_next()
                 if follow is not None:
                     self.cancel.clear()
-                    self._thread(self._turn, follow["text"], mode, follow["kind"])
+                    self._thread(
+                        self._turn,
+                        follow["text"],
+                        mode,
+                        follow["kind"],
+                        follow.get("attachments"),
+                    )
                     idle = False
                 else:
                     self.running = False
@@ -985,7 +1050,7 @@ class Session:
 
         return Runner(stream=True, cancel_event=self.cancel, mode=mode)
 
-    def resubmit(self, count, text, mode, restore_files=True):
+    def resubmit(self, count, text, mode, restore_files=True, attachments=None):
         with self.lock:
             if self.running:
                 self.on_event(
@@ -994,10 +1059,10 @@ class Session:
                 return False
             self.running = True
         self.cancel.clear()
-        self._thread(self._resend, count, text, mode, restore_files)
+        self._thread(self._resend, count, text, mode, restore_files, attachments)
         return True
 
-    def _resend(self, count, text, mode, restore_files=True):
+    def _resend(self, count, text, mode, restore_files=True, attachments=None):
         crashed = None
         try:
             with self.bound():
@@ -1007,6 +1072,13 @@ class Session:
                     count = max(0, min(int(count), len(self.runner.messages)))
                 except (TypeError, ValueError):
                     count = len(self.runner.messages)
+                # The message being replaced keeps its files: a resend of a
+                # message that carried attachments carries them again. Files
+                # attached to the resend itself join them.
+                carried = []
+                if 0 <= count < len(self.runner.messages):
+                    carried = self.runner.messages[count].get("attachments") or []
+                carried = carried + list(attachments or [])
                 if restore_files:
                     checkpoints.restore_since(self.session_id, count)
                 session_mod.rewind_to(count)
@@ -1022,7 +1094,7 @@ class Session:
                     },
                 )
             with self.bound():
-                self.runner.handle_input(text)
+                self.runner.handle_input(text, attachments=carried)
                 self.written = session_mod.written()
         except Exception as failure:  # noqa: BLE001
             crashed = failure
@@ -1195,6 +1267,8 @@ class Harness:
         if op == "open":
             s.open_chat(obj.get("id", ""), obj.get("mode", s.mode))
             return R({"reply": "open", "ok": True})
+        if op in ("attach_begin", "attach_part", "attach_finish", "attach_discard"):
+            return R(self._attachment_op(op, obj, key))
         if op == "submit":
             return R(
                 {
@@ -1203,6 +1277,7 @@ class Harness:
                         obj.get("text", ""),
                         obj.get("mode", s.mode),
                         submission_id=obj.get("submission_id"),
+                        attachments=obj.get("attachments"),
                     ),
                 }
             )
@@ -1214,6 +1289,7 @@ class Harness:
                         obj.get("text", ""),
                         obj.get("kind", "queue"),
                         submission_id=obj.get("submission_id"),
+                        attachments=obj.get("attachments"),
                     ),
                 }
             )
@@ -1227,6 +1303,15 @@ class Harness:
         if op == "pending_remove":
             return R(
                 {"reply": "pending_remove", "ok": s.remove_pending(obj.get("id", ""))}
+            )
+        if op == "pending_remove_attachment":
+            return R(
+                {
+                    "reply": "pending_remove_attachment",
+                    "ok": s.remove_pending_attachment(
+                        obj.get("id", ""), obj.get("attachment_id", "")
+                    ),
+                }
             )
         if op == "stop":
             s.stop()
@@ -1258,6 +1343,9 @@ class Harness:
             with s.workspace():
                 session_mod.delete_session(sid)
             checkpoints.delete(sid)
+            # The staged files go with the session: they are its files, and
+            # nothing else may reach them.
+            attachments_mod.cleanup_session(sid, s.root)
             s.on_event("sessions_updated", {})
             return R({"reply": op, "ok": True})
         if op == "rewind_preview":
@@ -1288,6 +1376,7 @@ class Harness:
                         obj.get("count", 0),
                         obj.get("text", ""),
                         obj.get("mode", s.mode),
+                        attachments=obj.get("attachments"),
                     ),
                 }
             )
@@ -1361,6 +1450,47 @@ class Harness:
             )
             return R({"reply": "retry", "ok": bool(ok)})
         return R({"reply": op, "ok": False, "error": f"unknown op: {op}"})
+
+    def _attachment_op(self, op, obj, key):
+        """Stage one file the user attached.
+
+        The bytes arrive in chunks, because a websocket frame is far smaller
+        than a file can be. The per-file limit is checked before the first
+        chunk, so an oversize file is refused with its name and the limit
+        rather than uploaded and then dropped.
+        """
+        try:
+            if op == "attach_begin":
+                record = attachments_mod.begin(
+                    key,
+                    obj.get("name") or "file",
+                    obj.get("size") or 0,
+                    obj.get("type") or "application/octet-stream",
+                )
+                return {
+                    "reply": op,
+                    "ok": True,
+                    "data": {
+                        "id": record["id"],
+                        "max_bytes": attachments_mod.MAX_FILE_BYTES,
+                        "chunk_bytes": attachments_mod.CHUNK_BYTES,
+                    },
+                }
+            if op == "attach_part":
+                written = attachments_mod.part(obj.get("id"), obj.get("data"))
+                return {"reply": op, "ok": True, "data": {"written": written}}
+            if op == "attach_finish":
+                return {
+                    "reply": op,
+                    "ok": True,
+                    "data": {"attachment": attachments_mod.finish(obj.get("id"))},
+                }
+            attachments_mod.abandon(obj.get("id"))
+            return {"reply": op, "ok": True}
+        except attachments_mod.TooBig as failure:
+            return {"reply": op, "ok": False, "error": str(failure)}
+        except attachments_mod.Missing as failure:
+            return {"reply": op, "ok": False, "error": str(failure)}
 
     def _agents_op(self, op, obj):
         from . import agents as agents_mod
@@ -1529,6 +1659,9 @@ def main(argv=None):
     paths_mod.migrate_sessions()
     config_mod.reload()
     session_mod.migrate_root_sessions()
+    # A half-finished upload from the last run is worthless: nobody can send
+    # it any more, and it must not outlive the process that owned it.
+    attachments_mod.clear_staging()
     get_backend()
     asyncio.run(serve(args.host, args.port))
 

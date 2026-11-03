@@ -51,6 +51,7 @@ MODEL_FIELDS = (
     "max_output_tokens",
     "supports_tools",
     "supports_reasoning",
+    "supports_images",
     "supports_text_tools",
     "extra_params",
     "disabled",
@@ -64,6 +65,7 @@ MODEL_DEFAULTS = {
     "max_output_tokens": None,
     "supports_tools": True,
     "supports_reasoning": True,
+    "supports_images": True,
     "supports_text_tools": False,
     "extra_params": {},
     "disabled": False,
@@ -880,6 +882,7 @@ def active_model_capabilities():
         return {
             "supports_tools": True,
             "supports_reasoning": True,
+            "supports_images": True,
             "supports_text_tools": False,
             "context_window": None,
             "max_output_tokens": None,
@@ -891,6 +894,7 @@ def active_model_capabilities():
     return {
         "supports_tools": bool(model.get("supports_tools", True)),
         "supports_reasoning": bool(model.get("supports_reasoning", True)),
+        "supports_images": bool(model.get("supports_images", True)),
         "supports_text_tools": bool(model.get("supports_text_tools", False)),
         "context_window": model.get("context_window"),
         "max_output_tokens": model.get("max_output_tokens"),

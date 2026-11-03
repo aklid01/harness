@@ -377,6 +377,9 @@ const child = spawn(EXE, [], {
     env.HARNESS_PROJECT_ROOT = WS_ROOT;
     env.HARNESS_APP_DATA = APP_DATA;
     env.HARNESS_SESSIONS_ROOT = path.join(TMP, "sessions");
+    // A small per-file limit, so the check can drive a refused upload
+    // without moving megabytes around.
+    env.HARNESS_MAX_ATTACHMENT_BYTES = "2048";
     return env;
   })(),
   stdio: ["ignore", "ignore", "ignore"],
@@ -965,6 +968,145 @@ try {
     "queue-auto-runs-after-the-turn",
     queuedRan === true && chainIdle === true,
     JSON.stringify({ queuedRan, chainIdle }),
+  );
+
+  /* ---- attachments: pick, remove, send, and a refused file ---- */
+  const attachFiles = (files) =>
+    evaluate(
+      ws,
+      `(() => {
+  const input = document.getElementById("fileInput");
+  if (!input) return false;
+  const dt = new DataTransfer();
+  ${files
+    .map(
+      (f) =>
+        `dt.items.add(new File([${JSON.stringify(f.body)}], ${JSON.stringify(
+          f.name,
+        )}, { type: ${JSON.stringify(f.type || "application/octet-stream")} }));`,
+    )
+    .join("\n  ")}
+  input.files = dt.files;
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  return true;
+})()`,
+    );
+  const attachState = () =>
+    evaluate(
+      ws,
+      `(() => ({
+  bar: [...document.querySelectorAll("#attachBar .attach-chip")].map((c) => ({
+    name: c.querySelector(".a-name")?.textContent ?? "",
+    meta: c.querySelector(".a-meta")?.textContent ?? "",
+    failed: Boolean(c.querySelector(".a-error")),
+    why: c.querySelector(".a-error")?.title ?? "",
+  })),
+  sent: [...document.querySelectorAll("#chat .msg.user .attach-chip .a-name")].map(
+    (n) => n.textContent ?? "",
+  ),
+  activity: document.getElementById("activityText")?.textContent ?? "",
+}))()`,
+    );
+
+  await attachFiles([
+    { name: "notes.md", body: "notes the user attached\n", type: "text/markdown" },
+    { name: "data.bin", body: "second file\n", type: "application/octet-stream" },
+  ]);
+  const picked = await waitFor(
+    `(() => {
+    const chips = [...document.querySelectorAll("#attachBar .attach-chip")];
+    return chips.length === 2 ? chips.length : false;
+  })()`,
+    15000,
+  );
+  const pickedState = await attachState();
+  verdict(
+    "attachment-chips-show-name-type-and-size",
+    picked === 2 &&
+      pickedState.bar.some((c) => c.name === "notes.md" && c.meta.includes("md")) &&
+      pickedState.bar.some((c) => c.name === "data.bin" && c.meta.includes("B")),
+    JSON.stringify(pickedState.bar),
+  );
+
+  // A file can be taken back before it is sent.
+  await evaluate(
+    ws,
+    `(() => {
+    const chip = [...document.querySelectorAll("#attachBar .attach-chip")].find(
+      (c) => c.querySelector(".a-name")?.textContent === "data.bin",
+    );
+    chip?.querySelector(".attach-x")?.click();
+    return Boolean(chip);
+  })()`,
+  );
+  await sleep(300);
+  const afterRemove = await attachState();
+  verdict(
+    "attachment-can-be-removed-before-sending",
+    afterRemove.bar.length === 1 &&
+      afterRemove.bar[0].name === "notes.md" &&
+      !afterRemove.bar[0].failed,
+    JSON.stringify(afterRemove.bar),
+  );
+
+  // A file over the per-file limit is refused by name, with the limit. The
+  // file that was fine stays where it is.
+  await attachFiles([
+    { name: "huge.bin", body: "x".repeat(4096), type: "application/octet-stream" },
+  ]);
+  const refused = await waitFor(
+    `(() => {
+    const chip = [...document.querySelectorAll("#attachBar .attach-chip")].find(
+      (c) => c.querySelector(".a-name")?.textContent === "huge.bin",
+    );
+    return chip && chip.querySelector(".a-error") ? chip.querySelector(".a-error").title : false;
+  })()`,
+    15000,
+  );
+  const refusedState = await attachState();
+  verdict(
+    "oversize-attachment-shows-a-clear-error",
+    typeof refused === "string" &&
+      refused.includes("huge.bin") &&
+      refused.includes("2048") &&
+      refusedState.bar.some((c) => c.name === "notes.md" && !c.failed),
+    JSON.stringify({ refused, bar: refusedState.bar }),
+  );
+
+  // The message still goes, with the file that was accepted.
+  const beforeSend = liveState.requests.length;
+  await typeEntry("summarize the attached file");
+  await evaluate(ws, `document.getElementById("sendstop").click()`);
+  const sentChip = await waitFor(
+    `(() => {
+    const names = [...document.querySelectorAll("#chat .msg.user .attach-chip .a-name")].map(
+      (n) => n.textContent ?? "",
+    );
+    return names.includes("notes.md") ? names : false;
+  })()`,
+    20000,
+  );
+  const overTheWire = await (async () => {
+    // The user bubble lands before the request does, so give the engine a
+    // moment to put the manifest on the wire.
+    await sleep(1500);
+    return liveState.requests.slice(beforeSend).some((r) =>
+      (r.messages || []).some(
+        (m) =>
+          m.role === "user" &&
+          typeof m.content === "string" &&
+          m.content.includes("<attachments>") &&
+          m.content.includes("notes.md"),
+      ),
+    );
+  })();
+  verdict(
+    "attachment-travels-with-the-message",
+    Array.isArray(sentChip) &&
+      sentChip.includes("notes.md") &&
+      !sentChip.includes("huge.bin") &&
+      overTheWire,
+    JSON.stringify({ sentChip, overTheWire }),
   );
 
   /* A renamed session takes the new name on its tab at once - the one you

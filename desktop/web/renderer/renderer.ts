@@ -2,6 +2,8 @@ import "./bridge.js";
 import type {
   AgentConfig,
   AgentRole,
+  AttachmentDraft,
+  AttachmentMeta,
   ClientOp,
   ContextInfo,
   DecisionEventPayload,
@@ -219,6 +221,9 @@ const permsBtn = el<HTMLButtonElement>("permsBtn");
 const permsLabel = el<HTMLSpanElement>("permsLabel");
 const permsMenu = el<HTMLDivElement>("permsMenu");
 const pendingBar = el<HTMLDivElement>("pendingBar");
+const attachBar = el<HTMLDivElement>("attachBar");
+const attachBtn = el<HTMLButtonElement>("attachBtn");
+const fileInput = el<HTMLInputElement>("fileInput");
 const sendExtra = el<HTMLButtonElement>("sendExtra");
 const sendExtraCaret = el<HTMLButtonElement>("sendExtraCaret");
 const sendExtraMenu = el<HTMLDivElement>("sendExtraMenu");
@@ -265,6 +270,9 @@ const REQUIRED_IDS = [
   "permsLabel",
   "permsMenu",
   "pendingBar",
+  "attachBar",
+  "attachBtn",
+  "fileInput",
   "sendExtra",
   "sendExtraCaret",
   "sendExtraMenu",
@@ -358,6 +366,7 @@ interface Ctx {
   toolCards: Map<string, HTMLDivElement>;
   chatBody: HTMLElement;
   entryDraft: string;
+  attachments: AttachmentDraft[];
 }
 let tabs: Ctx[] = [];
 let activeCtx: Ctx | null = null;
@@ -536,6 +545,7 @@ function makeCtx(
     toolCards: new Map(),
     chatBody: document.createElement("div"),
     entryDraft: "",
+    attachments: [],
   };
   ctx.chatBody.className = "chat-body";
   ctxById.set(ctx.id, ctx);
@@ -774,7 +784,10 @@ function setBusy(ctx: Ctx, value: boolean): void {
 function updateSendState(): void {
   if (!activeCtx) return;
   sendstop.classList.toggle("busy", activeCtx.busy);
-  sendstop.disabled = activeCtx.busy ? false : entry.value.trim().length === 0;
+  const hasFiles = activeCtx.attachments.some((a) => a.status === "ready");
+  sendstop.disabled = activeCtx.busy
+    ? false
+    : entry.value.trim().length === 0 && !hasFiles;
   sendstop.title = activeCtx.busy ? "Stop" : "Send";
   updateSendExtra();
 }
@@ -782,7 +795,9 @@ function updateSendState(): void {
    steer or queue (the default from settings); the caret picks the other. */
 function updateSendExtra(): void {
   const busy = !!activeCtx?.busy;
-  sendExtra.disabled = busy ? entry.value.trim().length === 0 : true;
+  const hasFiles =
+    !!activeCtx && activeCtx.attachments.some((a) => a.status === "ready");
+  sendExtra.disabled = busy ? entry.value.trim().length === 0 && !hasFiles : true;
   const kind = midTurnKind();
   sendExtra.title =
     kind === "steer"
@@ -828,6 +843,264 @@ function send(ctx: Ctx, op: OpPayload): number {
   return reqSeq;
 }
 
+/* ---------------- attachments ---------------- */
+
+/* A websocket frame is far smaller than a file can be, so the bytes go up
+   in chunks. 128 KB of raw bytes is about 175 KB of base64 - well inside a
+   frame, and small enough that the progress moves visibly. */
+const ATTACH_CHUNK = 128 * 1024;
+
+const replyWaiters = new Map<number, (msg: ServerEnvelope) => void>();
+
+function request(ctx: Ctx, op: OpPayload): Promise<ServerEnvelope> {
+  return new Promise((resolve) => {
+    const id = send(ctx, op);
+    if (!id) {
+      resolve({ ok: false, error: "not connected to backend" });
+      return;
+    }
+    replyWaiters.set(id, resolve);
+  });
+}
+
+function humanSize(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = Number(bytes) || 0;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const shown = unit > 0 && value < 10 ? value.toFixed(1) : Math.round(value);
+  return `${shown} ${units[unit]}`;
+}
+
+function toBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    const slice = bytes.subarray(i, i + step);
+    binary += String.fromCharCode.apply(
+      null,
+      Array.from(slice) as number[],
+    );
+  }
+  return btoa(binary);
+}
+
+function fileKind(file: File): string {
+  return file.type || "application/octet-stream";
+}
+
+function shortKind(kind: string): string {
+  const known: Record<string, string> = {
+    "application/pdf": "pdf",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+      "docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/json": "json",
+    "text/markdown": "md",
+    "text/csv": "csv",
+    "text/plain": "text",
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "application/zip": "zip",
+  };
+  return known[kind] ?? kind.split("/").pop() ?? kind;
+}
+
+/* One chip per file. Used in the composer, on the sent message, and on the
+   pending strip, so a file looks the same wherever it shows up. */
+function attachChips(
+  items: AttachmentMeta[],
+  onRemove?: (id: string) => void,
+): HTMLElement[] {
+  const chips: HTMLElement[] = [];
+  for (const item of items) {
+    const chip = document.createElement("span");
+    chip.className = "attach-chip";
+    chip.dataset["attachId"] = item.id;
+    if (item.error) chip.classList.add("error");
+    const name = document.createElement("span");
+    name.className = "a-name";
+    name.textContent = item.name;
+    name.title = item.name;
+    const meta = document.createElement("span");
+    meta.className = "a-meta";
+    meta.textContent = `${shortKind(item.type)} · ${humanSize(item.size)}`;
+    chip.appendChild(name);
+    chip.appendChild(meta);
+    if (item.error) {
+      const why = document.createElement("span");
+      why.className = "a-error";
+      why.textContent = "failed";
+      why.title = item.error;
+      chip.appendChild(why);
+    }
+    if (onRemove) {
+      const x = document.createElement("button");
+      x.className = "attach-x";
+      x.title = "Remove";
+      x.setAttribute("aria-label", `Remove ${item.name}`);
+      x.innerHTML = ICONS.close;
+      x.onclick = (e) => {
+        e.stopPropagation();
+        onRemove(item.id);
+      };
+      chip.appendChild(x);
+    }
+    chips.push(chip);
+  }
+  return chips;
+}
+
+function renderAttachBar(ctx: Ctx): void {
+  if (ctx !== activeCtx) return;
+  attachBar.replaceChildren();
+  if (!ctx.attachments.length) {
+    attachBar.classList.add("hidden");
+    return;
+  }
+  attachBar.classList.remove("hidden");
+  for (const draft of ctx.attachments) {
+    const chip = attachChips(
+      [
+        {
+          id: draft.id,
+          name: draft.name,
+          type: draft.type,
+          size: draft.size,
+          error: draft.error,
+        },
+      ],
+      (id) => removeDraft(ctx, id),
+    )[0];
+    if (draft.status === "uploading") {
+      const pct = document.createElement("span");
+      pct.className = "a-progress";
+      pct.textContent = `${Math.round(draft.progress * 100)}%`;
+      chip.insertBefore(pct, chip.lastChild);
+    }
+    attachBar.appendChild(chip);
+  }
+}
+
+function removeDraft(ctx: Ctx, id: string): void {
+  const draft = ctx.attachments.find((a) => a.id === id);
+  if (draft && draft.status === "uploading" && draft.uploadId) {
+    send(ctx, { op: "attach_discard", id: draft.uploadId });
+  }
+  ctx.attachments = ctx.attachments.filter((a) => a.id !== id);
+  renderAttachBar(ctx);
+}
+
+function readyAttachments(ctx: Ctx): AttachmentMeta[] {
+  return ctx.attachments
+    .filter((a) => a.status === "ready" && !a.error)
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+      type: a.type,
+      size: a.size,
+      path: a.path,
+    }));
+}
+
+async function uploadFile(ctx: Ctx, file: File): Promise<void> {
+  const draft: AttachmentDraft = {
+    id: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    name: file.name,
+    type: fileKind(file),
+    size: file.size,
+    status: "uploading",
+    progress: 0,
+    uploadId: "",
+  };
+  ctx.attachments.push(draft);
+  renderAttachBar(ctx);
+
+  const begin = await request(ctx, {
+    op: "attach_begin",
+    name: file.name,
+    type: draft.type,
+    size: file.size,
+  });
+  if (!begin.ok) {
+    draft.status = "error";
+    draft.error = String(begin.error ?? "could not attach the file");
+    renderAttachBar(ctx);
+    if (ctx === activeCtx) setActivity(draft.error);
+    return;
+  }
+  const ticket = String(
+    (begin.data as { id?: string } | undefined)?.id ?? "",
+  );
+  draft.uploadId = ticket;
+
+  const chunkBytes = Number(
+    (begin.data as { chunk_bytes?: number } | undefined)?.chunk_bytes ??
+      ATTACH_CHUNK,
+  );
+  let sent = 0;
+  while (sent < file.size) {
+    const slice = file.slice(sent, Math.min(sent + chunkBytes, file.size));
+    const buffer = await slice.arrayBuffer();
+    const part = await request(ctx, {
+      op: "attach_part",
+      id: ticket,
+      data: toBase64(buffer),
+    });
+    if (!part.ok) {
+      draft.status = "error";
+      draft.error = String(part.error ?? "the file could not be uploaded");
+      renderAttachBar(ctx);
+      if (ctx === activeCtx) setActivity(draft.error);
+      return;
+    }
+    sent += buffer.byteLength;
+    draft.progress = file.size ? sent / file.size : 1;
+    renderAttachBar(ctx);
+  }
+  if (!file.size) {
+    // A zero-byte file still has to be staged, so the engine knows it is
+    // there and can say why it has nothing in it.
+    const part = await request(ctx, { op: "attach_part", id: ticket, data: "" });
+    if (!part.ok) {
+      draft.status = "error";
+      draft.error = String(part.error ?? "the file could not be uploaded");
+      renderAttachBar(ctx);
+      return;
+    }
+  }
+  const done = await request(ctx, { op: "attach_finish", id: ticket });
+  if (!done.ok) {
+    draft.status = "error";
+    draft.error = String(done.error ?? "the file could not be staged");
+    renderAttachBar(ctx);
+    if (ctx === activeCtx) setActivity(draft.error);
+    return;
+  }
+  const meta = (done.data as { attachment?: AttachmentMeta } | undefined)
+    ?.attachment;
+  if (meta) {
+    draft.id = meta.id;
+    draft.path = meta.path;
+    draft.size = meta.size;
+  }
+  draft.status = "ready";
+  draft.progress = 1;
+  renderAttachBar(ctx);
+}
+
+function pickFiles(ctx: Ctx, files: FileList | File[] | null): void {
+  if (!files) return;
+  for (const file of Array.from(files)) {
+    void uploadFile(ctx, file);
+  }
+}
+
 /* ---------------- chat rendering (per-tab) ---------------- */
 function turnWrap(kind: "user" | "assistant"): {
   wrap: HTMLElement;
@@ -840,7 +1113,12 @@ function turnWrap(kind: "user" | "assistant"): {
   wrap.appendChild(body);
   return { wrap, body };
 }
-function addUser(ctx: Ctx, text: string, via?: string): void {
+function addUser(
+  ctx: Ctx,
+  text: string,
+  via?: string,
+  attachments?: AttachmentMeta[],
+): void {
   const { wrap, body } = turnWrap("user");
   body.textContent = text;
   if (via === "steer" || via === "queue") {
@@ -849,6 +1127,7 @@ function addUser(ctx: Ctx, text: string, via?: string): void {
     chip.textContent = via === "steer" ? "steered" : "queued";
     wrap.appendChild(chip);
   }
+  for (const chip of attachChips(attachments ?? [])) wrap.appendChild(chip);
   ctx.chatBody.appendChild(wrap);
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
@@ -1571,6 +1850,10 @@ function renderTranscript(
         return;
       const { wrap, body } = turnWrap("user");
       body.textContent = content;
+      const attached = Array.isArray(m["attachments"])
+        ? (m["attachments"] as AttachmentMeta[])
+        : [];
+      for (const chip of attachChips(attached)) wrap.appendChild(chip);
       wrap.appendChild(msgActions(ctx, idx, "user", content));
       ctx.chatBody.appendChild(wrap);
     } else if (m["role"] === "assistant") {
@@ -2695,8 +2978,9 @@ function enqueueNow(ctx: Ctx, kind: PendingKind, text: string): void {
   entry.value = "";
   ctx.entryDraft = "";
   autogrow();
+  const files = takeAttachments(ctx);
   updateSendState();
-  send(ctx, { op: "enqueue", text, kind });
+  send(ctx, { op: "enqueue", text, kind, attachments: files });
   if (ctx === activeCtx)
     setActivity(
       kind === "steer"
@@ -2770,6 +3054,15 @@ function renderPendingStrip(ctx: Ctx): void {
     const text = document.createElement("div");
     text.className = "p-text";
     text.textContent = item.text;
+    for (const chip of attachChips(item.attachments ?? [], (attachmentId) => {
+      send(ctx, {
+        op: "pending_remove_attachment",
+        id: item.id,
+        attachment_id: attachmentId,
+      });
+    })) {
+      text.appendChild(chip);
+    }
     const editBtn = document.createElement("button");
     editBtn.className = "p-btn";
     editBtn.title = "Edit before it is sent";
@@ -2801,15 +3094,27 @@ function doSubmit(ctx: Ctx, text: string): void {
   dropFailureCard(ctx);
   hideEditBar();
   autogrow();
+  const files = takeAttachments(ctx);
   updateSendState();
   setBusy(ctx, true);
   showThinking(ctx);
-  send(ctx, { op: "submit", text, mode: ctx.modeVal });
+  send(ctx, { op: "submit", text, mode: ctx.modeVal, attachments: files });
 }
+
+/* The files the user attached, taken off the composer. They travel with this
+   message and nowhere else. */
+function takeAttachments(ctx: Ctx): AttachmentMeta[] {
+  const files = readyAttachments(ctx);
+  ctx.attachments = [];
+  renderAttachBar(ctx);
+  return files;
+}
+
 function submit(ctx: Ctx, text: string): void {
   const trimmed = text.trim();
   if (activeApproval) return;
-  if (!trimmed) return;
+  // A message can be nothing but files.
+  if (!trimmed && !ctx.attachments.some((a) => a.status === "ready")) return;
   if (!connected) {
     setActivity("not connected - waiting for reconnect…");
     return;
@@ -2836,8 +3141,17 @@ function submit(ctx: Ctx, text: string): void {
     hideEditBar();
     clearRetryCard(ctx);
     dropFailureCard(ctx);
+    // The engine keeps the files the original message carried; anything
+    // attached here joins them.
+    const files = takeAttachments(ctx);
     if (
-      !send(ctx, { op: "resend", count: idx, text: trimmed, mode: ctx.modeVal })
+      !send(ctx, {
+        op: "resend",
+        count: idx,
+        text: trimmed,
+        mode: ctx.modeVal,
+        attachments: files,
+      })
     )
       setActivity("resend failed - engine busy");
     return;
@@ -2913,6 +3227,16 @@ function dispatchFrame(msg: ServerEnvelope): void {
   }
   if (ctx) handleEnvelope(msg, ctx);
 }
+/* A reply to a request() that is waiting for it. Everything else falls
+   through to the normal handling. */
+function settleReply(msg: ServerEnvelope): boolean {
+  if (msg.req_id === undefined) return false;
+  const waiter = replyWaiters.get(msg.req_id);
+  if (!waiter) return false;
+  replyWaiters.delete(msg.req_id);
+  waiter(msg);
+  return true;
+}
 function handleReady(msg: ServerEnvelope): void {
   connected = true;
   const root = String(msg.ready?.project_root ?? bootRoot);
@@ -2968,7 +3292,14 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         hideThinking(ctx);
         clearRetryCard(ctx);
         if (p["role"] === "user")
-          addUser(ctx, String(p["content"] ?? ""), p["via"] as string | undefined);
+          addUser(
+            ctx,
+            String(p["content"] ?? ""),
+            p["via"] as string | undefined,
+            Array.isArray(p["attachments"])
+              ? (p["attachments"] as AttachmentMeta[])
+              : [],
+          );
         else endStream(ctx, String(p["content"] ?? ""));
         if (ctx === activeCtx) setActivity("ready");
         break;
@@ -3186,6 +3517,8 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
     }
     return;
   }
+
+  if (settleReply(msg)) return;
 
   if (msg.reply === "get_plan") {
     const rec =
@@ -3769,6 +4102,7 @@ interface ProviderFormSnapshot {
   values: Record<string, string>;
   tools: boolean;
   reasoning: boolean;
+  images: boolean;
 }
 const PROVIDER_FORM_FIELDS = [
   "fProvider",
@@ -3792,7 +4126,12 @@ function snapshotProviderForm(): ProviderFormSnapshot {
   }
   const on = (id: string): boolean =>
     document.getElementById(id)?.classList.contains("on") ?? false;
-  return { values, tools: on("swTools"), reasoning: on("swReason") };
+  return {
+    values,
+    tools: on("swTools"),
+    reasoning: on("swReason"),
+    images: on("swImages"),
+  };
 }
 function providerForm(
   existing?: ProviderEntry,
@@ -3833,6 +4172,7 @@ function providerForm(
       `<div class="field"><label>Max output tokens</label><input id="fMax" value="${e["max_output_tokens"] ? escapeHtml(String(e["max_output_tokens"])) : ""}" placeholder="no limit" aria-describedby="fMaxErr" /><div class="field-err" id="fMaxErr" role="alert" hidden></div></div></div>` +
       `<div class="set-row"><div class="set-info"><div class="set-label">Tool calling</div><div class="set-desc">Turn off for models that reject the tools parameter.</div></div><div class="set-ctl"><span id="swTools"></span><span class="set-desc" id="toolsState"></span></div></div>` +
       `<div class="set-row"><div class="set-info"><div class="set-label">Reasoning effort parameter</div><div class="set-desc">Turn off for models without a reasoning knob.</div></div><div class="set-ctl"><span id="swReason"></span></div></div>` +
+      `<div class="set-row"><div class="set-info"><div class="set-label">Can see images</div><div class="set-desc">Turn off for models that reject image parts; attached images are then delivered as a path only.</div></div><div class="set-ctl"><span id="swImages"></span></div></div>` +
       `<div class="field"><label>Extra parameters (JSON)</label><input id="fExtra" value="${escapeHtml(Object.keys(e["extra_params"] ?? {}).length ? JSON.stringify(e["extra_params"]) : "")}" placeholder='{"top_p":0.9}' aria-describedby="fExtraErr" /><div class="field-err" id="fExtraErr" role="alert" hidden></div></div>` +
       `<div class="field-note"><span class="req">*</span> required</div>` +
       `<div class="field-err" id="fFormErr" role="alert" hidden></div>` +
@@ -3848,6 +4188,7 @@ function providerForm(
   toggleNewBlock();
   const tools = e["supports_tools"] !== false;
   const reasoning = e["supports_reasoning"] !== false;
+  const images = e["supports_images"] !== false;
   const toolsState = el<HTMLSpanElement>("toolsState");
   const describeTools = (value: boolean): void => {
     toolsState.textContent = value
@@ -3856,6 +4197,9 @@ function providerForm(
   };
   wireSwitch(modalBox, "swTools", tools, describeTools);
   wireSwitch(modalBox, "swReason", reasoning, () => {
+    /* no label needed */
+  });
+  wireSwitch(modalBox, "swImages", images, () => {
     /* no label needed */
   });
   describeTools(tools);
@@ -3880,6 +4224,9 @@ function providerForm(
     const reasonSwitch = el<HTMLElement>("swReason");
     reasonSwitch.classList.toggle("on", restore.reasoning);
     reasonSwitch.setAttribute("aria-checked", String(restore.reasoning));
+    const imageSwitch = el<HTMLElement>("swImages");
+    imageSwitch.classList.toggle("on", restore.images);
+    imageSwitch.setAttribute("aria-checked", String(restore.images));
   }
   const initialForm = snapshotProviderForm();
 
@@ -4066,6 +4413,7 @@ function providerForm(
       // Read the switches now, not at render time, or a toggle would be lost.
       supports_tools: el<HTMLElement>("swTools").classList.contains("on"),
       supports_reasoning: el<HTMLElement>("swReason").classList.contains("on"),
+      supports_images: el<HTMLElement>("swImages").classList.contains("on"),
       extra_params: extraParams,
     });
     const key = el<HTMLInputElement>("fKey").value.trim();
@@ -4683,10 +5031,54 @@ sendstop.onclick = () => {
   if (activeCtx.busy) send(activeCtx, { op: "stop" });
   else submit(activeCtx, entry.value);
 };
+/* Attach files: the picker and a drop on the composer. */
+attachBtn.onclick = () => {
+  if (!activeCtx) return;
+  fileInput.click();
+};
+fileInput.onchange = () => {
+  const ctx = activeCtx;
+  if (ctx) pickFiles(ctx, fileInput.files);
+  // Clear it, so picking the same file again still fires a change event.
+  fileInput.value = "";
+};
+let dragDepth = 0;
+promptZone.addEventListener("dragenter", (e) => {
+  e.preventDefault();
+  dragDepth += 1;
+  promptZone.classList.add("dragging");
+});
+promptZone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+});
+promptZone.addEventListener("dragleave", (e) => {
+  e.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) promptZone.classList.remove("dragging");
+});
+promptZone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  promptZone.classList.remove("dragging");
+  const ctx = activeCtx;
+  if (!ctx || !e.dataTransfer) return;
+  const files: File[] = [];
+  if (e.dataTransfer.files) files.push(...Array.from(e.dataTransfer.files));
+  if (!files.length && e.dataTransfer.items) {
+    for (const item of Array.from(e.dataTransfer.items)) {
+      if (item.kind === "file") {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+  }
+  pickFiles(ctx, files);
+});
 sendExtra.onclick = () => {
   if (!activeCtx || !activeCtx.busy) return;
   const text = entry.value.trim();
-  if (!text) return;
+  if (!text && !activeCtx.attachments.some((a) => a.status === "ready")) return;
   enqueueNow(activeCtx, midTurnKind(), text);
 };
 sendExtraCaret.onclick = (e) => {

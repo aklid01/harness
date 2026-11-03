@@ -34,8 +34,8 @@ uv run python -m harness.server --port 8765 --project-root . --app-data-dir <dat
 
 - Composer: message box plus Build/Ask/Plan mode, provider/model picker,
   reasoning effort picker, permission level (Default, Strict, Allow All,
-  Autopilot), send/stop button, Settings. Workspace and git branch shown in
-  the context panel.
+  Autopilot), attach-files button, send/stop button, Settings. Workspace and
+  git branch shown in the context panel.
 - Left: workspaces, each listing its sessions with LLM-generated titles
   (rename/delete via right-click, current session highlighted). New session
   opens as a tab; tabs, sidebar and the backend stay on one session id.
@@ -80,6 +80,51 @@ the answer (toggle next to the effort picker; the control appears only for
 models with reasoning enabled). Reasoning is kept in the transcript but is
 never sent back to the provider.
 
+## Attachments
+
+Attach files to a message with the paperclip button or by dropping them on
+the composer. Every file type is accepted - nothing is filtered by extension
+or MIME type. Attached files show as chips (name, type, size) above the
+composer, can be removed before sending, and stay on the sent message.
+
+Attachments work in every submission path: a normal send, a mid-turn steer,
+and a queued message. Pending items keep their files while they wait, and a
+message can be nothing but files.
+
+Each file is copied into session-scoped storage under the app data area
+(`sessions/attachments/<project>/<session id>/`), never into the workspace
+and never modified where the user left it. The agent receives a manifest with
+the name, type, size and path of every file, delivered with the message
+itself, so it can refer to a file by name in later turns. The manifest is
+repeated every turn, so a trimmed or compacted transcript still says which
+files exist.
+
+The agent reads attachments with its usual `read_file`: text files come back
+as text, and PDFs and Office documents are extracted to text first (PDF text
+needs `pypdf`, which `uv sync` installs). A file with no readable text - a
+scan, a legacy `.doc`, an archive - says so plainly instead of handing back
+mojibake, and the agent is told to report that rather than guess. Images are
+passed to the model as images when the model is marked as able to see them
+(Settings > Models); otherwise they are delivered as a path only.
+
+Attached files are read-only: the agent cannot edit them in place, and any
+change it makes goes to a copy in the workspace. Reading them needs no
+permission prompt in any permission mode, in every workflow (Build, Ask, Plan
+and Plan -> Build, whose planner is told about them too), and subagents can
+read them too.
+
+Limits are configurable with `HARNESS_MAX_ATTACHMENT_BYTES` (25 MB per file)
+and `HARNESS_MAX_ATTACHMENT_FILES` (10 files per message). A file over the
+limit is refused by name, with the limit, and the rest of the message still
+goes. Two files with the same name both survive - the second one is staged
+as `name (2).ext`.
+
+The session log keeps the attachment metadata only (name, type, size, staged
+path), never the bytes. Deleting the session deletes the files with it.
+
+Attached content is untrusted data. Instructions inside a file are content to
+analyse, not orders to follow, and the system prompt says so.
+
 ## Project rules
 
 Every workspace can keep its instructions in `AGENTS.md`, and they are
@@ -110,9 +155,9 @@ the OS keyring:
 
 A provider owns the connection and the credentials; each model owns its
 display name, its API model id and its own settings (reasoning effort,
-temperature, context window, output token limit, tool calling, extra
-parameters). Ids are generated and stable, so several models can share one
-provider (GLM 5.3 Flash and DeepSeek V4.1 Flash under NVIDIA), each can be
+temperature, context window, output token limit, tool calling, image support,
+extra parameters). Ids are generated and stable, so several models can share
+one provider (GLM 5.3 Flash and DeepSeek V4.1 Flash under NVIDIA), each can be
 edited, renamed or deleted on its own, and none of them overwrite another.
 The one-model-per-provider file the early builds wrote migrates on first use;
 the original is kept as `providers.json.bak` and the Settings panel reports
@@ -201,6 +246,8 @@ Tauri webview (renderer)  <-- WebSocket -->  harness/server.py  <-- events -->  
   allow-all, autopilot). The deny list wins in every mode; autopilot only ever
   auto-allows what the policy would otherwise ask about.
 - `harness/providers.py`: registry + keyring + migration + connection test.
+- `harness/attachments.py`: files the user attached - staging under the app
+  data area, the manifest the agent reads, text extraction, the limits.
 - `harness/llm.py`: lazy per-provider client, optional token streaming, the
   request body for the active model.
 - `harness/errors.py` + `harness/retry.py`: failure classification and the
@@ -210,7 +257,7 @@ Possible future API clients can attach to the same event layer; none is built.
 
 ## Tests
 
-One entrypoint runs the whole engine suite (19 modules) and its exit code is
+One entrypoint runs the whole engine suite (20 modules) and its exit code is
 the verdict:
 
 ```powershell
@@ -239,6 +286,7 @@ uv run python tests/test_oversight.py         # decision review gate
 uv run python tests/test_paths.py             # workspace/app-data resolution
 uv run python tests/test_sandbox.py           # sandbox wrap/run
 uv run python tests/test_server_protocol.py   # sidecar ops and replies
+uv run python tests/test_attachments.py       # attach, stage, manifest, limits
 ```
 
 The renderer has no unit harness, so its rules are checked end to end:
@@ -249,7 +297,9 @@ debugging), and writes a pass/fail report to `tests/renderer-check.txt`: the
 retry card ticking, the error card offering a
 next step and surviving both the post-turn reconcile and a session switch,
 a deleted session leaving the sidebar at once (tab or no tab, workspace open
-or not), the workspace removal, and the plan panel starting closed.
+or not), the workspace removal, the plan panel starting closed, and the
+attachment flow: picking files, taking one back, a file over the limit
+refused by name, and the accepted file travelling with its message.
 
 ## Notes
 

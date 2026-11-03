@@ -10,12 +10,14 @@ from . import (
     events,
     history,
     oversight,
+    paths,
     permissions,
     providers,
     session,
     texttools,
     tools,
 )
+from . import attachments as attachments_mod
 from . import context as context_mod
 from . import errors as errors_mod
 from . import plan as plan_mod
@@ -23,6 +25,16 @@ from .context import reminder
 from .llm import call_llm, system_prompt
 from .todos import active_form
 from .tools import execute
+
+def _has_image_parts(message):
+    """Does this request message carry an image part?"""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(part, dict) and part.get("type") == "image_url" for part in content
+    )
+
 
 PLAN_NOTICE = (
     "<system-reminder>\n"
@@ -129,28 +141,133 @@ class Runner:
                     },
                 )
 
-    def handle_input(self, user_text, via=None):
+    def handle_input(self, user_text, via=None, attachments=None):
         if user_text.startswith("/"):
             self.messages = commands.handle(user_text, self.messages)
             session.save(self.messages)
             return
 
-        self._receive_user_text(user_text, via=via)
+        self._receive_user_text(user_text, via=via, attachments=attachments)
         self._run_workflow(user_text)
 
-    def _receive_user_text(self, text, via=None):
+    def _receive_user_text(self, text, via=None, attachments=None):
         """Append a user message, save it, and tell the UI.
 
         Shared by the opening submission and by steered messages drained
         mid-turn, so both are on disk before the model can act on them.
+
+        The attachments that came with the message travel with it: the
+        manifest is part of the message text the model reads, and the
+        metadata sits on the message so a reopened session still knows which
+        files belong to which message.
         """
-        self.messages.append({"role": "user", "content": text})
+        metas = self._adopt(attachments)
+        message = {"role": "user", "content": text}
+        if metas:
+            message["attachments"] = metas
+        self.messages.append(message)
         # Saved before the call, so a failed request never loses what was asked.
         session.save(self.messages)
         payload = {"role": "user", "content": text}
         if via:
             payload["via"] = via
+        if metas:
+            payload["attachments"] = metas
         events.emit(events.MESSAGE, payload)
+
+    def _adopt(self, items):
+        """Move this message's files into the session's own directory."""
+        if not items:
+            return []
+        metas = attachments_mod.adopt(
+            items, session.current_id(), paths.project_root()
+        )
+        failed = [m for m in metas if m.get("error")]
+        if failed:
+            for meta in failed:
+                events.emit(
+                    events.NOTE,
+                    {"text": f"attachment unavailable - {meta['error']}"},
+                )
+        return metas
+
+    def _session_attachments(self):
+        """Every attachment this session knows about, newest last."""
+        return attachments_mod.from_messages(self.messages)
+
+    def _with_images(self, messages):
+        """Put the attached images into the request, as image parts.
+
+        Only the request changes - the transcript keeps its text form, so a
+        reopened session still reads the same and the images are not stored
+        twice. A provider that cannot see images is told so in the manifest
+        instead, and the file is still there to be read by other means.
+        """
+        if not providers.active_model_capabilities().get("supports_images", True):
+            return messages
+        out = []
+        for message in messages:
+            images = []
+            for item in message.get("attachments") or []:
+                path = item.get("path")
+                if not path or item.get("error"):
+                    continue
+                url = attachments_mod.image_data_url(path)
+                if url:
+                    images.append({"type": "image_url", "image_url": {"url": url}})
+            if images and message.get("role") == "user":
+                text = message.get("content") or ""
+                parts = [{"type": "text", "text": text}] if text else []
+                message = {**message, "content": parts + images}
+            out.append(message)
+        return out
+
+    def _with_manifests(self, messages):
+        """Add each message's attachment manifest to the request.
+
+        The manifest rides with the message it belongs to, so the agent knows
+        what it was given in the very turn it was given. The transcript keeps
+        the plain text: the manifest is rebuilt from the metadata, which is
+        what gets stored.
+        """
+        can_view = providers.active_model_capabilities().get("supports_images", True)
+        out = []
+        for message in messages:
+            items = message.get("attachments") or []
+            if items and message.get("role") == "user":
+                block = attachments_mod.manifest(items, can_view_images=can_view)
+                text = message.get("content") or ""
+                content = f"{text}\n\n{block}" if text else block
+                message = {**message, "content": content}
+            out.append(message)
+        return out
+
+    def _without_images(self, failure, request, injection):
+        """The same request with the image parts taken out, or None.
+
+        Only for a provider that refused the picture: a rejected or
+        unsupported request is the provider saying it will not take an image
+        part, and losing the turn over one file would be worse than showing
+        the agent the file's path instead.
+        """
+        if getattr(failure, "kind", None) not in ("rejected", "unsupported"):
+            return None
+        if not any(_has_image_parts(message) for message in request):
+            return None
+        events.emit(
+            events.NOTE,
+            {
+                "text": (
+                    "the provider would not accept the attached image; the file "
+                    "is still attached and readable at its path"
+                )
+            },
+        )
+        plain, _ = history.prepare(
+            self._with_manifests(self.messages + [injection]),
+            providers.active_context_window(),
+        )
+        return plain
 
     def _run_workflow(self, user_text):
         """Run the workflow the selected mode names, in one session/transcript.
@@ -420,10 +537,24 @@ class Runner:
         """
         from . import tools as tools_module
 
-        messages = [
-            {"role": "system", "content": system_prompt("plan", plan_instructions)},
-            {"role": "user", "content": request},
-        ]
+        # The planner works on its own message list, so the files the user
+        # attached are named here too - otherwise Plan -> Build would plan
+        # without the thing the user actually attached.
+        attached = self._session_attachments()
+        request_message = {"role": "user", "content": request}
+        if attached:
+            request_message["attachments"] = attached
+        messages = self._with_images(
+            self._with_manifests(
+                [
+                    {
+                        "role": "system",
+                        "content": system_prompt("plan", plan_instructions),
+                    },
+                    request_message,
+                ]
+            )
+        )
         toolset = [
             s
             for s in tools_module.TOOL_SCHEMAS
@@ -1047,7 +1178,11 @@ class Runner:
                 # Steers wait for the current step to finish, then join the
                 # conversation here, before the next request is assembled.
                 for steer in self.mailbox.take_steers():
-                    self._receive_user_text(steer["text"], via="steer")
+                    self._receive_user_text(
+                        steer["text"],
+                        via="steer",
+                        attachments=steer.get("attachments"),
+                    )
             injection = reminder(baseline=self._file_state)
             if self.mode == "plan":
                 injection["content"] += (
@@ -1072,13 +1207,23 @@ class Runner:
                     "</task-instructions>"
                 )
             self._tools_honesty(injection)
+            # The manifest is repeated here every turn, so a transcript that
+            # was trimmed or compacted still says which files exist and where
+            # they are. The agent never loses track of an attachment.
+            note = attachments_mod.session_note(self._session_attachments())
+            if note:
+                injection["content"] += f"\n{note}"
+            # The subagent the agent spawns reads the same list, so it can open
+            # the files the user attached without being told about them twice.
+            attachments_mod.bind(self._session_attachments())
             events.emit(events.INJECTION, {"content": injection["content"]})
 
             # Assemble the request separately from the stored history, so a
             # model with a smaller context window gets a trimmed copy and the
             # transcript on disk stays exactly as it was.
             request, trimmed = history.prepare(
-                self.messages + [injection], providers.active_context_window()
+                self._with_images(self._with_manifests(self.messages + [injection])),
+                providers.active_context_window(),
             )
             if trimmed:
                 events.emit(events.NOTE, {"text": trimmed})
@@ -1111,13 +1256,30 @@ class Runner:
                             return
                         events.emit(events.THINKING, {"text": text})
 
-                message, usage = call_llm(
-                    request,
-                    tools=turn_tools,
-                    on_delta=on_delta,
-                    on_reasoning=on_reasoning if self.stream else None,
-                    cancel=self.cancel_event,
-                )
+                try:
+                    message, usage = call_llm(
+                        request,
+                        tools=turn_tools,
+                        on_delta=on_delta,
+                        on_reasoning=on_reasoning if self.stream else None,
+                        cancel=self.cancel_event,
+                    )
+                except Exception as failure:  # noqa: BLE001 - one image, not the turn
+                    # A provider that will not take an image part must not cost
+                    # the user their message: the file stays attached, the
+                    # request goes again without the picture, and the agent is
+                    # told why it cannot see it.
+                    fallback = self._without_images(failure, request, injection)
+                    if fallback is None:
+                        raise
+                    request = fallback
+                    message, usage = call_llm(
+                        request,
+                        tools=turn_tools,
+                        on_delta=on_delta,
+                        on_reasoning=on_reasoning if self.stream else None,
+                        cancel=self.cancel_event,
+                    )
             except Exception as failure:  # noqa: BLE001 - report, don't kill the session
                 if self.cancelled():
                     events.emit(events.NOTE, {"text": "stopped"})

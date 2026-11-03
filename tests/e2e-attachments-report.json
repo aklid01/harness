@@ -1,0 +1,18 @@
+{
+  "a_failed_file_is_named_in_the_manifest": true,
+  "the_other_attachments_still_arrive": true,
+  "a_steer_carries_its_attachment_to_the_next_call": true,
+  "oversize_file_refused_by_name": true,
+  "message_still_sent_after_a_refused_file": true,
+  "staged_outside_the_workspace": true,
+  "source_untouched": true,
+  "manifest_in_first_request": true,
+  "agent_read_the_file": true,
+  "deleting_a_session_deletes_its_files": true,
+  "pdf_text_read": true,
+  "docx_text_read": true,
+  "transcript_keeps_metadata_not_bytes": true,
+  "too_many_files_named_and_dropped": true,
+  "the_rest_of_the_message_still_goes": true,
+  "two_files_with_one_name_both_survive": true
+}

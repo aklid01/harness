@@ -43,7 +43,10 @@ class InstructionsCase(unittest.TestCase):
         prompt = llm.system_prompt("build")
         self.assertNotIn("{instructions}", prompt)
         self.assertIn("## Project rules", prompt)
-        self.assertLess(len(prompt), 4000, "an empty instructions block stays small")
+        # The bound is the shared base prompt - rules, skills, the attachment
+        # rules - and then some slack. It catches the instructions loader
+        # injecting a blob; it is not a cap on the prompt's own text.
+        self.assertLess(len(prompt), 4400, "an empty instructions block stays small")
 
     def test_the_global_file_is_the_fallback(self):
         home = Path(self.tmp.name) / "home"

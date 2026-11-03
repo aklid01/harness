@@ -51,6 +51,7 @@ export interface ModelEntry {
   max_output_tokens?: number | null;
   supports_tools?: boolean;
   supports_reasoning?: boolean;
+  supports_images?: boolean;
   supports_text_tools?: boolean;
   extra_params?: Record<string, string | number | boolean | null>;
   disabled?: boolean;
@@ -192,6 +193,29 @@ export interface PendingItem {
   id: string;
   kind: PendingKind;
   text: string;
+  attachments?: AttachmentMeta[];
+}
+
+/* A file the user attached to a message. The bytes live in session-scoped
+   storage under the app data area; only this metadata travels with the
+   message, and the transcript keeps no more than this. */
+export interface AttachmentMeta {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  path?: string;
+  error?: string;
+  missing?: boolean;
+}
+
+/* One file the user picked, from picking it to the engine having it. */
+export interface AttachmentDraft extends AttachmentMeta {
+  status: "uploading" | "ready" | "error";
+  progress: number;
+  detail?: string;
+  /* The engine's handle for the upload in flight, so it can be discarded. */
+  uploadId?: string;
 }
 
 export interface SessionOp {
@@ -202,15 +226,38 @@ export interface SessionOp {
 }
 
 export type OpPayload =
-  | { op: "submit"; text: string; mode: Mode; submission_id?: string }
-  | { op: "enqueue"; text: string; kind: PendingKind; submission_id?: string }
+  | {
+      op: "submit";
+      text: string;
+      mode: Mode;
+      submission_id?: string;
+      attachments?: AttachmentMeta[];
+    }
+  | {
+      op: "enqueue";
+      text: string;
+      kind: PendingKind;
+      submission_id?: string;
+      attachments?: AttachmentMeta[];
+    }
   | { op: "pending_edit"; id: string; text: string }
   | { op: "pending_remove"; id: string }
+  | { op: "pending_remove_attachment"; id: string; attachment_id: string }
+  | { op: "attach_begin"; name: string; type: string; size: number }
+  | { op: "attach_part"; id: string; data: string }
+  | { op: "attach_finish"; id: string }
+  | { op: "attach_discard"; id: string }
   | { op: "open"; id: string; mode: Mode }
   | { op: "stop" }
   | { op: "rewind_to"; count: number }
   | { op: "rewind_preview"; count: number }
-  | { op: "resend"; count: number; text: string; mode: Mode }
+  | {
+      op: "resend";
+      count: number;
+      text: string;
+      mode: Mode;
+      attachments?: AttachmentMeta[];
+    }
   | { op: "git_status" }
   | { op: "git_create_branch"; name: string }
   | { op: "list_sessions" }

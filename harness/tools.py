@@ -175,9 +175,19 @@ def bash(command: str) -> str:
 
 
 def read_file(path: str) -> str:
-    """Read a file and return its contents."""
-    with open(path, encoding="utf-8", errors="replace") as f:
-        return history.cap(f.read())
+    """Read a file and return its contents.
+
+    A PDF or an Office document is extracted to text first, so the agent gets
+    something it can read instead of mojibake. A file that has no text to give
+    says so plainly and keeps its path, so the agent can report the reason
+    rather than guess.
+    """
+    from . import attachments
+
+    text, reason = attachments.readable_text(path)
+    if text is None:
+        return f"Error: {reason}"
+    return history.cap(text)
 
 
 def write_file(path: str, content: str) -> str:
