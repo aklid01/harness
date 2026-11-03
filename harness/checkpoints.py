@@ -87,6 +87,39 @@ def _at_or_after(session_id, count):
     ]
 
 
+def changes(session_id):
+    """Every recorded change for this session, oldest first.
+
+    The review flow uses this to reconstruct what a run changed in a
+    workspace that is not a git repository: the journal holds the exact
+    bytes before and after each edit.
+    """
+    try:
+        return list(_load(session_id).get("changes", []))
+    except (TypeError, ValueError):
+        return []
+
+
+def all_changes(session_id=""):
+    """The changes of one session, or of every session in the workspace.
+
+    A session-scoped review asks for one session. A review that is not
+    attached to a session - the headless command line - asks for
+    everything the engine has changed in this workspace.
+    """
+    if session_id:
+        return changes(session_id)
+    base = paths.session_dir() / "_checkpoints"
+    found = []
+    try:
+        entries = [item for item in base.iterdir() if item.is_dir()]
+    except OSError:
+        return []
+    for entry in entries:
+        found.extend(changes(entry.name))
+    return found
+
+
 def preview(session_id, count):
     """What a rewind to `count` would restore, without changing anything."""
     changes = _at_or_after(session_id, count)

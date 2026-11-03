@@ -118,6 +118,7 @@ class Runner:
         self._review_log: dict = {}  # decision fingerprint -> prior verdicts
         self._stop_turn = False  # set when oversight escalates: stop safely
         self._touched: set = set()  # files this session has edited (resolved)
+        self._turn_touched: set = set()  # files this turn edited (resolved)
         self._reviewed_files: set = (
             set()
         )  # files whose first edit this turn was approved
@@ -126,6 +127,9 @@ class Runner:
         self._file_state = None  # git state snapshot taken at each turn start
         self.mailbox = None  # Session-owned pending steer/queue messages
         self.turn_failed = False  # the current turn ended in a provider error
+        # Set by the session: how to start a multi-model review of this run.
+        # None means there is nobody to run it (a bare engine, a test).
+        self.review_hook = None
         self.messages = [{"role": "system", "content": system_prompt(mode)}]
         if resume:
             saved = session.all_sessions()
@@ -143,12 +147,73 @@ class Runner:
 
     def handle_input(self, user_text, via=None, attachments=None):
         if user_text.startswith("/"):
-            self.messages = commands.handle(user_text, self.messages)
+            self.messages = commands.handle(user_text, self.messages, self)
             session.save(self.messages)
             return
 
         self._receive_user_text(user_text, via=via, attachments=attachments)
         self._run_workflow(user_text)
+
+    @property
+    def touched(self):
+        """The files this run edited, resolved and absolute."""
+        return set(self._touched)
+
+    def request_review(self, args):
+        """Start a multi-model review of this run's change.
+
+        The review runs in the background and never blocks the agent: the
+        card follows it as it goes, and the agent's own message is already
+        on its way. Nothing here edits a file.
+        """
+        if self.review_hook is None:
+            events.emit(
+                events.NOTE,
+                {"text": "reviews need the desktop app - run it from a session there"},
+            )
+            return False
+        try:
+            return bool(self.review_hook(args))
+        except Exception as failure:  # noqa: BLE001 - a review must not break a turn
+            events.emit(
+                events.NOTE,
+                {
+                    "text": (
+                        "the review could not start "
+                        f"({type(failure).__name__}: {failure})"
+                    )
+                },
+            )
+            return False
+
+    def _maybe_auto_review(self):
+        """Offer or start a review after a run that edited files.
+
+        Only when the user asked for it: a review that starts by itself
+        spends money, so the setting is off by default and "offer" is the
+        gentler of the two automatic modes. A run that changed nothing
+        never triggers one.
+        """
+        if not self._turn_touched or self.review_hook is None:
+            return
+        mode = agents.review_auto_run(agents.get())
+        if mode == "off":
+            return
+        self.request_review(
+            {
+                "scope": "run",
+                "auto": True,
+                "offer": mode == "offer",
+                "paths": sorted(self._turn_touched),
+                "models": [],
+                "focus": "",
+                "severity": "",
+                "force": False,
+                "json": False,
+                "help": False,
+                "error": "",
+            }
+        )
 
     def _receive_user_text(self, text, via=None, attachments=None):
         """Append a user message, save it, and tell the UI.
@@ -1142,6 +1207,9 @@ class Runner:
         self._user_approved = set()
         self._stop_turn = False
         self.turn_failed = False
+        # What THIS turn changed. A run that changed nothing must not
+        # trigger a review that has nothing to look at.
+        self._turn_touched = set()
         # Build's own budget, independent of the plan and review phases.
         self._build_budget = budget.Budget(tool_calls=BUILD_MAX_TOOLS)
         self._build_progress = budget.Progress(limit=4)
@@ -1496,6 +1564,7 @@ class Runner:
                             # A landed edit: later small edits to this file are
                             # follow-up work on a decision already reviewed.
                             self._touched.add(str(args.get("path") or ""))
+                            self._turn_touched.add(str(args.get("path") or ""))
                         self._reconcile_todos(name, args, result)
                 extra = {"reviewed": review_marker} if review_marker else {}
                 events.emit(
@@ -1549,3 +1618,8 @@ class Runner:
             self.messages = commands.compact(
                 self.messages, providers.active_context_window()
             )
+
+        # The agent's own message is already out, so a review started here
+        # cannot delay it. The review runs in the background and reports
+        # itself through the card.
+        self._maybe_auto_review()

@@ -7,6 +7,7 @@ COMMANDS = {
     "/rewind": "jump back to an earlier point in this chat",
     "/sessions": "open a past chat",
     "/compact": "summarise the history so far and free up the context window",
+    "/multi-modeal-review": "have independent reviewer models critique the change",
 }
 
 
@@ -72,13 +73,41 @@ def compact(messages, window=None):
     return compacted
 
 
-def handle(command, messages):
+def review(messages, ctx, argument):
+    """Run the multi-model review.
+
+    The review happens in the background: the command returns immediately
+    and the card follows the review as it runs. Nothing here edits a file.
+    """
+    from .review import command as review_command
+
+    args = review_command.parse_args(argument)
+    if args["help"]:
+        events.emit(events.NOTE, {"text": review_command.HELP})
+        return messages
+    if args["error"]:
+        events.emit(events.NOTE, {"text": args["error"]})
+        return messages
+    if ctx is None or not hasattr(ctx, "request_review"):
+        events.emit(
+            events.NOTE,
+            {"text": "reviews need the desktop app - run it from a session there"},
+        )
+        return messages
+    ctx.request_review(args)
+    return messages
+
+
+def handle(command, messages, ctx=None):
     if command == "/compact":
         return compact(messages)
     if command == "/rewind":
         return rewind(messages)
     if command == "/sessions":
         return sessions(messages)
+    if command == "/multi-modeal-review" or command.startswith("/multi-modeal-review "):
+        argument = command[len("/multi-modeal-review") :].strip()
+        return review(messages, ctx, argument)
     events.emit(
         events.NOTE,
         {"text": "\n".join(f"{name}  -  {help}" for name, help in COMMANDS.items())},

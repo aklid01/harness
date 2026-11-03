@@ -688,6 +688,7 @@ class Session:
         self.active_provider: str | None = None
         self.mailbox = Mailbox()
         self.mailbox.on_change = self._notify_pending
+        self.review_cancel = None  # set while a review is running
 
     def _notify_pending(self, items):
         self.on_event(events.PENDING, {"items": items})
@@ -762,6 +763,7 @@ class Session:
             self.runner = Runner(stream=True, cancel_event=self.cancel, mode=mode)
         else:
             self.runner.mode = mode
+        self.runner.review_hook = self._review_request
 
     def _thread(self, target, *args):
         threading.Thread(target=target, args=args, daemon=True).start()
@@ -822,6 +824,8 @@ class Session:
                 return False
             self.running = True
         self.cancel.clear()
+        # A new run supersedes a review that is still going: the card says so.
+        self.cancel_review()
         self._thread(self._turn, text, mode, None, self._keep_attachments(attachments))
         return True
 
@@ -943,6 +947,7 @@ class Session:
                             "messages": [],
                             "id": new_id,
                             "pending": self.mailbox.items(),
+                            "review": self.review_state(),
                         },
                     )
                 self.ensure_runner(mode)
@@ -1041,6 +1046,7 @@ class Session:
                     "messages": self.runner.messages,
                     "id": self.session_id,
                     "pending": self.mailbox.items(),
+                    "review": self.review_state(),
                 },
             )
         self._maybe_title()
@@ -1048,7 +1054,9 @@ class Session:
     def _new_runner(self, mode="build"):
         from .agent import Runner
 
-        return Runner(stream=True, cancel_event=self.cancel, mode=mode)
+        runner = Runner(stream=True, cancel_event=self.cancel, mode=mode)
+        runner.review_hook = self._review_request
+        return runner
 
     def resubmit(self, count, text, mode, restore_files=True, attachments=None):
         with self.lock:
@@ -1059,6 +1067,7 @@ class Session:
                 return False
             self.running = True
         self.cancel.clear()
+        self.cancel_review()
         self._thread(self._resend, count, text, mode, restore_files, attachments)
         return True
 
@@ -1083,6 +1092,7 @@ class Session:
                     checkpoints.restore_since(self.session_id, count)
                 session_mod.rewind_to(count)
                 self.written = count
+                self._mark_reviews_stale(count)
                 self.runner.messages = self.runner.messages[:count]
                 self.on_event(
                     events.SESSION,
@@ -1124,6 +1134,7 @@ class Session:
                 restored = checkpoints.restore_since(self.session_id, count)
                 session_mod.rewind_to(count)
                 self.written = count
+                self._mark_reviews_stale(count)
                 if self.runner is not None:
                     self.runner.messages = self.runner.messages[:count]
                     messages = self.runner.messages
@@ -1158,6 +1169,246 @@ class Session:
     def list_sessions(self):
         with self.bound():
             return session_mod.all_sessions()
+
+    # ---- multi-model review ----
+
+    def _review_request(self, args):
+        """The hook the agent calls to start, or offer, a review."""
+        args = args or {}
+        if args.get("offer"):
+            return self.offer_review()
+        return self.start_review(
+            args, triggered_by="auto" if args.get("auto") else "manual"
+        )
+
+    def offer_review(self):
+        """Show the card with a button rather than spending money at once."""
+        self.on_event(
+            events.REVIEW,
+            {
+                "stage": "offer",
+                "message": "the agent changed some files - run a multi-model review?",
+            },
+        )
+        return True
+
+    def cancel_review(self):
+        """Stop the model calls of a review that is still running."""
+        cancel = self.review_cancel
+        if cancel is None:
+            return False
+        cancel.set()
+        self.on_event(events.REVIEW, {"stage": "cancelled"})
+        return True
+
+    def start_review(self, args, triggered_by="manual"):
+        """Run a review in the background. The agent never waits for it.
+
+        The thread runs inside this session's bound context, so the events
+        it emits reach this tab and the files it reads are this workspace.
+        """
+        from .review import config as review_config
+        from .review import engine as review_engine
+        from .review import scope as review_scope
+
+        args = dict(args or {})
+        settings = dict(review_config.load())
+        if args.get("severity"):
+            settings["severity_threshold"] = args["severity"]
+
+        reviewers = None
+        models = [m for m in (args.get("models") or []) if m]
+        if models:
+            reviewers = [
+                {
+                    "model_id": model_id,
+                    "label": "",
+                    "enabled": True,
+                    "focus": args.get("focus") or "",
+                }
+                for model_id in models
+            ]
+
+        mode = args.get("scope") or "run"
+        base = args.get("base") or ""
+        if mode == "base" and not base:
+            mode, base = review_scope.parse_scope("base:main")
+
+        # A new review supersedes the one that is running: the card says so.
+        self.cancel_review()
+
+        cancel = threading.Event()
+        self.review_cancel = cancel
+        # A brand-new tab has no session until something is sent. A review
+        # needs one to save its report against, so create it now.
+        if not self.session_id:
+            self._materialise()
+        session_id = self.session_id or ""
+        root = self.root
+        # The caller may name the files to review: the automatic review names
+        # the files THIS turn changed, while a review the user asked for
+        # covers everything the agent has changed in this session.
+        named = args.get("paths")
+        if named is not None:
+            only_paths = [str(item) for item in named]
+        else:
+            only_paths = (
+                list(self.runner.touched) if self.runner is not None else None
+            )
+        force = bool(args.get("force"))
+        want_json = bool(args.get("json"))
+        message_index = session_mod.written()
+
+        def work():
+            try:
+                with self.bound():
+
+                    def emit(stage, payload):
+                        body = {"stage": stage}
+                        body.update(payload or {})
+                        self.on_event(events.REVIEW, body)
+
+                    document = review_engine.run(
+                        root,
+                        session_id,
+                        mode=mode,
+                        base=base,
+                        only_paths=only_paths,
+                        reviewers=reviewers,
+                        settings=settings,
+                        emit=emit,
+                        cancel=cancel,
+                        force=force,
+                        message_index=message_index,
+                        triggered_by=triggered_by,
+                    )
+                    if want_json and document:
+                        # The script mode: the structured report, as JSON.
+                        from .review import report as review_report
+
+                        self.on_event(
+                            events.NOTE, {"text": review_report.as_json(document)}
+                        )
+            except Exception as failure:  # noqa: BLE001 - the agent must not see this
+                self.on_event(
+                    events.REVIEW,
+                    {
+                        "stage": "failed",
+                        "error": f"{type(failure).__name__}: {failure}",
+                    },
+                )
+            finally:
+                if self.review_cancel is cancel:
+                    self.review_cancel = None
+
+        worker = threading.Thread(target=work, daemon=True, name="harness-review")
+        self.track(worker)
+        worker.start()
+        return True
+
+    def _mark_reviews_stale(self, count):
+        """A rewind throws work away, so a review of it no longer describes it.
+
+        The report is kept - it may still be worth reading - but it is
+        marked, and the card says the review is out of date.
+        """
+        from .review import report as review_report
+
+        try:
+            with self.workspace():
+                stale = review_report.mark_stale(self.session_id, count)
+        except OSError:
+            stale = []
+        for document in stale:
+            self.on_event(events.REVIEW, {"stage": "stale", "report": document})
+
+    def review_state(self):
+        """The saved report for this session, if there is one."""
+        from .review import report as review_report
+
+        if not self.session_id:
+            return None
+        with self.workspace():
+            return review_report.latest(self.session_id)
+
+    def dismiss_finding(self, review_id, finding_id):
+        """Mark one finding as dismissed and tell the card about it."""
+        from .review import report as review_report
+
+        with self.workspace():
+            document = review_report.dismiss(self.session_id, review_id, finding_id)
+        if document is None:
+            return None
+        self.on_event(events.REVIEW, {"stage": "updated", "report": document})
+        return document
+
+    def send_review_to_agent(self, review_id, finding_ids, apply=False):
+        """Put the chosen findings in front of the agent and let it fix them.
+
+        The findings arrive as a tool result, so they enter the context
+        budget the way any tool output does: stubbed once the turn is over,
+        and summarised if the history is compacted. The agent then fixes
+        them with its ordinary tools, which means the ordinary permission
+        check and the ordinary checkpoint. The card edits nothing itself.
+        """
+        from .review import report as review_report
+
+        with self.workspace():
+            document = review_report.load(self.session_id, review_id)
+        if document is None or self.runner is None:
+            return False
+        wanted = [str(item) for item in (finding_ids or [])]
+        findings = [
+            item
+            for item in document.get("findings") or []
+            if not wanted or item.get("id") in wanted
+        ]
+        if not findings:
+            return False
+
+        body = review_report.summary(
+            {
+                "verdict_label": document.get("verdict_label"),
+                "findings": findings,
+                "scope": document.get("scope"),
+            }
+        )
+        path = review_report.path_for(self.session_id, review_id)
+        if path:
+            body += f"\n\nThe full report is at {path} - read it if you need more."
+        if len(body) > 8000:
+            body = body[:8000] + "\n... (the rest is in the saved report)"
+
+        call_id = f"review_{review_id}"
+        # The same shape the engine stores for a real assistant tool call, so
+        # the provider sees a valid transcript.
+        self.runner.messages.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "review_findings", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        self.runner.messages.append(
+            {"role": "tool", "tool_call_id": call_id, "content": body}
+        )
+        ids = ", ".join(item.get("id", "") for item in findings)
+        if apply and len(findings) == 1:
+            text = (
+                f"Apply the suggested fix for review finding {ids}. Make that "
+                "one change, keep it minimal, and say what you changed."
+            )
+        else:
+            text = (
+                f"Address the review findings {ids}. Use the suggested fixes "
+                "where they fit, and say which ones you did not apply and why."
+            )
+        return self.submit(text, self.mode)
 
     def _maybe_title(self):
         def work():
@@ -1449,7 +1700,57 @@ class Harness:
                 restore_files=False,
             )
             return R({"reply": "retry", "ok": bool(ok)})
+        if op in (
+            "review_start",
+            "review_cancel",
+            "review_action",
+            "review_report",
+        ):
+            return R(self._review_op(op, obj, s))
         return R({"reply": op, "ok": False, "error": f"unknown op: {op}"})
+
+    def _review_op(self, op, obj, s):
+        """The card's actions: start, cancel, dismiss, send to the agent.
+
+        None of these edit a file. "Send to the agent" hands the findings to
+        the agent, which then fixes them with its ordinary tools - so the
+        permission check and the checkpoint both still apply.
+        """
+        if op == "review_report":
+            with s.workspace():
+                document = s.review_state()
+            return {"reply": op, "ok": True, "data": document}
+
+        if op == "review_cancel":
+            cancelled = s.cancel_review()
+            return {"reply": op, "ok": bool(cancelled)}
+
+        if op == "review_start":
+            args = dict(obj.get("args") or {})
+            args.setdefault("scope", "run")
+            if obj.get("models"):
+                args["models"] = list(obj["models"])
+            if obj.get("focus"):
+                args["focus"] = obj["focus"]
+            if obj.get("severity"):
+                args["severity"] = obj["severity"]
+            if obj.get("force"):
+                args["force"] = True
+            started = s.start_review(args, triggered_by="manual")
+            return {"reply": op, "ok": bool(started)}
+
+        action = obj.get("action") or ""
+        review_id = obj.get("review_id") or ""
+        finding_ids = obj.get("finding_ids") or []
+        if action == "dismiss":
+            document = s.dismiss_finding(review_id, obj.get("finding_id") or "")
+            return {"reply": op, "ok": document is not None}
+        if action == "send":
+            ok = s.send_review_to_agent(
+                review_id, finding_ids, apply=bool(obj.get("apply"))
+            )
+            return {"reply": op, "ok": bool(ok)}
+        return {"reply": op, "ok": False, "error": f"unknown review action: {action}"}
 
     def _attachment_op(self, op, obj, key):
         """Stage one file the user attached.

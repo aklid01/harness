@@ -43,6 +43,10 @@ DECISION = "decision"
 PHASE = "phase"
 PENDING = "pending"
 THINKING = "thinking"
+# The multi-model review. One event type carries every stage of a review -
+# offer, started, progress, finding, completed, failed, nothing, cancelled -
+# so a frontend can follow a review with a single case in its switch.
+REVIEW = "review"
 
 APPROVAL = "approval"
 PICK = "pick"
