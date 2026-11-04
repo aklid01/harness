@@ -95,7 +95,6 @@ def _payload(model, step, index):
 
 def _stream(model, step, index):
     """SSE chunks for one step, matching OpenAI's streaming shape."""
-    done_id = f"chatcmpl-mock-{index}"
     reasoning = step.get("reasoning")
     if step.get("kind") == "tool":
         call = _tool_call(step)
