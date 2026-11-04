@@ -52,6 +52,92 @@ def defaults():
     }
 
 
+def _as_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def _as_text(value):
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _as_int(value, default, low, high):
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, n))
+
+
+def clean_section(raw):
+    """One review section, from whatever the saved role config holds.
+
+    The single cleaner for the review settings: agents.py hands the raw
+    section over untouched, so the option set, the limits and their
+    bounds live here and nowhere else.
+    """
+    from .scope import DEFAULT_EXCLUSIONS
+
+    raw = raw if isinstance(raw, dict) else {}
+    clean = defaults()
+    clean["enabled"] = _as_bool(raw.get("enabled"))
+    auto = raw.get("auto_run")
+    if isinstance(auto, bool):
+        auto = "start" if auto else "off"
+    auto = _as_text(auto).lower() or "off"
+    clean["auto_run"] = auto if auto in ("off", "offer", "start") else "off"
+    mode = _as_text(raw.get("mode")) or "parallel"
+    clean["mode"] = mode if mode in ("parallel", "sequential") else "parallel"
+
+    reviewers = []
+    for item in raw.get("reviewers") or []:
+        if not isinstance(item, dict):
+            continue
+        model_id = _as_text(item.get("model_id"))
+        if not model_id:
+            continue
+        reviewers.append(
+            {
+                "model_id": model_id,
+                "label": _as_text(item.get("label")),
+                "enabled": _as_bool(item.get("enabled", True), default=True),
+                "focus": _as_text(item.get("focus")),
+            }
+        )
+    clean["reviewers"] = reviewers
+
+    clean["max_reviewers"] = _as_int(
+        raw.get("max_reviewers"), DEFAULT_MAX_REVIEWERS, 1, 16
+    )
+    clean["max_files"] = _as_int(raw.get("max_files"), DEFAULT_MAX_FILES, 1, 500)
+    clean["max_diff_bytes"] = _as_int(
+        raw.get("max_diff_bytes"), DEFAULT_MAX_DIFF_BYTES, 1_000, 20_000_000
+    )
+    clean["max_file_bytes"] = _as_int(
+        raw.get("max_file_bytes"), DEFAULT_MAX_FILE_BYTES, 1_000, 5_000_000
+    )
+    clean["max_tokens"] = _as_int(
+        raw.get("max_tokens"), DEFAULT_MAX_TOKENS, 1_000, 10_000_000
+    )
+    threshold = _as_text(raw.get("severity_threshold")) or "low"
+    clean["severity_threshold"] = (
+        threshold if threshold in ("blocker", "high", "medium", "low", "nit") else "low"
+    )
+    clean["full_context"] = _as_bool(raw.get("full_context"))
+
+    listed = raw.get("exclusions")
+    if isinstance(listed, list):
+        clean["exclusions"] = [_as_text(x) for x in listed if _as_text(x)]
+
+    clean["prompt"] = _as_text(raw.get("prompt"))[:8000]
+    return clean
+
+
 def load():
     """The review section of the role config, with defaults filled."""
     from .. import agents
