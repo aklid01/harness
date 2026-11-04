@@ -1367,7 +1367,7 @@ async def serve(host="127.0.0.1", port=8765, auth_token=None):
                             }
                         )
                     )
-                except Exception:
+                except (websockets.exceptions.ConnectionClosed, OSError):
                     pass
 
     try:
