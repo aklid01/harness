@@ -1031,7 +1031,7 @@ class Runner:
 
         A fresh build session is the status quo ante, so it stays silent.
         Anything else - starting in plan or ask, or switching either way - gets
-        an explicit notice appended silently (no GUI event, never rendered).
+        an explicit notice appended silently (no renderer event, never rendered).
         """
         if self.mode == self._announced_mode:
             return

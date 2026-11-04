@@ -53,7 +53,7 @@ def rooted(root: Path | str | None):
 
     This is how one process serves many workspaces at once: a session's worker
     sets its own root, and helpers below pick it up. Falls back to the process
-    default when nothing is attached (the legacy GUI / single-root mode).
+    default when nothing is attached (the legacy single-root mode).
     """
     token = _ACTIVE_ROOT.set(str(root) if root else None)
     try:

@@ -11,7 +11,7 @@ Identity is two-layered so one provider can serve many model configurations:
 Renaming either side therefore never breaks the link, and adding a second
 model to a provider cannot overwrite the first. The flat helpers
 (list_models / active_config / active_model_params / ...) project that tree
-into the one-model-per-row shape the engine and the legacy GUI expect.
+into the one-model-per-row shape the engine and the renderer protocol expect.
 
 Secrets never land in providers.json - they live in the OS keyring, one entry
 per provider id. Callers only ever see masked forms.
@@ -807,7 +807,7 @@ def _legacy_env():
 
 
 def _flat(group, model):
-    """The one-model-per-row shape the engine and the legacy GUI expect."""
+    """The one-model-per-row shape the engine and the renderer protocol expect."""
     if not (group and model):
         return None
     return {
@@ -952,7 +952,7 @@ def active_config_for(target_id):
 
 
 def provider_status(target_id):
-    """GUI-safe summary: masked key state, never the secret."""
+    """renderer-safe summary: masked key state, never the secret."""
     data = _cached()
     # An exact model id wins, so a disabled model still reports its own state.
     group, model = _find_model(data, target_id)
@@ -1188,7 +1188,7 @@ def test_provider(target_id, timeout=20):
             if tools_ok:
                 detail += " (native tool calling works)"
         return True, detail
-    except Exception as failure:  # noqa: BLE001 - the GUI shows this string
+    except Exception as failure:  # noqa: BLE001 - the renderer shows this string
         detail = errors_mod.explain(failure, model=model)
         return False, detail
 
