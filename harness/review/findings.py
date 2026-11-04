@@ -71,7 +71,7 @@ class Finding:
     confidence: str = "medium"
     end_line: int = 0
     id: str = ""
-    models: tuple = ()
+    models: tuple[str, ...] = ()
     conflict_with: tuple = ()
     raw_category: str = ""
 

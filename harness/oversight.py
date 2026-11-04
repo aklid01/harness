@@ -153,7 +153,7 @@ verdict meanings:
 class Verdict:
     verdict: str
     reasoning: str = ""
-    risks: list = dataclasses.field(default_factory=list)
+    risks: list[str] = dataclasses.field(default_factory=list)
     correction: str = ""
     question: str = ""
     error: str = ""

@@ -118,7 +118,7 @@ class FileChange:
 class Scope:
     mode: str = "run"
     base: str = ""
-    files: list = dataclasses.field(default_factory=list)
+    files: list[FileChange] = dataclasses.field(default_factory=list)
     skipped: list = dataclasses.field(default_factory=list)
     is_repo: bool = True
     total_files: int = 0
