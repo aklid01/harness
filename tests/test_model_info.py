@@ -283,6 +283,29 @@ class FetchAndBackstopTests(ProviderCase):
         self.assertFalse(result["found"])
         self.assertIn("no /models metadata", result["note"])
 
+    def test_backstop_explains_a_bare_models_entry(self):
+        stored = providers.save_provider(self.entry())
+        with mock.patch.object(
+            providers,
+            "_models_entries",
+            return_value=[{"id": "m", "object": "model", "owned_by": "river"}],
+        ):
+            result = providers.autoconfigure_from_models(stored["id"])
+        self.assertTrue(result["found"])
+        self.assertEqual(result["applied"], [])
+        self.assertIn("publishes no settings", result["note"])
+
+    def test_fetch_explains_a_bare_models_entry(self):
+        with mock.patch.object(
+            providers,
+            "_models_entries",
+            return_value=[{"id": "m", "object": "model", "owned_by": "river"}],
+        ):
+            result = providers.fetch_model_config("m", base_url="https://x/v1")
+        self.assertTrue(result["found"])
+        self.assertIsNone(result["info"])
+        self.assertIn("publishes no settings", result["note"])
+
     def test_row_now_carries_supports_images(self):
         entry = self.entry()
         entry["supports_images"] = False

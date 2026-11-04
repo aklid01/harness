@@ -1388,7 +1388,14 @@ def fetch_model_config(model, provider_id=None, base_url=None, key=None, timeout
             "info": None,
             "note": f"{model} is not in the /models list ({len(entries)} entries)",
         }
-    return {"found": True, "info": _normalize_models_entry(raw), "note": ""}
+    info = _normalize_models_entry(raw)
+    if not info:
+        return {
+            "found": True,
+            "info": None,
+            "note": f"{model} is listed by /models but publishes no settings to fill",
+        }
+    return {"found": True, "info": info, "note": ""}
 
 
 @_transaction
@@ -1430,5 +1437,11 @@ def autoconfigure_from_models(target_id, timeout=6):
             "note": f"no /models metadata for {model}",
         }
     info = _normalize_models_entry(raw)
-    applied = _apply_model_info_saved(target_id, info) if info else []
+    if not info:
+        return {
+            "found": True,
+            "applied": [],
+            "note": f"{model} is listed by /models but publishes no settings to fill",
+        }
+    applied = _apply_model_info_saved(target_id, info)
     return {"found": True, "applied": applied, "note": ""}

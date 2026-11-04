@@ -461,6 +461,7 @@ let providerFormFailure: ((message: string) => void) | null = null;
    reply carries what the engine's backstop auto-configured for the status line. */
 let modelInfoReply: ((data: ModelInfoResult) => void) | null = null;
 let pendingModelsStatus = "";
+let pendingModelsStatusOk = false;
 let activeApproval: { ctx: Ctx; id: string } | null = null;
 let pendingRewindCount: number | null = null;
 let popHideTimer: number | null = null;
@@ -3671,8 +3672,12 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       }
       // The form is done either way; the backstop note moves to the Models tab.
       modelInfoReply = null;
-      if (msg.reply === "save_provider" && msg.info?.applied?.length)
-        pendingModelsStatus = `auto-configured from /models: ${msg.info.applied.join(", ")}`;
+      if (msg.reply === "save_provider" && msg.info) {
+        if (msg.info.applied?.length)
+          pendingModelsStatus = `auto-configured from /models: ${msg.info.applied.join(", ")}`;
+        else if (msg.info.note) pendingModelsStatus = msg.info.note;
+        pendingModelsStatusOk = Boolean(msg.info.applied?.length);
+      }
       send(ctx, { op: "list_providers" });
     } else if (msg.reply === "save_provider") {
       // The form stays open and usable: show why the save was refused rather
@@ -4723,8 +4728,9 @@ function settingsModels(): [string, () => void] {
     if (pendingModelsStatus) {
       const status = el<HTMLDivElement>("setStatus");
       status.textContent = pendingModelsStatus;
-      status.className = "status-line ok";
+      status.className = `status-line ${pendingModelsStatusOk ? "ok" : ""}`;
       pendingModelsStatus = "";
+      pendingModelsStatusOk = false;
     }
     body.querySelectorAll("[data-act]").forEach((b) => {
       (b as HTMLButtonElement).onclick = () => {
