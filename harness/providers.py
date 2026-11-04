@@ -28,12 +28,6 @@ from pathlib import Path
 
 from . import paths
 
-# The pre-init store location. Tests patch this attribute to redirect the
-# whole registry, so it doubles as an explicit override seam; the import-time
-# default is the sentinel that tells the two apart.
-PROVIDERS_FILE = Path.cwd() / "providers.json"
-_DEFAULT_FILE = Path(PROVIDERS_FILE)
-
 SERVICE = "harness"
 FORMAT_VERSION = 2
 
@@ -127,10 +121,6 @@ def use(target_id):
 
 
 def _file():
-    # An explicit override (tests patch PROVIDERS_FILE) wins; production
-    # resolves through paths at call time instead of an import-time cwd.
-    if Path(PROVIDERS_FILE) != _DEFAULT_FILE:
-        return Path(PROVIDERS_FILE)
     if paths.is_initialized():
         return paths.providers_file()
     return paths.default_project_root() / "providers.json"

@@ -12,7 +12,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import providers
+from harness import paths, providers
 
 
 class FakeKeyring:
@@ -57,8 +57,12 @@ class ModelCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.file = Path(self.tmp.name) / "providers.json"
-        mock.patch.object(providers, "PROVIDERS_FILE", self.file).start()
+        paths.init(
+            project_root=Path(self.tmp.name) / "proj",
+            app_data_dir=Path(self.tmp.name) / "app",
+        )
+        self.addCleanup(paths.reset)
+        self.file = paths.providers_file()
         self.fake = FakeKeyring()
         mock.patch.dict("sys.modules", {"keyring": self.fake}).start()
         self.addCleanup(mock.patch.stopall)

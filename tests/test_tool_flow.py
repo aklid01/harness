@@ -127,9 +127,6 @@ class ToolFlowCase(unittest.TestCase):
         self.script_path = Path(self.tmp.name) / "script.json"
         self.script_path.write_text(json.dumps(self.SCRIPT), encoding="utf-8")
         self.record_path = Path(self.tmp.name) / "record.jsonl"
-        mock.patch.object(
-            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json"
-        ).start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
         self.seen = []

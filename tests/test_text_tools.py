@@ -54,9 +54,6 @@ class ParseCase(unittest.TestCase):
             project_root=Path(self.tmp.name), app_data_dir=Path(self.tmp.name) / "app"
         )
         self.addCleanup(paths.reset)
-        mock.patch.object(
-            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "app" / "providers.json"
-        ).start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
         self.available = [

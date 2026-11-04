@@ -15,7 +15,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import errors, history, llm, providers, retry
+from harness import errors, history, llm, paths, providers, retry
 
 
 class FakeKeyring:
@@ -65,9 +65,11 @@ class LlmCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        mock.patch.object(
-            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json"
-        ).start()
+        paths.init(
+            project_root=Path(self.tmp.name) / "proj",
+            app_data_dir=Path(self.tmp.name) / "app",
+        )
+        self.addCleanup(paths.reset)
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         # The fixed schedule is the policy under test in test_retry.py; here a
         # retry is just plumbing, so its wait costs milliseconds, not seconds.
@@ -308,9 +310,11 @@ class ContextCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        mock.patch.object(
-            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "providers.json"
-        ).start()
+        paths.init(
+            project_root=Path(self.tmp.name) / "proj",
+            app_data_dir=Path(self.tmp.name) / "app",
+        )
+        self.addCleanup(paths.reset)
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
 
@@ -382,9 +386,6 @@ class RunnerContextCase(unittest.TestCase):
         self.addCleanup(paths.reset)
         os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
         self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
-        mock.patch.object(
-            providers, "PROVIDERS_FILE", Path(self.tmp.name) / "app" / "providers.json"
-        ).start()
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
         providers.save_group({"id": "grp", "name": "N", "base_url": "https://x/v1"})

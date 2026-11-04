@@ -10,6 +10,8 @@ this module owns that policy now.
 import logging
 from types import SimpleNamespace
 
+from openai import OpenAI
+
 from . import errors as errors_mod
 from . import events, instructions, providers
 from . import retry as retry_mod
@@ -36,8 +38,6 @@ def get_client():
                 model=caps.get("name") or caps.get("model"),
                 provider=caps.get("provider_name"),
             )
-        from openai import OpenAI
-
         client = OpenAI(
             base_url=base_url,
             api_key=api_key,
