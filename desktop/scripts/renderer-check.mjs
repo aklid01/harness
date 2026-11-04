@@ -1772,7 +1772,7 @@ try {
     sessionA.picked && Array.isArray(sessionA.wrote) && sessionA.idle === true,
     JSON.stringify({ picked: sessionA.picked, wrote: sessionA.wrote }),
   );
-  await submit(ws, "/multi-modeal-review");
+  await submit(ws, "/multi-model-review");
   const merged = await waitForCard(
     (c) => c.badge !== "running" && c.findings.length > 0,
   );
@@ -2050,7 +2050,7 @@ try {
   await sleep(400);
   await submit(ws, "nothing to review here");
   await waitFor(`!document.getElementById("modeBtn").disabled`, 30000);
-  await submit(ws, "/multi-modeal-review");
+  await submit(ws, "/multi-model-review");
   const nothing = await waitForCard((c) => c.badge === "nothing to review");
   verdict(
     "review-says-nothing-to-review",
