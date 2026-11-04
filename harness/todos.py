@@ -1,4 +1,9 @@
-"""The plan. Lives here, not in the transcript, and is re-injected every turn.
+"""The write_todos checklist: the turn's task list, not the plan file.
+
+harness/plan.py owns "the plan" - the durable plan artifact a planning turn
+writes. This module owns the ephemeral checklist the write_todos tool
+maintains: it lives here, not in the transcript, and is re-injected every
+turn.
 
 State is scoped per session: one turn thread inherits the ambient list when it
 binds and diverges from there, so two concurrent sessions never see or rewrite
