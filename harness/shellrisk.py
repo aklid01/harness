@@ -412,25 +412,52 @@ def _classify_segment(segment):
     return "medium"  # unknown executable: conservative
 
 
-def _is_catastrophic(command):
-    low = command.lower()
-    return any(
-        m in low
-        for m in (
-            "rm -rf /",
-            "rm -fr /",
-            "mkfs",
-            ":(){",
-            "dd if=",
-            "--no-preserve-root",
-            "shutdown",
-            "reboot",
-            "poweroff",
-            "> /dev/sd",
-            "format c:",
-            "halt",
-        )
+def _outside_quotes(text):
+    """The command with quoted spans blanked: their content is data, not code."""
+    out = []
+    quote = None
+    for char in text:
+        if quote:
+            if char == quote:
+                quote = None
+                out.append(" ")
+            continue
+        if char in "\"'":
+            quote = char
+            out.append(" ")
+            continue
+        out.append(char)
+    return "".join(out)
+
+
+def _has_shell_consumer(low):
+    """True when some command in the line feeds its arguments to a shell."""
+    return (
+        _re.search(r"\b(sh|bash|zsh|dash|ksh|eval|exec|xargs|source)\b", low) is not None
     )
+
+
+_CATASTROPHIC_COMMANDS = {"mkfs", "shutdown", "reboot", "poweroff", "halt", "format"}
+
+_CATASTROPHIC_PATTERNS = (
+    ":(){",
+    "--no-preserve-root",
+    "> /dev/sd",
+    "rm -rf /",
+    "rm -fr /",
+)
+
+
+def _is_catastrophic(command):
+    for segment in split_command(command):
+        words = _shell_words(segment)
+        base = _base_command(words)
+        if base in _CATASTROPHIC_COMMANDS:
+            return True
+        if base == "dd" and any(arg.startswith("if=") for arg in words[1:]):
+            return True
+    low = command.lower()
+    return any(pattern in low for pattern in _CATASTROPHIC_PATTERNS)
 
 
 def _strip_redirects(command):
@@ -458,11 +485,17 @@ def classify_bash(command):
     """
     text = str(command or "")
     low = text.lower()
-    if _re.search(r"\|\s*(sudo\s+)?(sh|bash|zsh|dash|ksh)\b", low) and _re.search(
-        r"\b(curl|wget|nc|ncat)\b", low
+    # Quoted text is the receiving command's data, so the scans below run
+    # outside quotes - unless the receiver outside the quotes is a shell,
+    # which turns the payload back into code and the original text is what
+    # gets scanned.
+    outside = _outside_quotes(low)
+    scanned = low if _has_shell_consumer(outside) else outside
+    if _re.search(r"\|\s*(sudo\s+)?(sh|bash|zsh|dash|ksh)\b", scanned) and _re.search(
+        r"\b(curl|wget|nc|ncat)\b", scanned
     ):
         return "critical", "downloads a remote script and pipes it into a shell"
-    if _is_catastrophic(text):
+    if _is_catastrophic(scanned):
         return "critical", "can wipe data or take the machine down"
 
     levels = []
@@ -472,7 +505,7 @@ def classify_bash(command):
         levels.append(_classify_segment(part))
     if _re.search(
         r"\|\s*(sudo\s+)?(sh|bash|zsh|dash|python[\d.]*|perl|ruby|node|powershell|pwsh)\b",
-        low,
+        scanned,
     ):
         levels.append("high")
 
