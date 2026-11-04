@@ -518,10 +518,14 @@ TOOL_SCHEMAS = [
 
 
 def _task(description: str) -> str:
-    """Deferred dispatch to the subagent loop (it imports this module back)."""
-    from .subagent import task
+    """Deferred dispatch: the guest loop gets the registry handed to it,
+    so an implementation never reads the registry back."""
+    from . import subagent
 
-    return task(description)
+    guest = [
+        s for s in TOOL_SCHEMAS if s["function"]["name"] not in subagent.WITHHELD
+    ]
+    return subagent.task(description, execute=execute, tool_schemas=guest)
 
 
 TOOLS = {

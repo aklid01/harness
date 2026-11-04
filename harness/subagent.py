@@ -94,22 +94,19 @@ is not.
 {_attachment_note()}"""
 
 
-def toolset():
-    """Every tool except the ones a guest should not hold."""
-    from .tools import TOOL_SCHEMAS
+def task(description: str, execute, tool_schemas):
+    """Run a fresh agent on one question and return only its final answer.
 
-    return [s for s in TOOL_SCHEMAS if s["function"]["name"] not in WITHHELD]
-
-
-def task(description: str) -> str:
-    """Run a fresh agent on one question and return only its final answer."""
+    The registry is handed in, not read: ``execute`` and ``tool_schemas``
+    come from the tools module that dispatched this call, so the guest
+    loop runs exactly the toolset the dispatcher advertised.
+    """
     # Imported inside the function: llm imports tools, so a module-level
     # import here would tie this module to the whole tool layer at import
     # time instead of when a subagent actually runs.
     from . import events, providers
     from .history import prepare
     from .llm import call_llm
-    from .tools import execute
     # --- rule 1 ---
     # Two messages. Not a copy of the caller's transcript, not a trimmed
     # version of it, and not whatever the last subagent left behind - this
@@ -135,7 +132,7 @@ def task(description: str) -> str:
 
         events.emit(events.STATUS, {"active": "subagent exploring"})
         try:
-            message, usage = call_llm(request, tools=toolset())
+            message, usage = call_llm(request, tools=tool_schemas)
         except Exception as failure:  # noqa: BLE001
             events.emit(events.STATUS, {"active": None})
             events.emit(
