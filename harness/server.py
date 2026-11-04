@@ -1084,7 +1084,7 @@ class Harness:
                 s.active_provider = obj.get("id")
             return _reply({"reply": op, "ok": bool(ok)})
         if op == "set_effort":
-            pid = s.active_provider or providers_mod.get_active_id() or obj.get("id")
+            pid = s.active_provider or providers_mod.get_active_model_id() or obj.get("id")
             providers_mod.set_effort(pid, obj.get("effort") or None)
             s.effort = obj.get("effort") or "default"
             return _reply({"reply": op, "ok": True})
@@ -1228,7 +1228,7 @@ class Harness:
                     "groups": providers_mod.list_groups(),
                     "providers": models,
                     "active_provider_id": providers_mod.get_active_provider_id(),
-                    "active_model_id": providers_mod.get_active_id(),
+                    "active_model_id": providers_mod.get_active_model_id(),
                     "statuses": statuses,
                     "migration": providers_mod.migration_report(),
                 },
@@ -1243,7 +1243,7 @@ class Harness:
                 return {"reply": op, "ok": False, "error": str(conflict)}
             if obj.get("key"):
                 providers_mod.set_key(stored["id"], obj["key"])
-            if not providers_mod.get_active_id():
+            if not providers_mod.get_active_model_id():
                 providers_mod.set_active(stored["id"])
             return {
                 "reply": op,

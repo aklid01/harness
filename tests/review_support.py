@@ -95,7 +95,7 @@ class FakeLLM:
     def __call__(
         self, messages, tools=None, on_delta=None, on_reasoning=None, cancel=None
     ):
-        model_id = providers.get_active_id()
+        model_id = providers.get_active_model_id()
         started = time.monotonic()
         with self._lock:
             self.calls.append(

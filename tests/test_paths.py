@@ -69,7 +69,7 @@ class PathsCase(unittest.TestCase):
             }
         )
         self.assertTrue(paths.providers_file().exists())
-        self.assertEqual(providers.get_active_id(), "p1")
+        self.assertEqual(providers.get_active_model_id(), "p1")
 
     def test_env_and_skill_dirs_follow_root(self):
         self.assertEqual(paths.env_files()[0], self.project.resolve() / ".env")

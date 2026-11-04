@@ -352,7 +352,7 @@ class Runner:
         other.
         """
         config = agents.get()
-        default_model = providers.get_active_id()
+        default_model = providers.get_active_model_id()
         self._build_started = False  # one submission = one task: reset the guard
         build_cfg = config["build"]
 

@@ -721,7 +721,7 @@ def set_active(target_id):
     return True
 
 
-def get_active_id():
+def get_active_model_id():
     override = _ACTIVE_ID.get()
     if override:
         return override
@@ -966,7 +966,7 @@ def provider_status(target_id):
         return None
     flat = _flat(group, model)
     state, _ = _credential_state(group)
-    flat.update({"key": state, "active": model["id"] == get_active_id()})
+    flat.update({"key": state, "active": model["id"] == get_active_model_id()})
     return flat
 
 
@@ -1084,7 +1084,7 @@ def migrate_from_settings():
                 "model": legacy.get("MODEL", ""),
             }
         )
-    if get_active_id() is None and list_models():
+    if get_active_model_id() is None and list_models():
         set_active(list_models()[0]["id"])
     return imported
 

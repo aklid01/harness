@@ -54,12 +54,12 @@ class ProviderCase(unittest.TestCase):
         self.assertEqual(providers.list_models(), [])
         providers.save_provider(self.entry())
         providers.save_provider(self.entry("p2"))
-        self.assertEqual(providers.get_active_id(), "p1")
+        self.assertEqual(providers.get_active_model_id(), "p1")
         self.assertTrue(providers.set_active("p2"))
-        self.assertEqual(providers.get_active_id(), "p2")
+        self.assertEqual(providers.get_active_model_id(), "p2")
         self.assertFalse(providers.set_active("nope"))
         providers.delete_provider("p2")
-        self.assertEqual(providers.get_active_id(), "p1")
+        self.assertEqual(providers.get_active_model_id(), "p1")
 
     def test_key_status_masked(self):
         providers.save_provider(self.entry())

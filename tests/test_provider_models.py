@@ -155,7 +155,7 @@ class ModelCase(unittest.TestCase):
         self.assertEqual(len(providers.list_groups()), 1)
         self.assertEqual([m["id"] for m in providers.list_models("grp-1")], ["mdl-b"])
         # the deleted model was active: the provider's other model takes over
-        self.assertEqual(providers.get_active_id(), "mdl-b")
+        self.assertEqual(providers.get_active_model_id(), "mdl-b")
 
     def test_deleting_last_model_removes_provider_and_key(self):
         providers.save_group(self.group())
@@ -242,7 +242,7 @@ class ModelCase(unittest.TestCase):
         models = providers.list_models()
         self.assertEqual([m["model"] for m in models], ["flash-1", "flash-2"])
         self.assertEqual(len(providers.list_groups()), 2)
-        self.assertEqual(providers.get_active_id(), models[0]["id"])
+        self.assertEqual(providers.get_active_model_id(), models[0]["id"])
         self.assertEqual(
             providers.get_provider(models[0]["id"])["reasoning_effort"], "high"
         )
@@ -284,7 +284,7 @@ class ModelCase(unittest.TestCase):
     def test_migrated_active_id_lands_on_its_model(self):
         self.write(LEGACY)
         self.assertEqual(
-            providers.get_active_id(),
+            providers.get_active_model_id(),
             providers.get_provider("https://a.example/v1")["id"],
         )
 
@@ -382,7 +382,7 @@ class ModelCase(unittest.TestCase):
         providers.save_provider(
             {"id": "p1", "name": "P1", "base_url": "https://x/v1", "model": "m"}
         )
-        self.assertEqual(providers.get_active_id(), "p1")
+        self.assertEqual(providers.get_active_model_id(), "p1")
         entry = providers.get_provider("p1")
         self.assertEqual((entry["base_url"], entry["model"]), ("https://x/v1", "m"))
         self.assertEqual(providers.get_active_provider_id(), "p1")

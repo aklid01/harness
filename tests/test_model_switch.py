@@ -179,7 +179,7 @@ class SwitchCase(unittest.TestCase):
         answers = [m for m in self.session_messages() if m.get("role") == "assistant"]
         self.assertEqual([a["content"] for a in answers], ["done by deepseek"])
         self.assertEqual(seen, ["glm-5.3-flash", "deepseek-v4.1-flash"])
-        self.assertEqual(providers.get_active_id(), "mdl-b")
+        self.assertEqual(providers.get_active_model_id(), "mdl-b")
 
     def test_switching_model_mid_generation_stops_it(self):
         release = threading.Event()
