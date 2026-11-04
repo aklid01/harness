@@ -32,6 +32,7 @@ from .context import reminder
 from .llm import call_llm, system_prompt
 from .review import command as review_command
 from .todos import active_form
+from . import tools
 from .tools import available_tool_names, execute
 
 def _has_image_parts(message):
@@ -601,7 +602,6 @@ class Runner:
         transcript beyond the single handoff message the caller appends, so the
         exploration cost never lands in the persisted history.
         """
-        from . import tools as tools_module
 
         # The planner works on its own message list, so the files the user
         # attached are named here too - otherwise Plan -> Build would plan
@@ -623,7 +623,7 @@ class Runner:
         )
         toolset = [
             s
-            for s in tools_module.TOOL_SCHEMAS
+            for s in tools.TOOL_SCHEMAS
             if s["function"]["name"] not in READONLY_WITHHELD
         ]
         # The planner's own budget - separate from Build's and Oversight's.
@@ -760,11 +760,10 @@ class Runner:
         never a way to wedge the turn. Blocks on the same interaction the tool
         approval path uses, so an unanswered prompt is bounded by that timeout.
         """
-        from . import tools as tools_module
 
         if not agents.plan_wants_approval(config) or self.cancelled():
             return True
-        if not tools_module.approval_channel_ready():
+        if not tools.approval_channel_ready():
             return True  # nobody to ask; keep building rather than deadlock
         preview = (
             plan_text
@@ -1115,7 +1114,6 @@ class Runner:
         if not texttools.looks_like_call(content):
             return None, None
         caps = providers.active_model_capabilities()
-        from . import tools as tools_module
 
         if not caps.get("supports_text_tools"):
             model = caps.get("name") or "this model"
@@ -1130,8 +1128,8 @@ class Runner:
                 ),
                 None,
             )
-        available = tools_module.available_tool_names()
-        schemas = tools_module.tool_schemas()
+        available = tools.available_tool_names()
+        schemas = tools.tool_schemas()
         return texttools.parse_with_narration(
             content, schemas=schemas, available=available
         )
@@ -1168,13 +1166,12 @@ class Runner:
         must hear why. Only fires when the list is genuinely empty, so a
         single missing dependency never produces this note.
         """
-        from . import tools as tools_module
 
         if not providers.active_model_capabilities().get("supports_tools", True):
             return
-        if tools_module.available_tool_names():
+        if tools.available_tool_names():
             return
-        why = tools_module.unavailable_summary() or "none of the tools could start"
+        why = tools.unavailable_summary() or "none of the tools could start"
         injection["content"] += (
             "\n<system-reminder>\n"
             "No tools are available in this session. Do not attempt tool calls; "
