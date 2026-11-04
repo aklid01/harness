@@ -75,7 +75,7 @@ class Progress:
         """Feed one step's fingerprint. True when it has repeated too often."""
         import hashlib
 
-        h = hashlib.sha1(str(key).encode("utf-8")).hexdigest()
+        h = hashlib.sha1(str(key).encode("utf-8"), usedforsecurity=False).hexdigest()
         if h == self._last:
             self._count += 1
         else:

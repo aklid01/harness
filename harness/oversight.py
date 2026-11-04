@@ -346,4 +346,4 @@ def fingerprint(name, args):
         )
     except (TypeError, ValueError):
         blob = f"{name}:{args}"
-    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha1(blob.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
