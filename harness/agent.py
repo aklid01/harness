@@ -10,7 +10,7 @@ import json
 from types import SimpleNamespace
 
 from . import (
-    agents,
+    agent_roles,
     budget,
     commands,
     compact,
@@ -205,7 +205,7 @@ class Runner:
         """
         if not self._turn_touched or self.review_hook is None:
             return
-        mode = agents.review_auto_run(agents.get())
+        mode = agent_roles.review_auto_run(agent_roles.get())
         if mode == "off":
             return
         self.request_review(
@@ -351,7 +351,7 @@ class Runner:
         choose which model each phase uses - and changing one never edits the
         other.
         """
-        config = agents.get()
+        config = agent_roles.get()
         default_model = providers.get_active_model_id()
         self._build_started = False  # one submission = one task: reset the guard
         build_cfg = config["build"]
@@ -472,7 +472,7 @@ class Runner:
             events.emit(events.NOTE, {"text": "stopped"})
             return
         self._phase("building")
-        build_id = agents.resolve_model(build_cfg, default_model) if use_agent else None
+        build_id = agent_roles.resolve_model(build_cfg, default_model) if use_agent else None
         if build_id:
             with providers.use(build_id):
                 self._turn()
@@ -481,7 +481,7 @@ class Runner:
 
     def _run_plan_build(self, user_text, config, default_model, build_cfg):
         plan_cfg = config["plan"]
-        plan_id = agents.resolve_model(plan_cfg, default_model)
+        plan_id = agent_roles.resolve_model(plan_cfg, default_model)
         self._phase("planning")
         plan_text, completion, reason = self._plan_phase(
             user_text, plan_id, plan_cfg.get("instructions") or ""
@@ -761,7 +761,7 @@ class Runner:
         approval path uses, so an unanswered prompt is bounded by that timeout.
         """
 
-        if not agents.plan_wants_approval(config) or self.cancelled():
+        if not agent_roles.plan_wants_approval(config) or self.cancelled():
             return True
         if not tools.approval_channel_ready():
             return True  # nobody to ask; keep building rather than deadlock

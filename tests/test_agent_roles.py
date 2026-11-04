@@ -25,7 +25,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import agents, events, providers, server
+from harness import agent_roles, events, providers, server
 from harness import paths as paths_mod
 
 
@@ -75,10 +75,10 @@ class ConfigCase(unittest.TestCase):
         appdata.mkdir(parents=True)
         paths_mod.init(project_root=self.root, app_data_dir=appdata)
         self.addCleanup(paths_mod.reset)
-        self.addCleanup(agents.reset_cache)
+        self.addCleanup(agent_roles.reset_cache)
 
     def test_no_file_means_everything_off(self):
-        config = agents.get()
+        config = agent_roles.get()
         self.assertFalse(config["plan"]["enabled"])
         self.assertFalse(config["build"]["enabled"])
         self.assertFalse(config["oversight"]["enabled"])
@@ -86,7 +86,7 @@ class ConfigCase(unittest.TestCase):
         self.assertEqual(config["oversight"]["max_rounds"], 2)
 
     def test_round_trip_and_normalisation(self):
-        stored = agents.save(
+        stored = agent_roles.save(
             {
                 "plan": {
                     "enabled": True,
@@ -102,8 +102,8 @@ class ConfigCase(unittest.TestCase):
                 },
             }
         )
-        agents.reset_cache()
-        got = agents.get()
+        agent_roles.reset_cache()
+        got = agent_roles.get()
         self.assertTrue(got["plan"]["enabled"])
         self.assertEqual(got["plan"]["model_id"], "mdl-plan")
         self.assertEqual(got["plan"]["instructions"], "Be brief.")
@@ -112,27 +112,27 @@ class ConfigCase(unittest.TestCase):
             got["oversight"]["intensity"], "medium", "a bad intensity falls back"
         )
         self.assertLessEqual(
-            got["oversight"]["max_rounds"], agents.MAX_ROUNDS_LIMIT, "clamped"
+            got["oversight"]["max_rounds"], agent_roles.MAX_ROUNDS_LIMIT, "clamped"
         )
 
     def test_resolve_model_uses_own_or_default_or_none(self):
         self.assertIsNone(
-            agents.resolve_model({"enabled": False, "model_id": "mdl-plan"}, "def")
+            agent_roles.resolve_model({"enabled": False, "model_id": "mdl-plan"}, "def")
         )
         self.assertEqual(
-            agents.resolve_model({"enabled": True, "model_id": "mdl-plan"}, "def"),
+            agent_roles.resolve_model({"enabled": True, "model_id": "mdl-plan"}, "def"),
             "mdl-plan",
         )
         self.assertEqual(
-            agents.resolve_model({"enabled": True, "model_id": ""}, "def"),
+            agent_roles.resolve_model({"enabled": True, "model_id": ""}, "def"),
             "def",
             "enabled but unset uses the session default",
         )
 
     def test_garbage_file_becomes_defaults(self):
-        agents._file().write_text("{not json", encoding="utf-8")
-        agents.reset_cache()
-        self.assertFalse(agents.get()["plan"]["enabled"])
+        agent_roles._file().write_text("{not json", encoding="utf-8")
+        agent_roles.reset_cache()
+        self.assertFalse(agent_roles.get()["plan"]["enabled"])
 
 
 class RouteBase(unittest.TestCase):
@@ -151,7 +151,7 @@ class RouteBase(unittest.TestCase):
         appdata.mkdir(parents=True)
         paths_mod.init(project_root=self.root, app_data_dir=appdata)
         self.addCleanup(paths_mod.reset)
-        self.addCleanup(agents.reset_cache)
+        self.addCleanup(agent_roles.reset_cache)
         os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
         self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
 
@@ -270,7 +270,7 @@ class RouteCase(RouteBase):
     # ---- plan + build ---------------------------------------------------
 
     def test_plan_and_build_use_their_own_models_in_order(self):
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -284,7 +284,7 @@ class RouteCase(RouteBase):
         )
 
     def test_plan_is_handed_to_the_build_as_context(self):
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -299,7 +299,7 @@ class RouteCase(RouteBase):
         )
 
     def test_plan_persists_in_the_transcript_as_inspectable_context(self):
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -314,7 +314,7 @@ class RouteCase(RouteBase):
         )
 
     def test_plan_event_is_emitted_then_ready(self):
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -332,7 +332,7 @@ class RouteCase(RouteBase):
     def test_build_mode_ignores_agent_settings_and_uses_the_session_model(self):
         # Build is a normal, model-selected mode: a configured plan/build agent
         # does not apply to it. It runs on the session's own model, directly.
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -347,7 +347,7 @@ class RouteCase(RouteBase):
         self.assertFalse(any(u.startswith("<plan>") for u in self.transcript_users()))
 
     def test_plan_mode_ignores_agent_settings_and_uses_the_session_model(self):
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -362,7 +362,7 @@ class RouteCase(RouteBase):
 
     def test_build_and_plan_both_use_the_session_model(self):
         # The normal modes are independent of agent settings entirely.
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -374,7 +374,7 @@ class RouteCase(RouteBase):
         self.assertEqual([m for m, _ in self.calls], ["default-model"])
 
     def test_plan_build_hands_off_and_builds_exactly_once(self):
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -386,7 +386,7 @@ class RouteCase(RouteBase):
         self.assertEqual(len(handoffs), 1, "exactly one plan handoff")
 
     def test_phase_events_track_plan_then_build(self):
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -403,7 +403,7 @@ class RouteCase(RouteBase):
 
     def test_a_configured_role_model_that_is_gone_is_reported_not_swapped(self):
         # Only the agent workflow (Plan -> Build) validates role models.
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -420,7 +420,7 @@ class RouteCase(RouteBase):
 
     def test_build_mode_ignores_a_build_agent(self):
         # Even with only a build agent configured, plain Build stays the session model.
-        agents.save({"build": {"enabled": True, "model_id": "mdl-build"}})
+        agent_roles.save({"build": {"enabled": True, "model_id": "mdl-build"}})
         self.submit(mode="build")
         self.assertEqual(
             self.calls,
@@ -429,7 +429,7 @@ class RouteCase(RouteBase):
         )
 
     def test_plan_only_plans_on_plan_model_then_builds_on_default(self):
-        agents.save({"plan": {"enabled": True, "model_id": "mdl-plan"}})
+        agent_roles.save({"plan": {"enabled": True, "model_id": "mdl-plan"}})
         self.submit(mode="plan-build")
         self.assertEqual(
             [m for m, _ in self.calls],
@@ -440,7 +440,7 @@ class RouteCase(RouteBase):
         self.assertTrue(build_call[1], "the plan still reaches the default build agent")
 
     def test_enabled_but_unset_model_uses_default_model(self):
-        agents.save({"plan": {"enabled": True}, "build": {"enabled": True}})
+        agent_roles.save({"plan": {"enabled": True}, "build": {"enabled": True}})
         self.submit(mode="plan-build")
         # Planning still runs (a dedicated pass) but on the default model, and
         # building continues on the default model too.
@@ -450,7 +450,7 @@ class RouteCase(RouteBase):
     def test_one_request_and_one_plan_phase_across_two_turns_no_dup_user_msg(self):
         # A second turn re-plans, but the transcript still holds each user
         # message exactly once and both turn phases run per submit.
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -490,7 +490,7 @@ class PlanFailure(RouteBase):
             return reply("built without a real plan"), USAGE
 
         self.llm.side_effect = explore
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -564,7 +564,7 @@ class PlanApproval(RouteBase):
         return [m for m in self.sent if m.get("request") == "approval"]
 
     def submit_with_plan(self):
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan", "approve": True},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -575,7 +575,7 @@ class PlanApproval(RouteBase):
     def test_off_by_default_means_no_pause(self):
         # approve is not set -> the toggle defaults off, so no approval is
         # requested and plan flows straight into build (today's behaviour).
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
@@ -644,7 +644,7 @@ class PlanArtifact(RouteBase):
     def test_plan_is_persisted_for_its_own_session_only(self):
         from harness import plan as plan_mod
 
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": False},
@@ -663,7 +663,7 @@ class PlanArtifact(RouteBase):
     def test_get_plan_op_returns_the_persisted_record(self):
         from harness import plan as plan_mod
 
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": False},
@@ -786,7 +786,7 @@ class PlanFindings(RouteBase):
             return reply("built"), USAGE
 
         self.llm.side_effect = flow
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},

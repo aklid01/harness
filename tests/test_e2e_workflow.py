@@ -28,7 +28,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import agents, events, providers, sandbox, server
+from harness import agent_roles, events, providers, sandbox, server
 from harness import paths as paths_mod
 
 
@@ -124,7 +124,7 @@ class WorkflowE2E(unittest.TestCase):
         self.appdata.mkdir(parents=True)
         paths_mod.init(project_root=self.root, app_data_dir=self.appdata)
         self.addCleanup(paths_mod.reset)
-        self.addCleanup(agents.reset_cache)
+        self.addCleanup(agent_roles.reset_cache)
         os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
         self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
@@ -225,7 +225,7 @@ class WorkflowE2E(unittest.TestCase):
             s.join_background(timeout=10)
 
     def test_the_whole_workflow_over_the_wire(self):
-        agents.save(
+        agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": False},  # build falls back to the session model
@@ -342,7 +342,7 @@ class WorkflowE2E(unittest.TestCase):
         mock_state(self.server).cursors = {
             k: 0 for k in mock_state(self.server).scripts
         }
-        agents.save(
+        agent_roles.save(
             {
                 "oversight": {
                     "enabled": True,

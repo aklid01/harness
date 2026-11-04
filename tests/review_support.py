@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from harness import agents
+from harness import agent_roles
 from harness import paths as paths_mod
 from harness import providers
 
@@ -169,8 +169,8 @@ class ReviewCase(unittest.TestCase):
 
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
         self.addCleanup(mock.patch.stopall)
-        agents.reset_cache()
-        self.addCleanup(agents.reset_cache)
+        agent_roles.reset_cache()
+        self.addCleanup(agent_roles.reset_cache)
 
     def write(self, name, text):
         """Write a file in the workspace and return its path."""

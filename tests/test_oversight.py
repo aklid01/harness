@@ -27,7 +27,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import agents, events, oversight, providers, server
+from harness import agent_roles, events, oversight, providers, server
 from harness import paths as paths_mod
 
 USAGE = {
@@ -135,7 +135,7 @@ class ReviewerContextCase(unittest.TestCase):
         appdata.mkdir(parents=True)
         paths_mod.init(project_root=self.root, app_data_dir=appdata)
         self.addCleanup(paths_mod.reset)
-        self.addCleanup(agents.reset_cache)
+        self.addCleanup(agent_roles.reset_cache)
         (self.root / "AGENTS.md").write_text(
             "- Project rule: single quotes.", encoding="utf-8"
         )
@@ -245,7 +245,7 @@ class GateCase(unittest.TestCase):
         appdata.mkdir(parents=True)
         paths_mod.init(project_root=self.root, app_data_dir=appdata)
         self.addCleanup(paths_mod.reset)
-        self.addCleanup(agents.reset_cache)
+        self.addCleanup(agent_roles.reset_cache)
         os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
         self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
 
@@ -357,7 +357,7 @@ class GateCase(unittest.TestCase):
             },
         }
         cfg["oversight"].update(over_cfg)
-        agents.save(cfg)
+        agent_roles.save(cfg)
 
     def done(self, session, timeout=20, kind="done"):
         limit = time.time() + timeout
@@ -628,7 +628,7 @@ class GateCase(unittest.TestCase):
     def test_oversight_without_a_configured_model_is_inert(self):
         # Independent feature: enabled with no reviewer model => inert; the write
         # proceeds unreviewed (in a normal Build session).
-        agents.save({"oversight": {"enabled": True, "model_id": ""}})
+        agent_roles.save({"oversight": {"enabled": True, "model_id": ""}})
         self.coding = [
             reply(
                 "",

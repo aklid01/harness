@@ -1196,7 +1196,7 @@ class Harness:
             return {"reply": op, "ok": False, "error": str(failure)}
 
     def _agents_op(self, op, obj):
-        from . import agents as agents_mod
+        from . import agent_roles as agents_mod
 
         if op == "get_agents":
             return {"reply": op, "ok": True, "data": agents_mod.get()}

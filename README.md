@@ -480,7 +480,7 @@ uv run python tests/test_text_tools.py        # XML text tool calls: parse, vali
 uv run python tests/test_sessions.py          # storage, migration, LLM titles
 uv run python tests/test_permissions.py       # policy modes, deny-list supremacy
 uv run python tests/test_llm_params.py        # effort/temperature forwarding
-uv run python tests/test_agents.py            # plan/build agent routing
+uv run python tests/test_agent_roles.py            # plan/build agent routing
 uv run python tests/test_e2e_workflow.py      # plan -> build -> oversight, end to end
 uv run python tests/test_instructions.py      # AGENTS.md injection, 20k cap
 uv run python tests/test_oversight.py         # decision review gate

@@ -30,7 +30,7 @@ NO_KEY = "no-key"
 def defaults():
     """A fresh review section, with nothing enabled.
 
-    The single source of the review defaults: agents.py starts its own
+    The single source of the review defaults: agent_roles.py starts its own
     validation from here, so the numbers exist exactly once.
     """
     from .scope import DEFAULT_EXCLUSIONS
@@ -77,7 +77,7 @@ def _as_int(value, default, low, high):
 def clean_section(raw):
     """One review section, from whatever the saved role config holds.
 
-    The single cleaner for the review settings: agents.py hands the raw
+    The single cleaner for the review settings: agent_roles.py hands the raw
     section over untouched, so the option set, the limits and their
     bounds live here and nowhere else.
     """
@@ -140,18 +140,18 @@ def clean_section(raw):
 
 def load():
     """The review section of the role config, with defaults filled."""
-    from .. import agents
+    from .. import agent_roles
 
-    return agents.get().get("review", defaults())
+    return agent_roles.get().get("review", defaults())
 
 
 def save(section):
     """Store the review section, leaving the other roles untouched."""
-    from .. import agents
+    from .. import agent_roles
 
-    config = agents.get()
+    config = agent_roles.get()
     config["review"] = section
-    return agents.save(config).get("review", section)
+    return agent_roles.save(config).get("review", section)
 
 
 def reviewer_entries(config=None):
