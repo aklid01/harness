@@ -774,24 +774,7 @@ class Session:
         if len(body) > 8000:
             body = body[:8000] + "\n... (the rest is in the saved report)"
 
-        call_id = f"review_{review_id}"
-        # The same shape the engine stores for a real assistant tool call, so
-        # the provider sees a valid transcript.
-        self.runner.messages.append(
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": call_id,
-                        "type": "function",
-                        "function": {"name": "review_findings", "arguments": "{}"},
-                    }
-                ],
-            }
-        )
-        self.runner.messages.append(
-            {"role": "tool", "tool_call_id": call_id, "content": body}
-        )
+        self.runner.inject_tool_result("review_findings", body)
         ids = ", ".join(item.get("id", "") for item in findings)
         if apply and len(findings) == 1:
             text = (

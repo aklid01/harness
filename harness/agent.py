@@ -1146,6 +1146,33 @@ class Runner:
             },
         )
 
+    def inject_tool_result(self, name, content):
+        """Append a synthetic tool call + result pair to the transcript.
+
+        For content that must reach the model through the context budget and
+        history compaction exactly like real tool output, without a tool
+        actually running. Returns the synthetic call id.
+        """
+        call_id = f"{name}_{len(self.messages)}"
+        # The same shape the engine stores for a real assistant tool call, so
+        # the provider sees a valid transcript.
+        self.messages.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        self.messages.append(
+            {"role": "tool", "tool_call_id": call_id, "content": content}
+        )
+        return call_id
+
     def _corrective_note(self, call):
         """What the model is told when its text call could not be used."""
         available = ", ".join(
