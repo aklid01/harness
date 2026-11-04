@@ -292,7 +292,6 @@ class RunCase(unittest.TestCase):
                 raise http(429, "slow down", headers={"retry-after": "0.5"})
             return "ok"
 
-        started = time.monotonic()
         self.assertEqual(retry.run(call, window=10, host="h"), "ok")
         gap = self.calls[1] - self.calls[0]
         self.assertGreaterEqual(gap, 0.45)

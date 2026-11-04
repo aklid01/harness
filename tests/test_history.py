@@ -4,9 +4,7 @@ stored transcript. The locked prefix survives all of it."""
 
 import json
 import os
-import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
 from harness import history

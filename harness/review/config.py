@@ -96,8 +96,6 @@ def clean_section(raw):
     section over untouched, so the option set, the limits and their
     bounds live here and nowhere else.
     """
-    from .scope import DEFAULT_EXCLUSIONS
-
     raw = raw if isinstance(raw, dict) else {}
     clean = defaults()
     clean["enabled"] = _as_bool(raw.get("enabled"))

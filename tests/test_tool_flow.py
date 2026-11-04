@@ -229,7 +229,7 @@ class ToolFlowCase(unittest.TestCase):
 
     def test_markup_with_the_capability_executes_through_approvals(self):
         self.use("markup-bad", supports_text_tools=True)
-        runner = self.run_turn()
+        self.run_turn()
         calls = self.tool_calls()
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["name"], "bash")

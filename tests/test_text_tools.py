@@ -12,7 +12,6 @@ os.environ.setdefault("MODEL", "dummy")
 
 from harness import (
     paths,
-    providers,
     texttools,
 )
 from harness.tools import TOOL_SCHEMAS

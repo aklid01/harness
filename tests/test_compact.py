@@ -19,7 +19,6 @@ os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
 from harness import commands, events, history, paths
-from harness import compact as compaction
 from harness.compact import compact, needed, safe_boundary, tail_start
 
 SUMMARY_TEXT = "## Goal\nmake the compact tests pass"

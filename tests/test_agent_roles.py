@@ -86,7 +86,7 @@ class ConfigCase(unittest.TestCase):
         self.assertEqual(config["oversight"]["max_rounds"], 2)
 
     def test_round_trip_and_normalisation(self):
-        stored = agent_roles.save(
+        agent_roles.save(
             {
                 "plan": {
                     "enabled": True,

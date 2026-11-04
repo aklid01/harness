@@ -7,7 +7,6 @@ localhost. The engine itself is unchanged - this file puts the event bus
 
 import argparse
 import asyncio
-import itertools
 import json
 import logging
 import threading
