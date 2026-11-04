@@ -230,6 +230,32 @@ def _run_reviewer(reviewer, scope, contexts, redactions, settings, cancel, emit,
     return outcome
 
 
+def _failure_document(
+    scope, *, review_id="", verdict="failed", verdict_label="failed", models=None, error=None, action=None
+):
+    """The shape every early exit returns: no findings, the scope as parsed."""
+    document = {
+        "review_id": review_id,
+        "verdict": verdict,
+        "verdict_label": verdict_label,
+        "findings": [],
+        "models": list(models or []),
+        "by_severity": {},
+        "by_category": {},
+        "scope": {
+            "mode": scope.mode,
+            "base": scope.base,
+            "files": [change.path for change in scope.files],
+            "skipped": list(scope.skipped),
+        },
+    }
+    if error is not None:
+        document["error"] = error
+    if action is not None:
+        document["action"] = action
+    return document
+
+
 def run(
     root,
     session_id="",
@@ -267,18 +293,9 @@ def run(
                 ),
             },
         )
-        return {
-            "review_id": "",
-            "verdict": "failed",
-            "verdict_label": "failed",
-            "findings": [],
-            "models": [],
-            "by_severity": {},
-            "by_category": {},
-            "scope": {"mode": scope.mode, "base": scope.base, "files": [], "skipped": []},
-            "error": "no reviewer model is configured",
-            "action": "settings",
-        }
+        return _failure_document(
+            scope, error="no reviewer model is configured", action="settings"
+        )
 
     unusable = []
     usable = []
@@ -299,21 +316,7 @@ def run(
                 "scope": {"mode": scope.mode, "base": scope.base},
             },
         )
-        return {
-            "review_id": "",
-            "verdict": "nothing",
-            "verdict_label": "nothing to review",
-            "findings": [],
-            "models": [],
-            "by_severity": {},
-            "by_category": {},
-            "scope": {
-                "mode": scope.mode,
-                "base": scope.base,
-                "files": [],
-                "skipped": list(scope.skipped),
-            },
-        }
+        return _failure_document(scope, verdict="nothing", verdict_label="nothing to review")
 
     if not usable:
         # Every reviewer the user picked cannot be reached. Say which one and
@@ -334,12 +337,9 @@ def run(
                 ),
             },
         )
-        return {
-            "review_id": "",
-            "verdict": "failed",
-            "verdict_label": "failed",
-            "findings": [],
-            "models": [
+        return _failure_document(
+            scope,
+            models=[
                 ModelOutcome(
                     model_id=item.get("model_id") or "",
                     label=item.get("label") or "",
@@ -348,17 +348,9 @@ def run(
                 ).to_dict()
                 for item in unusable
             ],
-            "by_severity": {},
-            "by_category": {},
-            "scope": {
-                "mode": scope.mode,
-                "base": scope.base,
-                "files": [change.path for change in scope.files],
-                "skipped": list(scope.skipped),
-            },
-            "error": error,
-            "action": "settings",
-        }
+            error=error,
+            action="settings",
+        )
 
     key = report_mod.cache_key(scope, [e.get("model_id") or "" for e in entries])
     if not force:
@@ -462,22 +454,12 @@ def run(
                 "models": [o.to_dict() for o in outcomes],
             },
         )
-        return {
-            "review_id": review_id,
-            "verdict": "failed",
-            "verdict_label": "failed",
-            "findings": [],
-            "models": [o.to_dict() for o in outcomes],
-            "by_severity": {},
-            "by_category": {},
-            "scope": {
-                "mode": scope.mode,
-                "base": scope.base,
-                "files": [c.path for c in scope.files],
-                "skipped": list(scope.skipped),
-            },
-            "error": error,
-        }
+        return _failure_document(
+            scope,
+            review_id=review_id,
+            models=[o.to_dict() for o in outcomes],
+            error=error,
+        )
 
     merged = merge(outcomes, threshold=settings.get("severity_threshold") or "low")
     total_tokens = sum(o.tokens for o in outcomes)

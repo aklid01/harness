@@ -1189,6 +1189,44 @@ class Runner:
             },
         )
 
+    def _build_injection(self):
+        """The per-turn reminder: mode rules, role instructions, honesty."""
+        injection = reminder(baseline=self._file_state)
+        if self.mode == "plan":
+            injection["content"] += (
+                "\n<mode>\nPlan mode: you are read-only. Explore, explain, and "
+                "propose concrete changes, but do NOT call write_file or "
+                "str_replace - they are blocked and this turn will be wasted.\n</mode>"
+            )
+        elif self.mode == "ask":
+            injection["content"] += (
+                "\n<mode>\nAsk mode: you are read-only. Answer questions and "
+                "explain the codebase, but do NOT call write_file or str_replace, "
+                "and do NOT run commands that modify anything - both are blocked "
+                "and this turn will be wasted.\n</mode>"
+            )
+        if self._role_instructions:
+            injection["content"] += (
+                "\n<task-instructions>\n"
+                "The user configured these instructions for the build phase. "
+                "Follow them; where they conflict with the project rules above, "
+                "ask the user rather than choosing yourself.\n"
+                f"{self._role_instructions}\n"
+                "</task-instructions>"
+            )
+        self._tools_honesty(injection)
+        # The manifest is repeated here every turn, so a transcript that
+        # was trimmed or compacted still says which files exist and where
+        # they are. The agent never loses track of an attachment.
+        note = attachments_mod.session_note(self._session_attachments())
+        if note:
+            injection["content"] += f"\n{note}"
+        # The subagent the agent spawns reads the same list, so it can open
+        # the files the user attached without being told about them twice.
+        attachments_mod.bind(self._session_attachments())
+        events.emit(events.INJECTION, {"content": injection["content"]})
+        return injection
+
     def _turn(self):
         self._announce_mode()
         # The role this turn reports on its events. The mode is locked for the
@@ -1251,40 +1289,7 @@ class Runner:
                         via="steer",
                         attachments=steer.get("attachments"),
                     )
-            injection = reminder(baseline=self._file_state)
-            if self.mode == "plan":
-                injection["content"] += (
-                    "\n<mode>\nPlan mode: you are read-only. Explore, explain, and "
-                    "propose concrete changes, but do NOT call write_file or "
-                    "str_replace - they are blocked and this turn will be wasted.\n</mode>"
-                )
-            elif self.mode == "ask":
-                injection["content"] += (
-                    "\n<mode>\nAsk mode: you are read-only. Answer questions and "
-                    "explain the codebase, but do NOT call write_file or str_replace, "
-                    "and do NOT run commands that modify anything - both are blocked "
-                    "and this turn will be wasted.\n</mode>"
-                )
-            if self._role_instructions:
-                injection["content"] += (
-                    "\n<task-instructions>\n"
-                    "The user configured these instructions for the build phase. "
-                    "Follow them; where they conflict with the project rules above, "
-                    "ask the user rather than choosing yourself.\n"
-                    f"{self._role_instructions}\n"
-                    "</task-instructions>"
-                )
-            self._tools_honesty(injection)
-            # The manifest is repeated here every turn, so a transcript that
-            # was trimmed or compacted still says which files exist and where
-            # they are. The agent never loses track of an attachment.
-            note = attachments_mod.session_note(self._session_attachments())
-            if note:
-                injection["content"] += f"\n{note}"
-            # The subagent the agent spawns reads the same list, so it can open
-            # the files the user attached without being told about them twice.
-            attachments_mod.bind(self._session_attachments())
-            events.emit(events.INJECTION, {"content": injection["content"]})
+            injection = self._build_injection()
 
             # Assemble the request separately from the stored history, so a
             # model with a smaller context window gets a trimmed copy and the
@@ -1472,137 +1477,9 @@ class Runner:
                         message, index, "Stopped by the user before this call ran."
                     )
                     break
-                name = tool_call.function.name
-                call_id = getattr(tool_call, "id", None)
-                try:
-                    args = json.loads(tool_call.function.arguments)
-                except (ValueError, TypeError):
-                    args = {}
-                # Build's independent budget and no-progress guard: a runaway or
-                # stuck build stops with a clear status instead of grinding.
-                over_budget = self._build_budget.tool()
-                looping = self._build_progress.repeat(
-                    f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
-                )
-                if over_budget or looping:
-                    events.emit(
-                        events.NOTE,
-                        {
-                            "text": (
-                                "Build stopped - it "
-                                + (
-                                    "reached its tool-call budget"
-                                    if over_budget
-                                    else "kept repeating the same step"
-                                )
-                                + " without finishing. Work so far is saved; refine "
-                                "the request to continue."
-                            ),
-                            "kind": "build_budget",
-                        },
-                    )
-                    events.emit(events.PHASE, {"phase": "blocked"})
-                    self._answer_pending_calls(
-                        message,
-                        index,
-                        "The turn stopped before this call ran "
-                        "(budget or a repeated step).",
-                    )
-                    self._stop_turn = True
+                if not self._run_tool_call(message, tool_call, index, request_id, role):
                     break
-                review_marker = None
-                # Fingerprinted before execute() resolves paths, so a re-proposed
-                # identical call fingerprints the same way it did at review time.
-                decision_fp = oversight.fingerprint(name, args)
-                if self.mode in ("plan", "ask") and name in (
-                    "write_file",
-                    "str_replace",
-                ):
-                    verb = (
-                        "Describe the change"
-                        if self.mode == "plan"
-                        else "Answer from what you can read"
-                    )
-                    result = (
-                        f"{self.mode.capitalize()} mode: read-only, no edits made. "
-                        f"{verb} instead of calling {name}."
-                    )
-                elif (
-                    self.mode == "ask"
-                    and name == "bash"
-                    and permissions.decide(str(args.get("command") or "")) != "allow"
-                ):
-                    result = (
-                        "Ask mode is read-only: this command can change the "
-                        "workspace, so it was not run. Answer from what you can "
-                        "read instead."
-                    )
-                else:
-                    # Decision oversight runs before, never after: it can hold a
-                    # significant action and hand the coding agent the reviewer's
-                    # guidance, but it never runs the tool itself and never
-                    # bypasses the permission layer an approved call still passes
-                    # through below.
-                    hold = self._review_gate(name, args, message)
-                    if hold is not None:
-                        result, review_marker = hold
-                    else:
-                        # One call, one request, one execution: a replayed frame or
-                        # a re-entered stream replays the recorded result.
-                        args, result = execute(
-                            tool_call,
-                            note=(message.content or ""),
-                            call_key=(request_id, call_id or index),
-                        )
-                        if tools.user_approved(name, args):
-                            self._user_approved.add(decision_fp)
-                        if name in ("write_file", "str_replace") and not str(
-                            result
-                        ).startswith(
-                            ("Error:", "Blocked by policy:", "The user denied")
-                        ):
-                            # A landed edit: later small edits to this file are
-                            # follow-up work on a decision already reviewed.
-                            self._touched.add(str(args.get("path") or ""))
-                            self._turn_touched.add(str(args.get("path") or ""))
-                        self._reconcile_todos(name, args, result)
-                extra = {"reviewed": review_marker} if review_marker else {}
-                events.emit(
-                    events.TOOL_CALL,
-                    {
-                        "call_id": call_id,
-                        "name": name,
-                        "args": args,
-                        "nested": False,
-                        "agent": role,
-                        **extra,
-                    },
-                )
-                events.emit(
-                    events.TOOL_RESULT,
-                    {
-                        "call_id": call_id,
-                        "name": name,
-                        "args": args,
-                        "result": result,
-                        "nested": False,
-                        "agent": role,
-                        **extra,
-                    },
-                )
-                if tool_call.function.name == "write_todos" and isinstance(
-                    args.get("todos"), list
-                ):
-                    events.emit(events.TODOS, {"todos": args["todos"]})
 
-                self.messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": result,
-                    }
-                )
-                session.save(self.messages)
                 if self._stop_turn:
                     # A escalation in this message stops the rest of the batch and
                     # the turn; the remaining calls were never run.
@@ -1623,3 +1500,143 @@ class Runner:
         # cannot delay it. The review runs in the background and reports
         # itself through the card.
         self._maybe_auto_review()
+
+    def _run_tool_call(self, message, tool_call, index, request_id, role):
+        """Budget, review gate, execution and transcript append for one call.
+
+        False means the turn stops here: the build budget or the
+        no-progress guard fired, and the calls after this one were
+        already answered.
+        """
+        name = tool_call.function.name
+        call_id = getattr(tool_call, "id", None)
+        try:
+            args = json.loads(tool_call.function.arguments)
+        except (ValueError, TypeError):
+            args = {}
+        # Build's independent budget and no-progress guard: a runaway or
+        # stuck build stops with a clear status instead of grinding.
+        over_budget = self._build_budget.tool()
+        looping = self._build_progress.repeat(
+            f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+        )
+        if over_budget or looping:
+            events.emit(
+                events.NOTE,
+                {
+                    "text": (
+                        "Build stopped - it "
+                        + (
+                            "reached its tool-call budget"
+                            if over_budget
+                            else "kept repeating the same step"
+                        )
+                        + " without finishing. Work so far is saved; refine "
+                        "the request to continue."
+                    ),
+                    "kind": "build_budget",
+                },
+            )
+            events.emit(events.PHASE, {"phase": "blocked"})
+            self._answer_pending_calls(
+                message,
+                index,
+                "The turn stopped before this call ran "
+                "(budget or a repeated step).",
+            )
+            self._stop_turn = True
+            return False
+        review_marker = None
+        # Fingerprinted before execute() resolves paths, so a re-proposed
+        # identical call fingerprints the same way it did at review time.
+        decision_fp = oversight.fingerprint(name, args)
+        if self.mode in ("plan", "ask") and name in (
+            "write_file",
+            "str_replace",
+        ):
+            verb = (
+                "Describe the change"
+                if self.mode == "plan"
+                else "Answer from what you can read"
+            )
+            result = (
+                f"{self.mode.capitalize()} mode: read-only, no edits made. "
+                f"{verb} instead of calling {name}."
+            )
+        elif (
+            self.mode == "ask"
+            and name == "bash"
+            and permissions.decide(str(args.get("command") or "")) != "allow"
+        ):
+            result = (
+                "Ask mode is read-only: this command can change the "
+                "workspace, so it was not run. Answer from what you can "
+                "read instead."
+            )
+        else:
+            # Decision oversight runs before, never after: it can hold a
+            # significant action and hand the coding agent the reviewer's
+            # guidance, but it never runs the tool itself and never
+            # bypasses the permission layer an approved call still passes
+            # through below.
+            hold = self._review_gate(name, args, message)
+            if hold is not None:
+                result, review_marker = hold
+            else:
+                # One call, one request, one execution: a replayed frame or
+                # a re-entered stream replays the recorded result.
+                args, result = execute(
+                    tool_call,
+                    note=(message.content or ""),
+                    call_key=(request_id, call_id or index),
+                )
+                if tools.user_approved(name, args):
+                    self._user_approved.add(decision_fp)
+                if name in ("write_file", "str_replace") and not str(
+                    result
+                ).startswith(
+                    ("Error:", "Blocked by policy:", "The user denied")
+                ):
+                    # A landed edit: later small edits to this file are
+                    # follow-up work on a decision already reviewed.
+                    self._touched.add(str(args.get("path") or ""))
+                    self._turn_touched.add(str(args.get("path") or ""))
+                self._reconcile_todos(name, args, result)
+        extra = {"reviewed": review_marker} if review_marker else {}
+        events.emit(
+            events.TOOL_CALL,
+            {
+                "call_id": call_id,
+                "name": name,
+                "args": args,
+                "nested": False,
+                "agent": role,
+                **extra,
+            },
+        )
+        events.emit(
+            events.TOOL_RESULT,
+            {
+                "call_id": call_id,
+                "name": name,
+                "args": args,
+                "result": result,
+                "nested": False,
+                "agent": role,
+                **extra,
+            },
+        )
+        if tool_call.function.name == "write_todos" and isinstance(
+            args.get("todos"), list
+        ):
+            events.emit(events.TODOS, {"todos": args["todos"]})
+
+        self.messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": result,
+            }
+        )
+        session.save(self.messages)
+        return True

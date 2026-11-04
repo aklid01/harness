@@ -22,7 +22,8 @@ disagreement escalates to the user rather than looping.
 import dataclasses
 import json
 
-from . import instructions, permissions, providers
+from . import instructions, providers
+from . import shellrisk as shellrisk_mod
 from .llm import call_llm
 
 # What the reviewer model may answer. "error" is engine-generated (a reviewer
@@ -58,7 +59,7 @@ def command_risk(command):
     plain `ls` of several directories are low and are not reviewed; editing,
     deleting, installing or piping into a shell rises with real impact.
     """
-    return permissions.classify_bash(command)[0]
+    return shellrisk_mod.classify_bash(command)[0]
 
 
 def decision_risk(name, args, touched=()):
