@@ -262,7 +262,7 @@ def run(
     *,
     scope,
     reviewers=None,
-    settings=None,
+    settings,
     emit=None,
     cancel=None,
     force=False,
@@ -278,7 +278,6 @@ def run(
     outstanding model calls as soon as they notice.
     """
     emit = emit or _noop
-    settings = settings or config_mod.load()
     entries = list(reviewers) if reviewers is not None else config_mod.enabled_reviewers(settings)
 
     if not entries:

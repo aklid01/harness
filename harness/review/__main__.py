@@ -133,9 +133,9 @@ def _render(report):
 def main(argv=None):
     args = build_parser().parse_args(argv)
 
+    from .. import agent_roles as agents_mod
     from .. import config as config_mod
     from .. import paths
-    from . import config as review_config
     from . import engine, scope as scope_mod
 
     root = Path(args.root).resolve() if args.root else paths.project_root()
@@ -150,7 +150,7 @@ def main(argv=None):
 
     with scope_context:
         config_mod.reload()
-        settings = dict(review_config.load())
+        settings = dict(agents_mod.review_settings())
         if args.severity:
             settings["severity_threshold"] = args.severity
 

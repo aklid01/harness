@@ -602,12 +602,12 @@ class Session:
         The thread runs inside this session's bound context, so the events
         it emits reach this tab and the files it reads are this workspace.
         """
-        from .review import config as review_config
+        from . import agent_roles as agents_mod
         from .review import engine as review_engine
         from .review import scope as review_scope
 
         args = dict(args or {})
-        settings = dict(review_config.load())
+        settings = dict(agents_mod.review_settings())
         if args.get("severity"):
             settings["severity_threshold"] = args["severity"]
 

@@ -19,12 +19,11 @@ import json
 from pathlib import Path
 
 from . import paths
+from .coerce import as_bool, as_int, as_text
 from .review.config import (
-    _as_bool,
-    _as_int,
-    _as_text,
     AUTO_RUN,
     clean_section as _clean_review,
+    defaults as _review_defaults,
 )
 
 FORMAT_VERSION = 1
@@ -60,18 +59,18 @@ DEFAULTS = {
 def _clean_role(raw, approve_default=None):
     raw = raw if isinstance(raw, dict) else {}
     clean = {
-        "enabled": _as_bool(raw.get("enabled")),
-        "model_id": _as_text(raw.get("model_id")),
-        "instructions": _as_text(raw.get("instructions")),
+        "enabled": as_bool(raw.get("enabled")),
+        "model_id": as_text(raw.get("model_id")),
+        "instructions": as_text(raw.get("instructions")),
     }
     if approve_default is not None:
-        clean["approve"] = _as_bool(raw.get("approve"), default=approve_default)
+        clean["approve"] = as_bool(raw.get("approve"), default=approve_default)
     if "intensity" in raw or "max_rounds" in raw:
-        intensity = _as_text(raw.get("intensity")) or DEFAULT_INTENSITY
+        intensity = as_text(raw.get("intensity")) or DEFAULT_INTENSITY
         clean["intensity"] = (
             intensity if intensity in INTENSITIES else DEFAULT_INTENSITY
         )
-        clean["max_rounds"] = _as_int(
+        clean["max_rounds"] = as_int(
             raw.get("max_rounds"), DEFAULT_MAX_ROUNDS, 1, MAX_ROUNDS_LIMIT
         )
     return clean
@@ -137,6 +136,23 @@ def save(config) -> dict:
     tmp.replace(target)
     _CACHE["stamp"] = _MISSING  # force a re-read on the next get()
     return copy.deepcopy(body)
+
+
+def review_settings() -> dict:
+    """The saved review settings, defaults filled.
+
+    The review section lives in this role config, so the accessor lives here
+    too: review/config stays a leaf that never imports back into its parent.
+    """
+    section = get().get("review")
+    return section if section is not None else copy.deepcopy(_review_defaults())
+
+
+def save_review_section(section) -> dict:
+    """Store the review section, leaving the other roles untouched."""
+    config = get()
+    config["review"] = section
+    return save(config).get("review", section)
 
 
 def reset_cache() -> None:
