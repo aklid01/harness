@@ -330,6 +330,25 @@ def _diff_commands(root, mode, base):
     return [["diff"], ["diff", "--cached", _EMPTY_TREE]]
 
 
+def _admit(scope, path, absolute, max_files, exclusions):
+    """The shared skip ladder: file cap, settings exclusions, binary.
+
+    True when the path may go on to produce a diff; otherwise the reason
+    is already recorded in scope.skipped.
+    """
+    if len(scope.files) >= max_files:
+        scope.truncated = True
+        scope.skipped.append({"path": path, "reason": "over the file limit"})
+        return False
+    if is_excluded(path, exclusions):
+        scope.skipped.append({"path": path, "reason": "excluded by the review settings"})
+        return False
+    if absolute.exists() and is_binary(absolute):
+        scope.skipped.append({"path": path, "reason": "binary file"})
+        return False
+    return True
+
+
 def _git_scope(root, mode, base, only_paths, exclusions, max_files):
     """Build a scope from git itself."""
     top = repo_root(root)
@@ -365,25 +384,14 @@ def _git_scope(root, mode, base, only_paths, exclusions, max_files):
                     candidates.append(path)
 
     scope.total_files = len(candidates)
-    truncated = False
     for path in candidates:
-        if len(scope.files) >= max_files:
-            truncated = True
-            scope.skipped.append({"path": path, "reason": "over the file limit"})
-            continue
-        if is_excluded(path, exclusions):
-            scope.skipped.append({"path": path, "reason": "excluded by the review settings"})
-            continue
-        absolute = top / path
-        if absolute.exists() and is_binary(absolute):
-            scope.skipped.append({"path": path, "reason": "binary file"})
+        if not _admit(scope, path, top / path, max_files, exclusions):
             continue
         change = _git_file_change(top, path, commands, untracked, statuses)
         if change is None:
             scope.skipped.append({"path": path, "reason": "no readable diff"})
             continue
         scope.files.append(change)
-    scope.truncated = truncated
     return scope
 
 
@@ -459,20 +467,10 @@ def _journal_scope(root, session_id, mode, only_paths, exclusions, max_files):
         seen[path] = entry
 
     scope.total_files = len(seen)
-    truncated = False
     for path in sorted(seen):
-        if len(scope.files) >= max_files:
-            truncated = True
-            scope.skipped.append({"path": path, "reason": "over the file limit"})
-            continue
-        if is_excluded(path, exclusions):
-            scope.skipped.append({"path": path, "reason": "excluded by the review settings"})
+        if not _admit(scope, path, Path(root) / path, max_files, exclusions):
             continue
         entry = seen[path]
-        absolute = Path(root) / path
-        if absolute.exists() and is_binary(absolute):
-            scope.skipped.append({"path": path, "reason": "binary file"})
-            continue
         before = _decode(entry.get("before"))
         after = _decode(entry.get("after"))
         if before is None and after is None:
@@ -488,7 +486,6 @@ def _journal_scope(root, session_id, mode, only_paths, exclusions, max_files):
         scope.files.append(
             FileChange(path=path, status=status, diff=diff, added=added, removed=removed)
         )
-    scope.truncated = truncated
     return scope
 
 
