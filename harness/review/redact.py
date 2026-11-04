@@ -61,11 +61,6 @@ _CODE_VALUE = re.compile(r"^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*$")
 
 def _redact_value(name, match):
     """The replacement text for one match, keeping the surrounding text."""
-    if name == "assignment":
-        key, sep, value = match.group(2), match.group(3), match.group(4)
-        if _CODE_VALUE.match(value):
-            return None
-        return f"{key}{sep}{REDACTED}"
     if name == "bearer":
         return f"{match.group(1)}{REDACTED}"
     if name == "url-credentials":
@@ -105,7 +100,7 @@ def redact(text):
 
 def _redact_assignments(text, name, pattern, hits):
     def _swap(match):
-        key, sep, value = match.group(2), match.group(3), match.group(4)
+        key, sep, value = match.group(1), match.group(2), match.group(3)
         if _CODE_VALUE.match(value):
             return match.group(0)
         hits.append(name)
