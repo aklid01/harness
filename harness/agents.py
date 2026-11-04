@@ -166,10 +166,11 @@ def normalise(raw):
     """A full config with defaults filled, from whatever is on disk."""
     raw = raw if isinstance(raw, dict) else {}
     out = {"version": FORMAT_VERSION}
+    # The review role is not in DEFAULTS (its defaults live in
+    # review/config), so it is cleaned separately - it must still land in
+    # every normalised config.
+    out["review"] = _clean_review(raw.get("review"))
     for role, default in DEFAULTS.items():
-        if role == "review":
-            out[role] = _clean_review(raw.get(role))
-            continue
         merged = dict(default)
         merged.update(
             _clean_role(

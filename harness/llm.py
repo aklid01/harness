@@ -7,6 +7,7 @@ an explanation. The client is built with the SDK's own retries switched off:
 this module owns that policy now.
 """
 
+import logging
 from types import SimpleNamespace
 
 from . import errors as errors_mod
@@ -14,6 +15,8 @@ from . import events, instructions, providers
 from . import retry as retry_mod
 from .errors import stream_interrupted
 from .skills import skills_prompt
+
+log = logging.getLogger(__name__)
 from .tools import TOOL_SCHEMAS
 
 _client_cache = {}
@@ -80,6 +83,9 @@ def suggest_title(first_text, timeout=15):
         title = " ".join(reply.strip().strip("\"'").split())
         return title[:40] or None
     except Exception:  # noqa: BLE001 - titles are best effort
+        # Best effort still leaves a trace: an untitled session with no log
+        # line would look like the model refused, not like a broken call.
+        log.warning("session titling failed", exc_info=True)
         return None
 
 

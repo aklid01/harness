@@ -9,11 +9,14 @@ import argparse
 import asyncio
 import itertools
 import json
+import logging
 import threading
 from pathlib import Path
 
 from . import checkpoints, events
 from . import attachments as attachments_mod
+
+log = logging.getLogger(__name__)
 
 
 def _git_run(root, *args, timeout=10):
@@ -206,6 +209,7 @@ class Session:
     def __init__(self, key, backend):
         self.key = key
         self.backend = backend
+        self._send_failures = 0
         self.root: Path | None = None
         self.session_id: str | None = None
         self.written = 0
@@ -237,8 +241,18 @@ class Session:
         body["session"] = self.key
         try:
             self.backend.send(body)
-        except Exception:
-            pass
+            self._send_failures = 0
+        except Exception as failure:
+            # The socket is the only channel, so a failing send cannot be
+            # reported on it; the sidecar log is where this stays visible.
+            self._send_failures += 1
+            if self._send_failures == 1 or self._send_failures % 100 == 0:
+                log.warning(
+                    "session %s: send failed (%s in a row): %s",
+                    self.key,
+                    self._send_failures,
+                    failure,
+                )
 
     def on_event(self, type, payload):
         self._send({"event": type, "payload": dict(payload)})
@@ -972,8 +986,16 @@ class Session:
                     if name and not session_mod.get_title(self.session_id):
                         session_mod.set_title(self.session_id, name)
                         self.on_event("sessions_updated", {})
-            except Exception:  # noqa: BLE001 - titles are best effort
-                pass
+            except Exception as failure:  # noqa: BLE001 - titles are best effort
+                # Best effort does not mean invisible: the failure goes to the
+                # transcript as a note, like the other background paths report.
+                self.on_event(
+                    events.NOTE,
+                    {
+                        "text": "automatic titling failed - "
+                        f"{type(failure).__name__}: {failure}",
+                    },
+                )
 
         worker = threading.Thread(target=work, daemon=True)
         self.track(worker)
@@ -1445,6 +1467,7 @@ async def serve(host="127.0.0.1", port=8765, auth_token=None):
 
     async def handler(ws):
         loop = asyncio.get_running_loop()
+        send_failures = 0
 
         if auth_token:
             # The loopback socket would otherwise answer any local process -
@@ -1461,9 +1484,29 @@ async def serve(host="127.0.0.1", port=8765, auth_token=None):
                 return
 
         def send_json(obj):
-            asyncio.run_coroutine_threadsafe(
+            future = asyncio.run_coroutine_threadsafe(
                 ws.send(json.dumps(obj, ensure_ascii=False)), loop
             )
+
+            def observe(done):
+                nonlocal send_failures
+                failure = done.exception()
+                if failure is None:
+                    send_failures = 0
+                    return
+                send_failures += 1
+                # The socket is the only channel, so a broken send cannot be
+                # reported on itself. The sidecar log is the one place a dead
+                # transport is still visible; log the first failure and then
+                # every hundredth so a dead socket cannot flood it.
+                if send_failures == 1 or send_failures % 100 == 0:
+                    log.warning(
+                        "transport send failed (%s in a row): %s",
+                        send_failures,
+                        failure,
+                    )
+
+            future.add_done_callback(observe)
 
         backend.attach(send_json)
         await ws.send(

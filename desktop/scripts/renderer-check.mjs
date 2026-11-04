@@ -671,6 +671,26 @@ try {
     });
   });
 
+  // Capture page exceptions so a runtime error shows up in the report
+  // instead of leaving a verdict whose only symptom is a missing element.
+  const jsErrors = [];
+  await rpc(ws, "Runtime.enable");
+  ws.addEventListener("message", (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(String(raw.data));
+    } catch {
+      return;
+    }
+    if (msg.method === "Runtime.exceptionThrown") {
+      const d = msg.params.exceptionDetails;
+      const text =
+        d.exception?.description ?? d.text ?? "unknown page exception";
+      jsErrors.push(`${d.url ?? ""}:${(d.lineNumber ?? 0) + 1} ${text}`);
+    }
+  });
+  globalThis.__jsErrors = jsErrors;
+
   for (let i = 0; i < 120; i++) {
     const state = await evaluate(
       ws,
@@ -2185,6 +2205,11 @@ try {
 }
 
 pass = results.length > 0 && results.every((r) => r.ok);
+if (globalThis.__jsErrors?.length) {
+  lines.push("");
+  lines.push("--- page exceptions ---");
+  for (const e of globalThis.__jsErrors) lines.push(e);
+}
 say(
   `RESULT: ${pass ? "PASS" : "FAIL"} (${results.filter((r) => r.ok).length}/${results.length})`,
 );
