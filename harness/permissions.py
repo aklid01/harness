@@ -21,13 +21,8 @@ from .shellrisk import (
     split_command,
 )
 
-PROJECT = Path.cwd().resolve()
-
-
 def project_root():
-    if paths.is_initialized():
-        return paths.project_root()
-    return PROJECT
+    return paths.project_root()
 
 
 MODES = ("default", "strict", "allow-all", "autopilot")

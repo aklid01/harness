@@ -17,13 +17,8 @@ from pathlib import Path
 
 from . import paths
 
-PROJECT = Path.cwd().resolve()
-
-
 def _project():
-    if paths.is_initialized():
-        return paths.project_root()
-    return PROJECT
+    return paths.project_root()
 
 
 PROFILE_TEMPLATE = """(version 1)

@@ -83,7 +83,7 @@ def _titles_path():
 def migrate_root_sessions():
     """Move timestamp session files out of the project root."""
 
-    root = paths.project_root() if paths.is_initialized() else Path.cwd()
+    root = paths.project_root()
     target = _dir()
     try:
         if target.resolve() == root.resolve():

@@ -15,7 +15,10 @@ from . import paths
 def _dirs():
     if paths.is_initialized():
         return paths.skill_dirs()
-    return [Path.cwd() / ".agents" / "skills", Path.home() / ".agents" / "skills"]
+    return [
+        paths.default_project_root() / ".agents" / "skills",
+        Path.home() / ".agents" / "skills",
+    ]
 
 
 def find_skills():

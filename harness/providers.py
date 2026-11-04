@@ -28,13 +28,14 @@ from pathlib import Path
 
 from . import paths
 
+# The pre-init store location. Tests patch this attribute to redirect the
+# whole registry, so it doubles as an explicit override seam; the import-time
+# default is the sentinel that tells the two apart.
 PROVIDERS_FILE = Path.cwd() / "providers.json"
 _DEFAULT_FILE = Path(PROVIDERS_FILE)
 
 SERVICE = "harness"
 FORMAT_VERSION = 2
-
-LEGACY_FILES = (Path.cwd() / ".env", Path.home() / ".agents" / "env")
 
 GROUP_PREFIX = "grp-"
 MODEL_PREFIX = "mdl-"
@@ -126,15 +127,22 @@ def use(target_id):
 
 
 def _file():
-    if paths.is_initialized() and Path(PROVIDERS_FILE) == _DEFAULT_FILE:
+    # An explicit override (tests patch PROVIDERS_FILE) wins; production
+    # resolves through paths at call time instead of an import-time cwd.
+    if Path(PROVIDERS_FILE) != _DEFAULT_FILE:
+        return Path(PROVIDERS_FILE)
+    if paths.is_initialized():
         return paths.providers_file()
-    return Path(PROVIDERS_FILE)
+    return paths.default_project_root() / "providers.json"
 
 
 def _env_files():
     if paths.is_initialized():
         return paths.env_files()
-    return list(LEGACY_FILES)
+    return [
+        paths.default_project_root() / ".env",
+        Path.home() / ".agents" / "env",
+    ]
 
 
 def _new_id(prefix):
