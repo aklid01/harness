@@ -154,7 +154,7 @@ class Runner:
                     },
                 )
 
-    def handle_input(self, user_text, via=None, attachments=None):
+    def handle_input(self, user_text: str, via: str | None = None, attachments: list | None = None) -> None:
         if user_text.startswith("/"):
             self.messages = commands.handle(user_text, self.messages, self)
             session.save(self.messages)
@@ -164,11 +164,11 @@ class Runner:
         self._run_workflow(user_text)
 
     @property
-    def touched(self):
+    def touched(self) -> set:
         """The files this run edited, resolved and absolute."""
         return set(self._touched)
 
-    def request_review(self, args):
+    def request_review(self, args: review_command.ReviewArgs) -> bool:
         """Start a multi-model review of this run's change.
 
         The review runs in the background and never blocks the agent: the
@@ -1045,7 +1045,7 @@ class Runner:
             )
             self.messages.append({"role": "user", "content": notice})
 
-    def cancelled(self):
+    def cancelled(self) -> bool:
         return self.cancel_event is not None and self.cancel_event.is_set()
 
     def _answer_pending_calls(self, message, start_index, note):
@@ -1146,7 +1146,7 @@ class Runner:
             },
         )
 
-    def inject_tool_result(self, name, content):
+    def inject_tool_result(self, name: str, content: str) -> str:
         """Append a synthetic tool call + result pair to the transcript.
 
         For content that must reach the model through the context budget and

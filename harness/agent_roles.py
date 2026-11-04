@@ -77,7 +77,7 @@ def _clean_role(raw, approve_default=None):
     return clean
 
 
-def normalise(raw):
+def normalise(raw) -> dict:
     """A full config with defaults filled, from whatever is on disk."""
     raw = raw if isinstance(raw, dict) else {}
     out = {"version": FORMAT_VERSION}
@@ -121,12 +121,12 @@ def _cached():
     return _CACHE["data"]
 
 
-def get():
+def get() -> dict:
     """The current config, defaults filled. Never raises."""
     return copy.deepcopy(_cached())
 
 
-def save(config):
+def save(config) -> dict:
     """Persist a normalised config and return what was stored."""
     body = normalise(config)
     body["version"] = FORMAT_VERSION
@@ -139,12 +139,12 @@ def save(config):
     return copy.deepcopy(body)
 
 
-def reset_cache():
+def reset_cache() -> None:
     """Forget the cached file. Used by tests that point _file at a temp dir."""
     _CACHE.clear()
 
 
-def resolve_model(role_config, default_id):
+def resolve_model(role_config, default_id) -> str | None:
     """The model id a role should use: its own when set, else the session's.
 
     A disabled role, or one with no model chosen, answers None so the caller
@@ -155,12 +155,12 @@ def resolve_model(role_config, default_id):
     return role_config.get("model_id") or default_id
 
 
-def plan_active(config):
+def plan_active(config) -> bool:
     """True when a dedicated planning pass should run before building."""
     return bool(config["plan"].get("enabled"))
 
 
-def plan_wants_approval(config):
+def plan_wants_approval(config) -> bool:
     """True when the plan should pause for the user before building.
 
     Defaults to false, so a plan agent that is off (or one that left this off)
@@ -169,17 +169,17 @@ def plan_wants_approval(config):
     return bool(config["plan"].get("enabled")) and bool(config["plan"].get("approve"))
 
 
-def oversight_enabled(config):
+def oversight_enabled(config) -> bool:
     return bool(config["oversight"].get("enabled"))
 
 
-def review_enabled(config):
+def review_enabled(config) -> bool:
     """True when the multi-model review role is switched on."""
     review = config.get("review") or {}
     return bool(review.get("enabled"))
 
 
-def review_auto_run(config):
+def review_auto_run(config) -> str:
     """How a review starts after a run that edited files: off, offer or start.
 
     A review that starts on its own costs money, so it is never the default.

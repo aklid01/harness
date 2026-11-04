@@ -28,6 +28,7 @@ from . import permissions as permissions_mod
 from . import providers as providers_mod
 from . import session as session_mod
 from . import todos as todos_mod
+from .review.command import ReviewArgs
 
 _BACKEND: "Harness | None" = None
 
@@ -111,7 +112,7 @@ class Session:
         finally:
             self.pending.pop(rid, None)
 
-    def reply(self, rid, result):
+    def reply(self, rid: str, result) -> bool:
         entry = self.pending.get(rid)
         if entry is None:
             return False
@@ -201,7 +202,13 @@ class Session:
             self._submissions.pop(next(iter(self._submissions)))
         return False
 
-    def submit(self, text, mode, submission_id=None, attachments=None):
+    def submit(
+        self,
+        text: str,
+        mode: str,
+        submission_id: str | None = None,
+        attachments: list | None = None,
+    ) -> bool:
         with self.lock:
             if self._seen_submission(submission_id):
                 self.on_event(events.NOTE, {"text": "that submission was already sent"})
@@ -590,7 +597,7 @@ class Session:
         self.on_event(events.REVIEW, {"stage": "cancelled"})
         return True
 
-    def start_review(self, args, triggered_by="manual"):
+    def start_review(self, args: ReviewArgs, triggered_by: str = "manual") -> None:
         """Run a review in the background. The agent never waits for it.
 
         The thread runs inside this session's bound context, so the events
@@ -849,7 +856,7 @@ class Harness:
                 self.sessions[key] = s
             return s
 
-    def dispatch(self, obj):
+    def dispatch(self, obj: dict) -> None:
         op = obj.get("op")
         req_id = obj.get("req_id")
         key = obj.get("session")

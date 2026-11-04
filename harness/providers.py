@@ -127,7 +127,7 @@ def scoped(active_id=None, effort=None):
 
 
 @contextlib.contextmanager
-def use(target_id):
+def use(target_id) -> contextlib.AbstractContextManager:
     """Route model calls to ``target_id`` for this context, effort untouched.
 
     This is how role routing works without duplicating credentials: call_llm
@@ -536,12 +536,12 @@ def get_group(group_id):
     return copy.deepcopy(_find_group(_cached(), group_id))
 
 
-def get_model(model_id):
+def get_model(model_id) -> ModelPayload | None:
     """One model row, copied: the cache is shared, callers must not mutate it."""
     return copy.deepcopy(_resolve(_cached(), model_id)[1])
 
 
-def group_of(target_id):
+def group_of(target_id) -> dict | None:
     return copy.deepcopy(_resolve(_cached(), target_id)[0])
 
 
@@ -580,7 +580,7 @@ def save_group(group):
 
 
 @_transaction
-def save_model(model, group_id=None):
+def save_model(model, group_id=None) -> ModelPayload:
     """Create or update one model, leaving its siblings and provider alone.
 
     A payload that names a different provider moves the model to that provider;
@@ -718,7 +718,7 @@ def delete_group(group_id):
 
 
 @_transaction
-def delete_model(model_id):
+def delete_model(model_id) -> bool:
     """Drop one model. The provider lives on while any other model does."""
     data = _cached()
     group, model = _find_model(data, model_id)
@@ -974,7 +974,7 @@ def _credential_for(group):
     return group.get("base_url", ""), secret, source
 
 
-def active_config():
+def active_config() -> tuple[str | None, str | None, str, str]:
     """(base_url, api_key, model, source). Source names the credential origin."""
     group, model = active_pair()
     if not (group and model):
@@ -985,7 +985,7 @@ def active_config():
     return base_url, api_key, model.get("model", ""), source
 
 
-def active_config_for(target_id):
+def active_config_for(target_id) -> tuple[str | None, str | None, str, str]:
     """(base_url, api_key, model, source) for one model or provider id."""
     group, model = _resolve(_cached(), target_id)
     if not (group and model):

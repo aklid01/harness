@@ -43,19 +43,19 @@ _AVAILABILITY_CACHE = None
 _AVAILABILITY_KEY = None
 
 
-def approval_channel_ready():
+def approval_channel_ready() -> bool:
     """Is there a frontend that can answer an approval request?"""
     from . import events
 
     return events.has_interaction_channel()
 
 
-def shell_available():
+def shell_available() -> bool:
     """A shell the sandbox could drive. Resolved, never run."""
     return bool(shutil.which("bash") or shutil.which("sh") or shutil.which("cmd"))
 
 
-def workspace_readable():
+def workspace_readable() -> bool:
     root = paths.project_root()
     try:
         return root.is_dir() and os.access(root, os.R_OK)
@@ -63,7 +63,7 @@ def workspace_readable():
         return False
 
 
-def skills_installed():
+def skills_installed() -> bool:
     from .skills import find_skills
 
     return bool(find_skills())
@@ -101,7 +101,7 @@ def _cache_key():
     )
 
 
-def availability(refresh=False):
+def availability(refresh=False) -> dict:
     """{tool name: {"available": bool, "reason": str}} for this session.
 
     Cached, and recomputed when the workspace, the approval channel, the
@@ -122,11 +122,11 @@ def availability(refresh=False):
     return _AVAILABILITY_CACHE
 
 
-def available_tool_names():
+def available_tool_names() -> list[str]:
     return [name for name, state in availability().items() if state["available"]]
 
 
-def tool_schemas():
+def tool_schemas() -> list:
     """Schemas for the tools this session can actually run."""
     return [
         schema
@@ -135,7 +135,7 @@ def tool_schemas():
     ]
 
 
-def unavailable_summary():
+def unavailable_summary() -> str:
     """What the model should be told when it cannot be given any tools."""
     missing = [
         f"{name}: {state['reason']}"
@@ -153,7 +153,7 @@ def _resolve(path):
     return paths.project_root() / p
 
 
-def resolve_path(path):
+def resolve_path(path) -> str:
     """The resolved path of a model-provided argument, as execute() would set it."""
     return str(_resolve(path))
 
@@ -301,7 +301,7 @@ _CANCEL = contextvars.ContextVar(
 )
 
 
-def execute(tool_call, note="", call_key=None, cancel=None):
+def execute(tool_call, note="", call_key=None, cancel=None) -> tuple[dict, str]:
     """Run one tool call through the permission layer.
 
     Shared by the main loop and by subagents, so a subagent is fenced in by
@@ -382,7 +382,7 @@ _USER_APPROVED: list = []
 _USER_APPROVED_LIMIT = 32
 
 
-def user_approved(name, args):
+def user_approved(name, args) -> bool:
     """Was this exact call approved by the user through the permission dialog?"""
     return any(n == name and a == args for n, a in _USER_APPROVED)
 
@@ -393,7 +393,7 @@ def _remember(call_key, outcome):
         _EXECUTED.pop(next(iter(_EXECUTED)))
 
 
-def executed_calls():
+def executed_calls() -> dict:
     """The registry, for tests and diagnostics."""
     return dict(_EXECUTED)
 
