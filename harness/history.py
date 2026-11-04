@@ -78,7 +78,7 @@ def prepare(messages, window=None, tail=TAIL):
     if estimate(messages) <= limit:
         return list(messages), ""
 
-    frozen = locked(messages)
+    frozen = frozen_prefix_len(messages)
     # Protect by object identity, not position: the second pass deletes from
     # the request, so positional indices shift and the live tail would lose
     # its protection (the current question could be deleted out of a request).
@@ -169,7 +169,7 @@ def sweep():
     files.clear()
 
 
-def locked(messages):
+def frozen_prefix_len(messages):
     """Length of the frozen prefix - everything up to and including the newest
     summary. Derived rather than remembered, so it stays correct across
     /compact, /rewind and switching sessions.
@@ -200,7 +200,7 @@ def strip(messages):
     the point, its full text is gone with the spill file anyway.
     """
     shrunk = 0
-    for message in messages[locked(messages) :]:
+    for message in messages[frozen_prefix_len(messages) :]:
         content = message.get("content") or ""
         if message["role"] != "tool" or TRIMMED in content or len(content) <= STUB:
             continue
