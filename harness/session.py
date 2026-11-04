@@ -10,6 +10,9 @@ from pathlib import Path
 
 from . import paths
 
+# The unscoped mode's session id: the headless CLI and the tests run without a
+# scope, and one process is one chat there. Scoped callers (the sidecar's
+# Sessions) never read this - current_id() prefers the contextvar.
 CURRENT = datetime.now().strftime("%Y%m%d-%H%M%S")
 WRITTEN = 0
 
