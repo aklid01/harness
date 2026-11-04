@@ -30,10 +30,24 @@ from pathlib import Path
 
 from . import paths
 
-MAX_FILE_BYTES = int(
-    os.environ.get("HARNESS_MAX_ATTACHMENT_BYTES", 25 * 1024 * 1024)
-)
-MAX_FILES_PER_MESSAGE = int(os.environ.get("HARNESS_MAX_ATTACHMENT_FILES", 10))
+_DEFAULT_MAX_FILE_BYTES = 25 * 1024 * 1024
+_DEFAULT_MAX_FILES_PER_MESSAGE = 10
+
+
+def max_file_bytes():
+    """The per-file upload cap; HARNESS_MAX_ATTACHMENT_BYTES overrides it."""
+    try:
+        return int(os.environ.get("HARNESS_MAX_ATTACHMENT_BYTES", _DEFAULT_MAX_FILE_BYTES))
+    except ValueError:
+        return _DEFAULT_MAX_FILE_BYTES
+
+
+def max_files_per_message():
+    """How many files one message may carry; env override, read at call time."""
+    try:
+        return int(os.environ.get("HARNESS_MAX_ATTACHMENT_FILES", _DEFAULT_MAX_FILES_PER_MESSAGE))
+    except ValueError:
+        return _DEFAULT_MAX_FILES_PER_MESSAGE
 CHUNK_BYTES = 192 * 1024  # raw bytes per upload chunk
 IMAGE_BYTES = 5 * 1024 * 1024  # biggest image sent to the provider as an image
 
@@ -160,8 +174,9 @@ def begin(client_key, name, size, kind="application/octet-stream"):
     uploaded and then dropped.
     """
     size = int(size or 0)
-    if size > MAX_FILE_BYTES:
-        raise TooBig(str(name or "file"), size, MAX_FILE_BYTES)
+    limit = max_file_bytes()
+    if size > limit:
+        raise TooBig(str(name or "file"), size, limit)
     upload_id = f"att-{uuid.uuid4().hex[:12]}"
     directory = staging_dir(client_key)
     directory.mkdir(parents=True, exist_ok=True)
@@ -199,8 +214,9 @@ def part(upload_id, data):
         chunk = base64.b64decode(data or "", validate=False)
     except (binascii.Error, ValueError) as failure:
         raise Missing(f"upload {record['name']} carries unreadable data") from failure
-    if record["written"] + len(chunk) > MAX_FILE_BYTES:
-        raise TooBig(record["name"], record["written"] + len(chunk), MAX_FILE_BYTES)
+    limit = max_file_bytes()
+    if record["written"] + len(chunk) > limit:
+        raise TooBig(record["name"], record["written"] + len(chunk), limit)
     if record["handle"] is None:
         record["handle"] = open(record["path"], "ab")
     record["handle"].write(chunk)
@@ -302,11 +318,12 @@ def adopt(items, session_id, project_root=None):
 def within_limit(items):
     """Split one message's files into the ones that fit and the ones that do not.
 
-    A message can carry up to MAX_FILES_PER_MESSAGE files. The rest are named
+    A message can carry up to max_files_per_message() files. The rest are named
     back to the user rather than dropped in silence.
     """
     items = list(items or [])
-    return items[:MAX_FILES_PER_MESSAGE], items[MAX_FILES_PER_MESSAGE:]
+    limit = max_files_per_message()
+    return items[:limit], items[limit:]
 
 
 def discard(meta):

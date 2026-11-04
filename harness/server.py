@@ -227,7 +227,7 @@ class Session:
                 {
                     "text": (
                         f"{item.get('name') or 'file'} was not attached - the "
-                        f"limit is {attachments_mod.MAX_FILES_PER_MESSAGE} "
+                        f"limit is {attachments_mod.max_files_per_message()} "
                         "files per message"
                     )
                 },
@@ -1192,7 +1192,7 @@ class Harness:
                     "ok": True,
                     "data": {
                         "id": record["id"],
-                        "max_bytes": attachments_mod.MAX_FILE_BYTES,
+                        "max_bytes": attachments_mod.max_file_bytes(),
                         "chunk_bytes": attachments_mod.CHUNK_BYTES,
                     },
                 }

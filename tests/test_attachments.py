@@ -545,7 +545,7 @@ class AttachE2E(unittest.TestCase):
 
     def test_an_oversize_file_is_refused_by_name_and_the_message_still_goes(self):
         good = self.attach("small.md", b"tiny\n", "text/markdown")
-        with mock.patch.object(att, "MAX_FILE_BYTES", 16):
+        with mock.patch.dict("os.environ", {"HARNESS_MAX_ATTACHMENT_BYTES": "16"}):
             self.dispatch(
                 {
                     "op": "attach_begin",
@@ -581,7 +581,7 @@ class AttachE2E(unittest.TestCase):
             self.attach(f"file{index}.md", f"number {index}\n".encode(), "text/markdown")
             for index in range(4)
         ]
-        with mock.patch.object(att, "MAX_FILES_PER_MESSAGE", 2):
+        with mock.patch.dict("os.environ", {"HARNESS_MAX_ATTACHMENT_FILES": "2"}):
             self.open_and_submit("too many", attachments=metas)
             self.assertTrue(self.done())
             notes = [
