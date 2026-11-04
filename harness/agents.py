@@ -95,34 +95,20 @@ def _clean_role(raw, approve_default=None):
 def _clean_review(raw):
     """The review role: a list of reviewers, and the limits around them.
 
-    The defaults come from review/config's constants so the limits are
-    owned there, not restated here.
+    Starts from review/config's defaults so the limits are owned there,
+    not restated here.
     """
     from .review.config import (
+        defaults as review_defaults,
         DEFAULT_MAX_DIFF_BYTES,
         DEFAULT_MAX_FILE_BYTES,
         DEFAULT_MAX_FILES,
         DEFAULT_MAX_REVIEWERS,
         DEFAULT_MAX_TOKENS,
     )
-    from .review.scope import DEFAULT_EXCLUSIONS
 
     raw = raw if isinstance(raw, dict) else {}
-    clean = {
-        "enabled": False,
-        "auto_run": "off",
-        "mode": "parallel",
-        "reviewers": [],
-        "max_reviewers": DEFAULT_MAX_REVIEWERS,
-        "max_files": DEFAULT_MAX_FILES,
-        "max_diff_bytes": DEFAULT_MAX_DIFF_BYTES,
-        "max_file_bytes": DEFAULT_MAX_FILE_BYTES,
-        "max_tokens": DEFAULT_MAX_TOKENS,
-        "severity_threshold": "low",
-        "full_context": False,
-        "exclusions": list(DEFAULT_EXCLUSIONS),
-        "prompt": "",
-    }
+    clean = review_defaults()
     clean["enabled"] = _as_bool(raw.get("enabled"))
     auto = raw.get("auto_run")
     if isinstance(auto, bool):

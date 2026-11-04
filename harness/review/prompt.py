@@ -15,7 +15,6 @@ Two properties of the prompt matter more than its wording:
   instruction in the diff has nothing to act on.
 """
 
-from . import findings as findings_mod
 
 TARGETS = (
     (

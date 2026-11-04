@@ -103,13 +103,13 @@ def toolset():
 
 def task(description: str) -> str:
     """Run a fresh agent on one question and return only its final answer."""
-    # Imported inside the function, not at the top: llm imports tools, and
-    # tools imports us, so importing them up there would close the circle.
+    # Imported inside the function: llm imports tools, so a module-level
+    # import here would tie this module to the whole tool layer at import
+    # time instead of when a subagent actually runs.
     from . import events, providers
     from .history import prepare
     from .llm import call_llm
     from .tools import execute
-
     # --- rule 1 ---
     # Two messages. Not a copy of the caller's transcript, not a trimmed
     # version of it, and not whatever the last subagent left behind - this
@@ -202,33 +202,3 @@ def task(description: str) -> str:
         )
     return f"(stopped after {MAX_TURNS} turns with nothing to report.)"
 
-
-TASK_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "task",
-        "description": (
-            "Hand a self-contained exploration question to a fresh agent that "
-            "has its own context window, and get back its findings. Use this "
-            "to learn how the codebase works - tracing behaviour, locating "
-            "where something is implemented, surveying files - so the search "
-            "costs you one answer instead of dozens of tool results. It cannot "
-            "see this conversation, so include every detail it needs. It reads "
-            "and reports; it never edits. Do your own editing."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "description": {
-                    "type": "string",
-                    "description": (
-                        "The question, written to stand alone: what to find "
-                        "out, where to start looking, and what the answer "
-                        "should contain."
-                    ),
-                }
-            },
-            "required": ["description"],
-        },
-    },
-}

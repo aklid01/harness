@@ -23,7 +23,6 @@ from pathlib import Path
 from . import history, paths, sandbox
 from .permissions import approval_info, check
 from .skills import read_skill
-from .subagent import TASK_SCHEMA, task
 from .todos import TODO_SCHEMA, write_todos
 
 # What each tool needs before it can be offered at all. The question is "can
@@ -483,8 +482,47 @@ TOOL_SCHEMAS = [
         },
     },
     TODO_SCHEMA,
-    TASK_SCHEMA,
+    # Inlined rather than imported from subagent: the registry is the one
+    # place schemas live, and subagent imports this module back, so a
+    # module-level import here would close the cycle.
+    {
+        "type": "function",
+        "function": {
+            "name": "task",
+            "description": (
+                "Hand a self-contained exploration question to a fresh agent that "
+                "has its own context window, and get back its findings. Use this "
+                "to learn how the codebase works - tracing behaviour, locating "
+                "where something is implemented, surveying files - so the search "
+                "costs you one answer instead of dozens of tool results. It cannot "
+                "see this conversation, so include every detail it needs. It reads "
+                "and reports; it never edits. Do your own editing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "The question, written to stand alone: what to find "
+                            "out, where to start looking, and what the answer "
+                            "should contain."
+                        ),
+                    }
+                },
+                "required": ["description"],
+            },
+        },
+    },
 ]
+
+
+def _task(description: str) -> str:
+    """Deferred dispatch to the subagent loop (it imports this module back)."""
+    from .subagent import task
+
+    return task(description)
+
 
 TOOLS = {
     "bash": bash,
@@ -493,5 +531,5 @@ TOOLS = {
     "str_replace": str_replace,
     "read_skill": read_skill,
     "write_todos": write_todos,
-    "task": task,
+    "task": _task,
 }

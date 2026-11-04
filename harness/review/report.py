@@ -10,7 +10,6 @@ reachable from another session: the path is scoped to both.
 
 import json
 import time
-from pathlib import Path
 
 from .. import paths
 

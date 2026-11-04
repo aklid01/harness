@@ -28,10 +28,28 @@ NO_KEY = "no-key"
 
 
 def defaults():
-    """A fresh review section, with nothing enabled."""
-    from .. import agents
+    """A fresh review section, with nothing enabled.
 
-    return dict(agents.DEFAULTS["review"])
+    The single source of the review defaults: agents.py starts its own
+    validation from here, so the numbers exist exactly once.
+    """
+    from .scope import DEFAULT_EXCLUSIONS
+
+    return {
+        "enabled": False,
+        "auto_run": "off",
+        "mode": "parallel",
+        "reviewers": [],
+        "max_reviewers": DEFAULT_MAX_REVIEWERS,
+        "max_files": DEFAULT_MAX_FILES,
+        "max_diff_bytes": DEFAULT_MAX_DIFF_BYTES,
+        "max_file_bytes": DEFAULT_MAX_FILE_BYTES,
+        "max_tokens": DEFAULT_MAX_TOKENS,
+        "severity_threshold": "low",
+        "full_context": False,
+        "exclusions": list(DEFAULT_EXCLUSIONS),
+        "prompt": "",
+    }
 
 
 def load():
