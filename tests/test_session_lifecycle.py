@@ -111,6 +111,17 @@ class SessionCase(unittest.TestCase):
             time.sleep(0.02)
         return False
 
+    def wait_for(self, condition, timeout=10, description="condition"):
+        """Poll a condition to a deadline instead of betting on a sleep."""
+        limit = time.time() + timeout
+        while time.time() < limit:
+            if condition():
+                return True
+            time.sleep(0.02)
+        self.fail(f"timed out waiting for {description}")
+
+
+
     def files(self):
         return sorted(p.name for p in (paths.session_dir()).glob("*.jsonl"))
 
@@ -210,7 +221,9 @@ class SessionCase(unittest.TestCase):
         )
         self.assertTrue(self.done("t1"))
         self.assertTrue(self.done("t2"))
-        time.sleep(0.3)
+        self.wait_for(
+            lambda: len(self.files()) == 2, description="both session files"
+    )
 
         self.assertEqual(
             len(self.files()), 2, f"sessions must not share an id: {self.files()}"
@@ -227,7 +240,9 @@ class SessionCase(unittest.TestCase):
         self.dispatch(op="submit", session="t1", text="Hi", mode="build")
         self.dispatch(op="submit", session="t1", text="Hi", mode="build")
         self.assertTrue(self.done("t1"))
-        time.sleep(0.3)
+        self.wait_for(
+            lambda: len(self.files()) == 1, description="the session file"
+        )
 
         name = self.files()[0]
         self.assertEqual(
@@ -332,7 +347,7 @@ class SessionCase(unittest.TestCase):
                 if m.get("event") == "note"
             )
         )
-        time.sleep(0.2)
+        self.quiesce()
         self.assertEqual(
             len(self.calls), before, "no second turn for a replayed submit"
         )
@@ -391,7 +406,10 @@ class SessionCase(unittest.TestCase):
             self.dispatch(
                 op="submit", session="t1", root=str(self.root), text="Hi", mode="build"
             )
-            time.sleep(0.2)
+            self.wait_for(
+                lambda: self.backend.sessions["t1"].running,
+                description="the turn to start",
+        )
             self.dispatch(op="stop", session="t1")
             release.set()
             self.assertTrue(self.done("t1"))

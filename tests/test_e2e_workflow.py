@@ -220,7 +220,6 @@ class WorkflowE2E(unittest.TestCase):
             }
         )
         self.assertTrue(self.done("s"))
-        time.sleep(0.2)
         for s in list(self.backend.sessions.values()):
             s.join_background(timeout=10)
 

@@ -397,7 +397,8 @@ class GateCase(unittest.TestCase):
             }
         )
         self.assertTrue(self.done("s"))
-        time.sleep(0.1)
+        for session in list(self.backend.sessions.values()):
+            session.join_background(timeout=10)
 
     def decisions(self):
         return [m["payload"] for m in self.sent if m.get("event") == events.DECISION]
@@ -784,7 +785,8 @@ class GateCase(unittest.TestCase):
             }
         )
         self.assertTrue(self.done("s"))
-        time.sleep(0.1)
+        for session in list(self.backend.sessions.values()):
+            session.join_background(timeout=10)
 
     def test_a_new_turn_reviews_the_file_again(self):
         self.enable()
