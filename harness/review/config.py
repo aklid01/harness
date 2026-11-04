@@ -224,7 +224,7 @@ def usable_reviewers(config=None):
 def unusable_reviewers(config=None):
     """The enabled reviewers that cannot run, with the reason."""
     return [
-        {**row, "reason": _reason(row["state"])}
+        {**row, "reason": reason(row["state"])}
         for row in reviewer_states(config)
         if row["enabled"] and not row["usable"]
     ]
@@ -239,8 +239,6 @@ def reason(state):
     }.get(state, "that model cannot be reached")
 
 
-def _reason(state):
-    return reason(state)
 
 
 def estimated_tokens(config=None, chars=0):
