@@ -81,29 +81,20 @@ def git_state():
     return state
 
 
-LAST_STATE = {}
-
-
-def file_changes(baseline=None):
+def file_changes(baseline):
     """Files whose status or contents moved since ``baseline``.
 
     ``baseline`` is owned by the caller (one snapshot per turn, held by the
     Runner), so the note means "changed since your last turn" - not "since
     your last model request", and two sessions on one workspace never race a
-    shared snapshot. Called without a baseline, falls back to the legacy
-    module-level state.
+    shared snapshot.
     """
-    key = str(paths.project_root())
     now = git_state()
-    if baseline is None:
-        prior = LAST_STATE.get(key, {})
-        LAST_STATE[key] = now
-    else:
-        prior = baseline
+    prior = baseline or {}
     return {p: v[0] for p, v in now.items() if prior.get(p) != v}
 
 
-def changes_note(baseline=None):
+def changes_note(baseline):
     changed = file_changes(baseline)
     if not changed:
         return ""
@@ -120,7 +111,7 @@ def todos_note():
     return f"\n<todos>\n{plan}\n</todos>" if plan else ""
 
 
-def reminder(baseline=None):
+def reminder(baseline):
     """The block we append to the messages on every turn."""
     if is_git_worktree():
         where = f"git branch: {git('branch --show-current').strip() or '(detached)'}"

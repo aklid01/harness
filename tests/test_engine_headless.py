@@ -274,7 +274,7 @@ class ContextHonestyCase(unittest.TestCase):
         from harness import context
 
         with mock.patch.object(context, "is_git_worktree", return_value=False):
-            body = context.reminder()["content"]
+            body = context.reminder({})["content"]
         self.assertIn("not a git repository", body)
         self.assertNotIn("git branch:", body)
 
@@ -286,7 +286,7 @@ class ContextHonestyCase(unittest.TestCase):
             mock.patch.object(context, "git", return_value="feature/x\n"),
             mock.patch.object(context, "changes_note", return_value=""),
         ):
-            body = context.reminder()["content"]
+            body = context.reminder({})["content"]
         self.assertIn("git branch: feature/x", body)
 
 
