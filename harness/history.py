@@ -31,7 +31,6 @@ CAPPED = "[output capped:"  # cap() wrote this result's tail to a spill file
 TRIMMED = "[output trimmed:"  # strip() marker; stripping twice is a no-op
 SUMMARY = "<summary>"  # the handoff note compaction leaves behind
 _OMITTED = "[left out of this request to fit the model's context window]"
-OMITTED = _OMITTED  # historical name
 
 # Spill files parked during the CURRENT turn. Set per turn by begin_turn();
 # code outside a turn (tests, one-shot engine use) shares the fallback.
