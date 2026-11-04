@@ -225,8 +225,8 @@ class ReadonlyShapeRegression(unittest.TestCase):
         # absolute path outside the workspace.
         command = (
             "P1='/tmp/attached.html'; P2='/tmp/attached.html'; "
-            "ls -la \"$P1\" 2>&1; echo '---'; ls -la \"$P2\" 2>&1; "
-            "head -c 400 \"$P2\" 2>/dev/null || head -c 400 \"$P1\" 2>&1"
+            'ls -la "$P1" 2>&1; echo \'---\'; ls -la "$P2" 2>&1; '
+            'head -c 400 "$P2" 2>/dev/null || head -c 400 "$P1" 2>&1'
         )
         self.assertEqual(self.verdict(command), "allow")
 

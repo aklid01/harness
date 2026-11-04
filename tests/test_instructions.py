@@ -50,9 +50,7 @@ class InstructionsCase(unittest.TestCase):
         # exact bytes are excluded from the count.
         skills = llm.skills_prompt()
         without_skills = len(prompt) - (len(skills) if skills else 0)
-        self.assertLess(
-            without_skills, 4400, "an empty instructions block stays small"
-        )
+        self.assertLess(without_skills, 4400, "an empty instructions block stays small")
 
     def test_the_global_file_is_the_fallback(self):
         home = Path(self.tmp.name) / "home"

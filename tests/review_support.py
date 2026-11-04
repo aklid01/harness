@@ -16,9 +16,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from harness import agent_roles
+from harness import agent_roles, providers
 from harness import paths as paths_mod
-from harness import providers
 
 
 class FakeKeyring:
@@ -200,7 +199,11 @@ class ReviewCase(unittest.TestCase):
         )
         for model_id in model_ids:
             providers.save_model(
-                {"id": model_id, "name": model_id.upper(), "model": f"{model_id}-model"},
+                {
+                    "id": model_id,
+                    "name": model_id.upper(),
+                    "model": f"{model_id}-model",
+                },
                 "grp-1",
             )
         providers.set_active(model_ids[0])

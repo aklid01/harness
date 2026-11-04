@@ -61,7 +61,9 @@ class AdoptedAttachment(AttachmentMeta, total=False):
 def max_file_bytes():
     """The per-file upload cap; HARNESS_MAX_ATTACHMENT_BYTES overrides it."""
     try:
-        return int(os.environ.get("HARNESS_MAX_ATTACHMENT_BYTES", _DEFAULT_MAX_FILE_BYTES))
+        return int(
+            os.environ.get("HARNESS_MAX_ATTACHMENT_BYTES", _DEFAULT_MAX_FILE_BYTES)
+        )
     except ValueError:
         return _DEFAULT_MAX_FILE_BYTES
 
@@ -69,9 +71,15 @@ def max_file_bytes():
 def max_files_per_message():
     """How many files one message may carry; env override, read at call time."""
     try:
-        return int(os.environ.get("HARNESS_MAX_ATTACHMENT_FILES", _DEFAULT_MAX_FILES_PER_MESSAGE))
+        return int(
+            os.environ.get(
+                "HARNESS_MAX_ATTACHMENT_FILES", _DEFAULT_MAX_FILES_PER_MESSAGE
+            )
+        )
     except ValueError:
         return _DEFAULT_MAX_FILES_PER_MESSAGE
+
+
 CHUNK_BYTES = 192 * 1024  # raw bytes per upload chunk
 IMAGE_BYTES = 5 * 1024 * 1024  # biggest image sent to the provider as an image
 
@@ -552,7 +560,7 @@ def _ooxml_text(path):
 def _tags_to_text(raw, tag):
     """Pull the text nodes out of an XML fragment, one line per paragraph."""
     out = []
-    for match in re.finditer(rf"<{tag}[^>]*>(.*?)</{tag}>", raw, re.S):
+    for match in re.finditer(rf"<{tag}[^>]*>(.*?)</{tag}>", raw, re.DOTALL):
         value = re.sub(r"<[^>]+>", "", match.group(1))
         value = (
             value.replace("&amp;", "&")

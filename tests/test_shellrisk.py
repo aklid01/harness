@@ -24,7 +24,12 @@ class ShellRiskCase(unittest.TestCase):
             self.assertEqual(level, "low", command)
 
     def test_installs_and_tests_are_medium(self):
-        for command in ("npm test", "cargo build", "sudo apt install jq", "python x.py"):
+        for command in (
+            "npm test",
+            "cargo build",
+            "sudo apt install jq",
+            "python x.py",
+        ):
             level, _ = classify_bash(command)
             self.assertEqual(level, "medium", command)
 

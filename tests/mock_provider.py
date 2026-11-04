@@ -170,9 +170,7 @@ def _stream(model, step, index):
                             {
                                 "index": 0,
                                 "delta": {
-                                    "reasoning_content": reasoning[
-                                        start : start + 11
-                                    ]
+                                    "reasoning_content": reasoning[start : start + 11]
                                 },
                             }
                         ]

@@ -170,9 +170,7 @@ class ServerCase(unittest.TestCase):
         self.assertTrue(reply["ok"])
         self.assertTrue(self.wait_done())
         bodies = [
-            m.get("content")
-            for m in s.runner.messages
-            if m.get("role") == "user"
+            m.get("content") for m in s.runner.messages if m.get("role") == "user"
         ]
         self.assertEqual(bodies, ["a", "a2"])
 
@@ -238,9 +236,7 @@ class ServerCase(unittest.TestCase):
                     break
             time.sleep(0.05)
         self.assertIsNotNone(req_id)
-        reply = self.dispatch(
-            {"op": "approval_reply", "id": req_id, "allow": False}
-        )
+        reply = self.dispatch({"op": "approval_reply", "id": req_id, "allow": False})
         self.assertTrue(reply["ok"])
         waiter.join(timeout=5)
         self.assertFalse(waiter.is_alive())

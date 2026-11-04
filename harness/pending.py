@@ -4,9 +4,9 @@ One Mailbox per tab. The transport writes into it while a turn runs; the
 agent drains it at safe points, so nothing the user types mid-turn is lost
 or injected mid-thought.
 """
+
 import itertools
 import threading
-
 
 
 class Mailbox:

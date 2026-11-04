@@ -136,7 +136,8 @@ def main(argv=None):
     from .. import agent_roles as agents_mod
     from .. import config as config_mod
     from .. import paths
-    from . import engine, scope as scope_mod
+    from . import engine
+    from . import scope as scope_mod
 
     root = Path(args.root).resolve() if args.root else paths.project_root()
     # Only initialise when nothing is set up yet: re-initialising would

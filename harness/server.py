@@ -12,10 +12,10 @@ import logging
 import threading
 from pathlib import Path
 
+from . import attachments as attachments_mod
 from . import checkpoints, events
 from .gitops import git_create_branch, git_status
 from .pending import Mailbox
-from . import attachments as attachments_mod
 
 log = logging.getLogger(__name__)
 
@@ -647,9 +647,7 @@ class Session:
         if named is not None:
             only_paths = [str(item) for item in named]
         else:
-            only_paths = (
-                list(self.runner.touched) if self.runner is not None else None
-            )
+            only_paths = list(self.runner.touched) if self.runner is not None else None
         force = bool(args.get("force"))
         want_json = bool(args.get("json"))
         message_index = session_mod.written()
@@ -1091,7 +1089,11 @@ class Harness:
                 s.active_provider = obj.get("id")
             return _reply({"reply": op, "ok": bool(ok)})
         if op == "set_effort":
-            pid = s.active_provider or providers_mod.get_active_model_id() or obj.get("id")
+            pid = (
+                s.active_provider
+                or providers_mod.get_active_model_id()
+                or obj.get("id")
+            )
             providers_mod.set_effort(pid, obj.get("effort") or None)
             s.effort = obj.get("effort") or "default"
             return _reply({"reply": op, "ok": True})

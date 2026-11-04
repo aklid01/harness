@@ -9,6 +9,7 @@ import subprocess
 
 from . import gitcmd
 
+
 def _git_run(root, *args, timeout=10):
 
     code, out = gitcmd.run(root, *args, timeout=timeout)

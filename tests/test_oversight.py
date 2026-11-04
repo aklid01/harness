@@ -304,7 +304,9 @@ class GateCase(unittest.TestCase):
         for s in list(self.backend.sessions.values()):
             s.join_background(timeout=10)
 
-    def _code(self, messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
+    def _code(
+        self, messages, tools=None, on_delta=None, on_reasoning=None, cancel=None
+    ):
         if self._ci < len(self.coding):
             msg = self.coding[self._ci]
         else:

@@ -77,9 +77,7 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(info, {"context_window": 8192})
 
     def test_vllm_shape(self):
-        info = providers._normalize_models_entry(
-            {"id": "qwen", "max_model_len": 40960}
-        )
+        info = providers._normalize_models_entry({"id": "qwen", "max_model_len": 40960})
         self.assertEqual(info, {"context_window": 40960})
 
     def test_plain_openai_entry_yields_nothing(self):

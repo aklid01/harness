@@ -38,6 +38,7 @@ MODEL_PREFIX = "mdl-"
 _ACTIVE_ID = contextvars.ContextVar("providers_active_id", default=None)
 _EFFORT = contextvars.ContextVar("providers_effort", default=None)
 
+
 class ModelPayload(TypedDict):
     """One stored model configuration: a stable id plus its parameters.
 
@@ -1354,9 +1355,7 @@ def _models_entries(base_url, api_key, timeout):
     return [item.model_dump() for item in client.models.list()]
 
 
-def fetch_model_config(
-    model, provider_id=None, base_url=None, key=None, timeout=6
-):
+def fetch_model_config(model, provider_id=None, base_url=None, key=None, timeout=6):
     """{found, info, note} for the model-form prefill op. Never raises."""
     resolved_base = _text(base_url)
     resolved_key = _text(key)
@@ -1433,4 +1432,3 @@ def autoconfigure_from_models(target_id, timeout=6):
     info = _normalize_models_entry(raw)
     applied = _apply_model_info_saved(target_id, info) if info else []
     return {"found": True, "applied": applied, "note": ""}
-

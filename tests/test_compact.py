@@ -87,7 +87,9 @@ class SafeBoundary(unittest.TestCase):
         self.assertEqual(safe_boundary(self.messages, 1), 1)
 
     def test_past_the_end_is_the_end(self):
-        self.assertEqual(safe_boundary(self.messages, len(self.messages)), len(self.messages))
+        self.assertEqual(
+            safe_boundary(self.messages, len(self.messages)), len(self.messages)
+        )
 
     def test_tail_start_buys_a_suffix_that_fits(self):
         messages = transcript(pairs=8)

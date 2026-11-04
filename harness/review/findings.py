@@ -129,7 +129,7 @@ def diff_lines(diff_text):
             target = raw[4:].strip()
             path = None
             if target and target != "/dev/null":
-                path = target[2:] if target.startswith("b/") else target
+                path = target.removeprefix("b/")
                 lines.setdefault(path, set())
             continue
         if raw.startswith("--- "):
@@ -161,8 +161,7 @@ def _normalise_path(path):
         return ""
     text = str(path).strip().strip("`\"'")
     text = text.replace("\\", "/")
-    if text.startswith("./"):
-        text = text[2:]
+    text = text.removeprefix("./")
     for prefix in ("a/", "b/"):
         if text.startswith(prefix):
             text = text[2:]
@@ -314,7 +313,9 @@ def validate(raw, allowed_files, known_lines):
             continue
         allowed = known_lines.get(path, set())
         if allowed and line not in allowed:
-            rejected.append({"file": path, "line": line, "reason": "line is not in the diff"})
+            rejected.append(
+                {"file": path, "line": line, "reason": "line is not in the diff"}
+            )
             continue
         end_line = _as_int(item.get("end_line") or item.get("end"), 0)
         if end_line and end_line < line:

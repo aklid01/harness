@@ -433,7 +433,8 @@ def _outside_quotes(text):
 def _has_shell_consumer(low):
     """True when some command in the line feeds its arguments to a shell."""
     return (
-        _re.search(r"\b(sh|bash|zsh|dash|ksh|eval|exec|xargs|source)\b", low) is not None
+        _re.search(r"\b(sh|bash|zsh|dash|ksh|eval|exec|xargs|source)\b", low)
+        is not None
     )
 
 

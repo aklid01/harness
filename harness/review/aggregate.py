@@ -141,7 +141,9 @@ def merge(outcomes, threshold="low"):
                 continue
             if abs(finding.line - other.line) > CONFLICT_LINE:
                 continue
-            finding.conflict_with = tuple(sorted(set(finding.conflict_with) | {other.id}))
+            finding.conflict_with = tuple(
+                sorted(set(finding.conflict_with) | {other.id})
+            )
             other.conflict_with = tuple(sorted(set(other.conflict_with) | {finding.id}))
 
     by_severity = {name: 0 for name in findings_mod.SEVERITIES}

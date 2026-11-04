@@ -16,7 +16,6 @@ from harness import commands, events
 from harness import paths as paths_mod
 from harness.review import command
 from harness.review.__main__ import main
-
 from tests.review_support import FakeLLM, ReviewCase, commit_all, init_repo
 
 A_FINDING = (

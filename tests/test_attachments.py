@@ -67,7 +67,10 @@ def make_pdf(text="Hello attachment world"):
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
         b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
-        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream
+        b"<< /Length "
+        + str(len(stream)).encode()
+        + b" >>\nstream\n"
+        + stream
         + b"\nendstream",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     ]
@@ -122,7 +125,9 @@ class AttachHandler(BaseHTTPRequestHandler):
         """Every file path the manifest names."""
         text = ""
         for message in reversed(messages):
-            if message.get("role") == "user" and isinstance(message.get("content"), str):
+            if message.get("role") == "user" and isinstance(
+                message.get("content"), str
+            ):
                 text = message["content"]
                 break
         paths = []
@@ -138,9 +143,7 @@ class AttachHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length) or b"{}")
         model = body.get("model") or ""
         messages = body.get("messages") or []
-        if any(
-            TITLE_MARKER in str(m.get("content") or "") for m in messages
-        ):
+        if any(TITLE_MARKER in str(m.get("content") or "") for m in messages):
             self.answer(model, body, "ok")
             return
 
@@ -187,7 +190,9 @@ class AttachHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def answer(self, model, body, text):
-        data = json.dumps(_payload(model, {"kind": "text", "content": text}, 1)).encode()
+        data = json.dumps(
+            _payload(model, {"kind": "text", "content": text}, 1)
+        ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -245,9 +250,7 @@ class AttachE2E(unittest.TestCase):
         self.addCleanup(srv.server_close)
         base = f"http://127.0.0.1:{srv.server_address[1]}/v1"
         providers.save_group({"id": "grp", "name": "One", "base_url": base})
-        providers.save_model(
-            {"id": "mdl-at", "name": "AT", "model": "at-model"}, "grp"
-        )
+        providers.save_model({"id": "mdl-at", "name": "AT", "model": "at-model"}, "grp")
         providers.set_active("mdl-at")
         providers.set_key("grp", "sk-attach-test")
 
@@ -455,7 +458,7 @@ class AttachE2E(unittest.TestCase):
         def probe(path):
             return (
                 f"P1='{path}'; P2='{path}'; "
-                'ls -la "$P1" 2>&1; echo \'---\'; '
+                "ls -la \"$P1\" 2>&1; echo '---'; "
                 'head -c 6 "$P2" 2>/dev/null || head -c 6 "$P1" 2>&1'
             )
 
@@ -578,7 +581,9 @@ class AttachE2E(unittest.TestCase):
 
     def test_too_many_files_in_one_message_are_named_and_dropped(self):
         metas = [
-            self.attach(f"file{index}.md", f"number {index}\n".encode(), "text/markdown")
+            self.attach(
+                f"file{index}.md", f"number {index}\n".encode(), "text/markdown"
+            )
             for index in range(4)
         ]
         with mock.patch.dict("os.environ", {"HARNESS_MAX_ATTACHMENT_FILES": "2"}):
@@ -628,8 +633,12 @@ class AttachE2E(unittest.TestCase):
             kept[1]["name"],
             "two files with one name are told apart by name, not by accident",
         )
-        self.assertEqual(Path(kept[0]["path"]).read_text(encoding="utf-8"), "first copy\n")
-        self.assertEqual(Path(kept[1]["path"]).read_text(encoding="utf-8"), "second copy\n")
+        self.assertEqual(
+            Path(kept[0]["path"]).read_text(encoding="utf-8"), "first copy\n"
+        )
+        self.assertEqual(
+            Path(kept[1]["path"]).read_text(encoding="utf-8"), "second copy\n"
+        )
 
         request = self.flow_requests()[0]
         sent = "\n".join(
@@ -759,7 +768,11 @@ class AttachE2E(unittest.TestCase):
 
         # The text can still be edited, and the file stays with it.
         self.dispatch(
-            {"op": "pending_edit", "id": pending[0]["id"], "text": "also read this later"}
+            {
+                "op": "pending_edit",
+                "id": pending[0]["id"],
+                "text": "also read this later",
+            }
         )
         self.dispatch(
             {
@@ -871,7 +884,7 @@ class AttachmentUnit(unittest.TestCase):
             self.assertEqual(att.safe_name(name), name)
 
     def test_a_windows_illegal_name_becomes_usable(self):
-        cleaned = att.safe_name('bad:name?.txt')
+        cleaned = att.safe_name("bad:name?.txt")
         self.assertNotIn(":", cleaned)
         self.assertNotIn("?", cleaned)
         self.assertTrue(cleaned.endswith(".txt"))

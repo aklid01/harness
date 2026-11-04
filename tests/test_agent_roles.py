@@ -185,7 +185,9 @@ class RouteBase(unittest.TestCase):
         for s in list(self.backend.sessions.values()):
             s.join_background(timeout=10)
 
-    def _answer(self, messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
+    def _answer(
+        self, messages, tools=None, on_delta=None, on_reasoning=None, cancel=None
+    ):
         model = providers.active_config()[2]
         has_plan = any("<plan>" in str(m.get("content") or "") for m in messages)
         self.calls.append((model, has_plan))
@@ -478,7 +480,9 @@ class PlanFailure(RouteBase):
 
         # The plan model keeps "exploring" (a tool call every turn) and never
         # produces a clean final answer, so it exhausts its turns.
-        def explore(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
+        def explore(
+            messages, tools=None, on_delta=None, on_reasoning=None, cancel=None
+        ):
             model = providers.active_config()[2]
             if model == "plan-model":
                 self.calls.append((model, True))
@@ -829,7 +833,9 @@ class CancelMidBatch(RouteBase):
         first = {"n": 0}
         real_execute = agent_mod.execute
 
-        def fake_call(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
+        def fake_call(
+            messages, tools=None, on_delta=None, on_reasoning=None, cancel=None
+        ):
             first["n"] += 1
             if first["n"] == 1:
                 return batch, USAGE

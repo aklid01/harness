@@ -12,7 +12,6 @@ import unittest
 from unittest import mock
 
 from harness.review import engine, report, scope
-
 from tests.review_support import FakeLLM, ReviewCase
 
 A_FINDING = (
@@ -157,9 +156,7 @@ class TwoReviewers(EngineCase):
             fake, reviewers=[self.reviewer("mdl-a"), self.reviewer("mdl-b")]
         )
 
-        self.assertTrue(
-            fake.overlap(), "the two reviewer calls overlapped in time"
-        )
+        self.assertTrue(fake.overlap(), "the two reviewer calls overlapped in time")
         self.assertEqual(
             [m["status"] for m in report_doc["models"]],
             ["ran", "ran"],
@@ -194,7 +191,9 @@ class TwoReviewers(EngineCase):
         self.assertEqual(by_model["mdl-b"]["status"], "ran")
 
     def test_every_reviewer_failing_is_a_failed_review_not_a_crash(self):
-        fake = FakeLLM(errors={"mdl-a": RuntimeError("down"), "mdl-b": RuntimeError("down")})
+        fake = FakeLLM(
+            errors={"mdl-a": RuntimeError("down"), "mdl-b": RuntimeError("down")}
+        )
 
         report_doc = self.run_review(
             fake, reviewers=[self.reviewer("mdl-a"), self.reviewer("mdl-b")]
@@ -222,7 +221,9 @@ class TwoReviewers(EngineCase):
         )
         self.assertEqual(report_doc["models"][0]["status"], "failed")
         self.assertIn(
-            "not a usable review", report_doc["models"][0]["error"], "the reason is said"
+            "not a usable review",
+            report_doc["models"][0]["error"],
+            "the reason is said",
         )
 
 

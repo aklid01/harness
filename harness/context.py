@@ -37,7 +37,11 @@ def is_git_worktree():
 def file_hash(path):
     try:
         file = Path(path)
-        return hashlib.md5(file.read_bytes(), usedforsecurity=False).hexdigest() if file.is_file() else None
+        return (
+            hashlib.md5(file.read_bytes(), usedforsecurity=False).hexdigest()
+            if file.is_file()
+            else None
+        )
     except OSError:
         # A file locked by another process (log, sync client) must not kill
         # the turn: "hash unknown" just means this file cannot be diffed.

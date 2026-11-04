@@ -13,8 +13,9 @@ from types import SimpleNamespace
 from openai import OpenAI
 
 from . import errors as errors_mod
-from . import events, instructions, providers, tools as tools_mod
+from . import events, instructions, providers
 from . import retry as retry_mod
+from . import tools as tools_mod
 from .errors import stream_interrupted
 from .skills import skills_prompt
 
@@ -82,7 +83,7 @@ def suggest_title(first_text, timeout=15):
         )
         title = " ".join(reply.strip().strip("\"'").split())
         return title[:40] or None
-    except Exception:  # noqa: BLE001 - titles are best effort
+    except Exception:
         # Best effort still leaves a trace: an untitled session with no log
         # line would look like the model refused, not like a broken call.
         log.warning("session titling failed", exc_info=True)
@@ -450,7 +451,6 @@ what the answer stands on.""",
         _PROJECT_RULES + "\n\n{instructions}",
     ],
 )
-
 
 
 def system_prompt(mode="build", role_instructions=""):

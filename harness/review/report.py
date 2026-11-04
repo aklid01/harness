@@ -98,9 +98,7 @@ def latest(session_id):
             return document
     try:
         entries = [
-            item
-            for item in _dir(session_id).glob("rv-*.json")
-            if item.is_file()
+            item for item in _dir(session_id).glob("rv-*.json") if item.is_file()
         ]
     except OSError:
         return None
@@ -117,7 +115,9 @@ def latest(session_id):
 def all_reports(session_id):
     """Every report for this session, newest first."""
     try:
-        entries = [item for item in _dir(session_id).glob("rv-*.json") if item.is_file()]
+        entries = [
+            item for item in _dir(session_id).glob("rv-*.json") if item.is_file()
+        ]
     except OSError:
         return []
     entries.sort(key=lambda item: item.stat().st_mtime_ns, reverse=True)

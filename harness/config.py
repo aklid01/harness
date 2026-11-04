@@ -24,6 +24,7 @@ def reload():
     for candidate in paths.env_files():
         _load_env_file(candidate)
 
+
 # Optional: the keyring is the primary credential source. These only matter
 # for the legacy no-registry flow, and a missing key surfaces at request time
 # as a no_key error instead of killing the engine at import. All three are
@@ -49,5 +50,7 @@ def context_window():
         return int(os.environ.get("CONTEXT_WINDOW", 128_000))
     except ValueError:
         return 128_000
+
+
 COMPACT_AT = 0.85  # compact once the prompt crosses this much of the window
 COMPACT_TO = 0.35  # and cut back to this much, so it does not retrigger soon

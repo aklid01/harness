@@ -98,7 +98,9 @@ def _fit_scope(scope, max_diff_bytes, max_file_bytes):
             skipped.append({"path": change.path, "reason": "the diff is too large"})
             continue
         if used + size > max_diff_bytes:
-            skipped.append({"path": change.path, "reason": "the review is over its size limit"})
+            skipped.append(
+                {"path": change.path, "reason": "the review is over its size limit"}
+            )
             continue
         used += size
         kept.append(change)
@@ -130,54 +132,53 @@ def _run_reviewer(reviewer, scope, contexts, redactions, settings, cancel, emit,
         # A reviewer runs on its own thread, and a thread does not inherit
         # the workspace root the session bound. Without this, a reviewer
         # would look for files in the wrong place.
-        with paths_mod.rooted(root):
-            with providers.use(model_id):
-                note(
-                    "progress",
-                    {"model_id": model_id, "label": label, "state": "running"},
-                )
-                raw = None
-                last_error = None
-                for attempt in range(2):
-                    if cancel is not None and cancel.is_set():
-                        outcome.status = "cancelled"
-                        outcome.error = "cancelled"
-                        return outcome
-                    try:
-                        message, usage = call_llm(messages, tools=[], cancel=cancel)
-                    except Exception as failure:  # noqa: BLE001 - one model's problem
-                        # The transport already retried inside call_llm; a
-                        # failure here is that model being unreachable, not
-                        # a bad reply.
-                        outcome.status = "failed"
-                        outcome.error = f"{type(failure).__name__}: {failure}"
-                        outcome.seconds = time.monotonic() - started
-                        note(
-                            "progress",
-                            {
-                                "model_id": model_id,
-                                "label": label,
-                                "state": "failed",
-                                "error": outcome.error,
-                            },
-                        )
-                        return outcome
-                    content = getattr(message, "content", "") or ""
-                    outcome.prompt_tokens = int(usage.get("prompt_tokens") or 0)
-                    outcome.completion_tokens = int(usage.get("completion_tokens") or 0)
-                    try:
-                        raw = findings_mod.parse(content)
-                        break
-                    except findings_mod.ReviewFormatError as failure:
-                        # A malformed reply is worth one more try: models
-                        # often wrap their JSON in a sentence on the first
-                        # attempt.
-                        last_error = failure
-                        if attempt == 0:
-                            continue
-                        break
-                if raw is None:
-                    raise findings_mod.ReviewFormatError(str(last_error))
+        with paths_mod.rooted(root), providers.use(model_id):
+            note(
+                "progress",
+                {"model_id": model_id, "label": label, "state": "running"},
+            )
+            raw = None
+            last_error = None
+            for attempt in range(2):
+                if cancel is not None and cancel.is_set():
+                    outcome.status = "cancelled"
+                    outcome.error = "cancelled"
+                    return outcome
+                try:
+                    message, usage = call_llm(messages, tools=[], cancel=cancel)
+                except Exception as failure:  # noqa: BLE001 - one model's problem
+                    # The transport already retried inside call_llm; a
+                    # failure here is that model being unreachable, not
+                    # a bad reply.
+                    outcome.status = "failed"
+                    outcome.error = f"{type(failure).__name__}: {failure}"
+                    outcome.seconds = time.monotonic() - started
+                    note(
+                        "progress",
+                        {
+                            "model_id": model_id,
+                            "label": label,
+                            "state": "failed",
+                            "error": outcome.error,
+                        },
+                    )
+                    return outcome
+                content = getattr(message, "content", "") or ""
+                outcome.prompt_tokens = int(usage.get("prompt_tokens") or 0)
+                outcome.completion_tokens = int(usage.get("completion_tokens") or 0)
+                try:
+                    raw = findings_mod.parse(content)
+                    break
+                except findings_mod.ReviewFormatError as failure:
+                    # A malformed reply is worth one more try: models
+                    # often wrap their JSON in a sentence on the first
+                    # attempt.
+                    last_error = failure
+                    if attempt == 0:
+                        continue
+                    break
+            if raw is None:
+                raise findings_mod.ReviewFormatError(str(last_error))
     except findings_mod.ReviewFormatError as failure:
         outcome.status = "failed"
         outcome.error = f"the reply was not a usable review ({failure})"
@@ -226,12 +227,22 @@ def _run_reviewer(reviewer, scope, contexts, redactions, settings, cancel, emit,
         },
     )
     for finding in kept:
-        note("finding", {"model_id": model_id, "label": label, "finding": finding.to_dict()})
+        note(
+            "finding",
+            {"model_id": model_id, "label": label, "finding": finding.to_dict()},
+        )
     return outcome
 
 
 def _failure_document(
-    scope, *, review_id="", verdict="failed", verdict_label="failed", models=None, error=None, action=None
+    scope,
+    *,
+    review_id="",
+    verdict="failed",
+    verdict_label="failed",
+    models=None,
+    error=None,
+    action=None,
 ):
     """The shape every early exit returns: no findings, the scope as parsed."""
     document = {
@@ -278,7 +289,11 @@ def run(
     outstanding model calls as soon as they notice.
     """
     emit = emit or _noop
-    entries = list(reviewers) if reviewers is not None else config_mod.enabled_reviewers(settings)
+    entries = (
+        list(reviewers)
+        if reviewers is not None
+        else config_mod.enabled_reviewers(settings)
+    )
 
     if not entries:
         emit(
@@ -315,7 +330,9 @@ def run(
                 "scope": {"mode": scope.mode, "base": scope.base},
             },
         )
-        return _failure_document(scope, verdict="nothing", verdict_label="nothing to review")
+        return _failure_document(
+            scope, verdict="nothing", verdict_label="nothing to review"
+        )
 
     if not usable:
         # Every reviewer the user picked cannot be reached. Say which one and
@@ -360,10 +377,16 @@ def run(
             return cached
 
     redactions = _redact_scope(scope)
-    max_file_bytes = int(settings.get("max_file_bytes") or config_mod.DEFAULT_MAX_FILE_BYTES)
-    max_diff_bytes = int(settings.get("max_diff_bytes") or config_mod.DEFAULT_MAX_DIFF_BYTES)
+    max_file_bytes = int(
+        settings.get("max_file_bytes") or config_mod.DEFAULT_MAX_FILE_BYTES
+    )
+    max_diff_bytes = int(
+        settings.get("max_diff_bytes") or config_mod.DEFAULT_MAX_DIFF_BYTES
+    )
     used = _fit_scope(scope, max_diff_bytes, max_file_bytes)
-    contexts = _contexts(root, scope, bool(settings.get("full_context")), max_file_bytes)
+    contexts = _contexts(
+        root, scope, bool(settings.get("full_context")), max_file_bytes
+    )
 
     review_id = report_mod.new_id()
     estimate = config_mod.estimated_tokens(settings, used)
@@ -372,7 +395,10 @@ def run(
         {
             "review_id": review_id,
             "reviewers": [
-                {"model_id": e.get("model_id"), "label": e.get("label") or _label_for(e.get("model_id") or "")}
+                {
+                    "model_id": e.get("model_id"),
+                    "label": e.get("label") or _label_for(e.get("model_id") or ""),
+                }
                 for e in usable
             ],
             "skipped": unusable,
@@ -392,7 +418,15 @@ def run(
         ) as pool:
             futures = {
                 pool.submit(
-                    _run_reviewer, entry, scope, contexts, redactions, settings, cancel, emit, root
+                    _run_reviewer,
+                    entry,
+                    scope,
+                    contexts,
+                    redactions,
+                    settings,
+                    cancel,
+                    emit,
+                    root,
                 ): entry
                 for entry in usable
             }
@@ -428,7 +462,9 @@ def run(
                 )
                 break
             outcomes.append(
-                _run_reviewer(entry, scope, contexts, redactions, settings, cancel, emit, root)
+                _run_reviewer(
+                    entry, scope, contexts, redactions, settings, cancel, emit, root
+                )
             )
 
     for entry in unusable:

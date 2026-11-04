@@ -11,7 +11,6 @@ import unittest
 from unittest import mock
 
 from harness.review import engine, findings, report, scope
-
 from tests.review_support import FakeLLM, ReviewCase
 
 A_FINDING = (
@@ -168,7 +167,9 @@ class SessionScope(ReviewCase):
         self.assertEqual(report.all_reports("sess-two"), [])
 
     def test_two_sessions_keep_their_own_reports(self):
-        report.save("sess-one", report.build("rv-one", a_scope(), a_merged(a_finding())))
+        report.save(
+            "sess-one", report.build("rv-one", a_scope(), a_merged(a_finding()))
+        )
         report.save(
             "sess-two",
             report.build("rv-two", a_scope(), a_merged(a_finding(severity="low"))),
@@ -214,7 +215,9 @@ class CachedReviews(ReviewCase):
         self.assertEqual(
             len(fake.calls), 1, "the second review did not spend money again"
         )
-        self.assertEqual(second["review_id"], first["review_id"], "it is the same report")
+        self.assertEqual(
+            second["review_id"], first["review_id"], "it is the same report"
+        )
         self.assertTrue(second.get("cached"), "the report says it came from the cache")
 
     def test_force_bypasses_the_cache(self):
@@ -233,7 +236,9 @@ class CachedReviews(ReviewCase):
         self.record_change("app.py", "value = 2\n", "value = 3\n")
         again = self.review(fake)
 
-        self.assertEqual(len(fake.calls), 2, "the change is different, so it is reviewed")
+        self.assertEqual(
+            len(fake.calls), 2, "the change is different, so it is reviewed"
+        )
         self.assertFalse(again.get("cached", False))
 
 

@@ -14,8 +14,8 @@ TOOL_SCHEMAS. Two things here are worth stating plainly:
   ends the session, and none of them is executed.
 """
 
-import json
 import contextvars
+import json
 import os
 import shutil
 import subprocess
@@ -296,9 +296,7 @@ def _validate_args(name, args):
 
 # The agent loop's cancel event, set by execute() for the duration of one
 # dispatch. Only a tool that loops (the task subagent) reads it back.
-_CANCEL = contextvars.ContextVar(
-    "tools_cancel_event", default=None
-)
+_CANCEL = contextvars.ContextVar("tools_cancel_event", default=None)
 
 
 def execute(tool_call, note="", call_key=None, cancel=None) -> tuple[dict, str]:
@@ -396,6 +394,7 @@ def _remember(call_key, outcome):
 def executed_calls() -> dict:
     """The registry, for tests and diagnostics."""
     return dict(_EXECUTED)
+
 
 def current_cancel():
     """The cancel event of the agent loop that dispatched this call."""
@@ -536,9 +535,7 @@ def _task(description: str) -> str:
     so an implementation never reads the registry back."""
     from . import subagent
 
-    guest = [
-        s for s in TOOL_SCHEMAS if s["function"]["name"] not in subagent.WITHHELD
-    ]
+    guest = [s for s in TOOL_SCHEMAS if s["function"]["name"] not in subagent.WITHHELD]
     return subagent.task(
         description,
         execute=execute,

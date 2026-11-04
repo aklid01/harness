@@ -21,6 +21,7 @@ from .shellrisk import (
     split_command,
 )
 
+
 def project_root():
     return paths.project_root()
 

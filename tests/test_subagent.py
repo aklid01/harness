@@ -66,7 +66,10 @@ class SubagentCase(unittest.TestCase):
 
     def test_a_tool_turn_runs_then_answers(self):
         replies = [
-            (llm_message("looking...", calls=[("bash", '{"command": "ls"}')]), {"t": 1}),
+            (
+                llm_message("looking...", calls=[("bash", '{"command": "ls"}')]),
+                {"t": 1},
+            ),
             (llm_message("found it"), {"t": 1}),
         ]
         with mock.patch.object(subagent, "call_llm", side_effect=replies):
@@ -78,7 +81,10 @@ class SubagentCase(unittest.TestCase):
 
     def test_the_turn_budget_stops_a_runner_with_a_partial_report(self):
         replies = [
-            (llm_message(f"progress {i}", calls=[("bash", '{"command": "ls"}')]), {"t": 1})
+            (
+                llm_message(f"progress {i}", calls=[("bash", '{"command": "ls"}')]),
+                {"t": 1},
+            )
             for i in range(6)
         ]
         with (

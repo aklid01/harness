@@ -341,7 +341,9 @@ def _admit(scope, path, absolute, max_files, exclusions):
         scope.skipped.append({"path": path, "reason": "over the file limit"})
         return False
     if is_excluded(path, exclusions):
-        scope.skipped.append({"path": path, "reason": "excluded by the review settings"})
+        scope.skipped.append(
+            {"path": path, "reason": "excluded by the review settings"}
+        )
         return False
     if absolute.exists() and is_binary(absolute):
         scope.skipped.append({"path": path, "reason": "binary file"})
@@ -453,11 +455,7 @@ def _journal_scope(root, session_id, mode, only_paths, exclusions, max_files):
         # An empty list means "this run changed nothing", which is different
         # from "no run context", which is None.
         wanted = {_relative(root, p) for p in only_paths}
-        entries = [
-            e
-            for e in entries
-            if _relative(root, e.get("path", "")) in wanted
-        ]
+        entries = [e for e in entries if _relative(root, e.get("path", "")) in wanted]
 
     seen = {}
     for entry in entries:
@@ -481,10 +479,20 @@ def _journal_scope(root, session_id, mode, only_paths, exclusions, max_files):
             scope.skipped.append({"path": path, "reason": "no readable diff"})
             continue
         status = "A" if before is None else ("D" if after is None else "M")
-        added = sum(1 for line in diff.split("\n") if line.startswith("+") and not line.startswith("+++"))
-        removed = sum(1 for line in diff.split("\n") if line.startswith("-") and not line.startswith("---"))
+        added = sum(
+            1
+            for line in diff.split("\n")
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        removed = sum(
+            1
+            for line in diff.split("\n")
+            if line.startswith("-") and not line.startswith("---")
+        )
         scope.files.append(
-            FileChange(path=path, status=status, diff=diff, added=added, removed=removed)
+            FileChange(
+                path=path, status=status, diff=diff, added=added, removed=removed
+            )
         )
     return scope
 

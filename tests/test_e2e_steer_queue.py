@@ -193,9 +193,7 @@ class SteerQueueE2E(unittest.TestCase):
         return [m for m in self.sent if m.get("reply") == op]
 
     def pending_events(self):
-        return [
-            m for m in self.sent if m.get("event") == events.PENDING
-        ]
+        return [m for m in self.sent if m.get("event") == events.PENDING]
 
     def last_pending(self):
         evs = self.pending_events()
@@ -206,7 +204,9 @@ class SteerQueueE2E(unittest.TestCase):
         return [
             r
             for r in self.state.requests
-            if not any(TITLE_MARKER in str(m.get("content") or "") for m in r["messages"])
+            if not any(
+                TITLE_MARKER in str(m.get("content") or "") for m in r["messages"]
+            )
         ]
 
     def transcript_messages(self):
@@ -288,8 +288,7 @@ class SteerQueueE2E(unittest.TestCase):
         via = [
             m
             for m in self.sent
-            if m.get("event") == events.MESSAGE
-            and m["payload"].get("via") == "steer"
+            if m.get("event") == events.MESSAGE and m["payload"].get("via") == "steer"
         ]
         self.assertTrue(via and via[-1]["payload"]["content"] == "use library Y")
         self.assertEqual(self.count("done"), 1, "a steer never starts a second turn")
@@ -327,8 +326,7 @@ class SteerQueueE2E(unittest.TestCase):
         via = [
             m
             for m in self.sent
-            if m.get("event") == events.MESSAGE
-            and m["payload"].get("via") == "queue"
+            if m.get("event") == events.MESSAGE and m["payload"].get("via") == "queue"
         ]
         self.assertTrue(via and via[-1]["payload"]["content"] == "now the follow-up")
         self.assertEqual(
@@ -447,8 +445,10 @@ class SteerQueueE2E(unittest.TestCase):
         self.dispatch({"op": "pending_remove", "id": items["queued to remove"]})
         self.assertTrue(
             self.wait_until(
-                lambda: [i["text"] for i in (self.last_pending() or [])]
-                == ["edited steer text"]
+                lambda: (
+                    [i["text"] for i in (self.last_pending() or [])]
+                    == ["edited steer text"]
+                )
             )
         )
         self.assertTrue(self.done())
@@ -496,8 +496,7 @@ class SteerQueueE2E(unittest.TestCase):
         notes = [
             m
             for m in self.sent
-            if m.get("event") == events.NOTE
-            and m["payload"].get("text") == "stopped"
+            if m.get("event") == events.NOTE and m["payload"].get("text") == "stopped"
         ]
         self.assertTrue(notes, "the stop was reported as a stop, not an error")
         self.assertFalse(

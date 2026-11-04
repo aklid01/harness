@@ -32,8 +32,8 @@ from .context import reminder
 from .llm import call_llm, system_prompt
 from .review import command as review_command
 from .todos import active_form
-from . import tools
 from .tools import available_tool_names, execute
+
 
 def _has_image_parts(message):
     """Does this request message carry an image part?"""
@@ -154,7 +154,9 @@ class Runner:
                     },
                 )
 
-    def handle_input(self, user_text: str, via: str | None = None, attachments: list | None = None) -> None:
+    def handle_input(
+        self, user_text: str, via: str | None = None, attachments: list | None = None
+    ) -> None:
         if user_text.startswith("/"):
             self.messages = commands.handle(user_text, self.messages, self)
             session.save(self.messages)
@@ -246,9 +248,7 @@ class Runner:
         """Move this message's files into the session's own directory."""
         if not items:
             return []
-        metas = attachments_mod.adopt(
-            items, session.current_id(), paths.project_root()
-        )
+        metas = attachments_mod.adopt(items, session.current_id(), paths.project_root())
         failed = [m for m in metas if m.get("error")]
         if failed:
             for meta in failed:
@@ -472,7 +472,9 @@ class Runner:
             events.emit(events.NOTE, {"text": "stopped"})
             return
         self._phase("building")
-        build_id = agent_roles.resolve_model(build_cfg, default_model) if use_agent else None
+        build_id = (
+            agent_roles.resolve_model(build_cfg, default_model) if use_agent else None
+        )
         if build_id:
             with providers.use(build_id):
                 self._turn()
@@ -1175,9 +1177,7 @@ class Runner:
 
     def _corrective_note(self, call):
         """What the model is told when its text call could not be used."""
-        available = ", ".join(
-            available_tool_names()
-        )
+        available = ", ".join(available_tool_names())
         return (
             "<system-reminder>\n"
             f"Your last message contained a tool call that could not be run: {call.error}\n"
@@ -1361,7 +1361,7 @@ class Runner:
                         on_reasoning=on_reasoning if self.stream else None,
                         cancel=self.cancel_event,
                     )
-                except Exception as failure:  # noqa: BLE001 - one image, not the turn
+                except Exception as failure:
                     # A provider that will not take an image part must not cost
                     # the user their message: the file stays attached, the
                     # request goes again without the picture, and the agent is
@@ -1565,8 +1565,7 @@ class Runner:
             self._answer_pending_calls(
                 message,
                 index,
-                "The turn stopped before this call ran "
-                "(budget or a repeated step).",
+                "The turn stopped before this call ran (budget or a repeated step).",
             )
             self._stop_turn = True
             return False
@@ -1617,9 +1616,7 @@ class Runner:
                 )
                 if tools.user_approved(name, args):
                     self._user_approved.add(decision_fp)
-                if name in ("write_file", "str_replace") and not str(
-                    result
-                ).startswith(
+                if name in ("write_file", "str_replace") and not str(result).startswith(
                     ("Error:", "Blocked by policy:", "The user denied")
                 ):
                     # A landed edit: later small edits to this file are

@@ -15,7 +15,6 @@ Two properties of the prompt matter more than its wording:
   instruction in the diff has nothing to act on.
 """
 
-
 TARGETS = (
     (
         "correctness",
@@ -221,7 +220,9 @@ def build_user(scope, contexts=None, extra="", redactions=None):
     notes = []
     if scope.skipped:
         names = ", ".join(item["path"] for item in scope.skipped[:20])
-        more = "" if len(scope.skipped) <= 20 else f" and {len(scope.skipped) - 20} more"
+        more = (
+            "" if len(scope.skipped) <= 20 else f" and {len(scope.skipped) - 20} more"
+        )
         notes.append(f"Skipped: {names}{more}")
     if redactions:
         notes.append(
@@ -256,4 +257,3 @@ def build_messages(scope, focus="", contexts=None, extra="", redactions=0):
         {"role": "system", "content": build_system(focus, extra)},
         {"role": "user", "content": build_user(scope, contexts, extra, redactions)},
     ]
-

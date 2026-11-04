@@ -55,8 +55,7 @@ def _attachment_note() -> str:
         return ""
     lines = [
         "",
-        "Files the user attached to this session. You can read them at these "
-        "paths:",
+        "Files the user attached to this session. You can read them at these paths:",
         "",
     ]
     for item in items:
@@ -202,4 +201,3 @@ def task(description: str, execute, tool_schemas, cancel=None):
             f"findings below - narrow the question and ask again.)\n\n{report}"
         )
     return f"(stopped after {MAX_TURNS} turns with nothing to report.)"
-

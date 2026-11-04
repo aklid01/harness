@@ -9,7 +9,6 @@ about what the scope names, what it skips, and what it says about the skips.
 import unittest
 
 from harness.review import scope
-
 from tests.review_support import ReviewCase, commit_all, git, init_repo
 
 
@@ -36,9 +35,7 @@ class GitScopes(ScopeCase):
         self.write("a.py", "two\n")
         self.write("b.py", "two\n")
 
-        detected = scope.detect(
-            self.root, mode="run", only_paths=[self.root / "a.py"]
-        )
+        detected = scope.detect(self.root, mode="run", only_paths=[self.root / "a.py"])
 
         self.assertEqual(
             detected.paths(),
@@ -140,9 +137,7 @@ class GitScopes(ScopeCase):
         detected = scope.detect(self.root, mode="uncommitted")
         self.assertEqual(detected.paths(), ["my file.py"])
 
-        run = scope.detect(
-            self.root, mode="run", only_paths=[self.root / "my file.py"]
-        )
+        run = scope.detect(self.root, mode="run", only_paths=[self.root / "my file.py"])
         self.assertEqual(run.paths(), ["my file.py"])
         self.assertIn("two", run.files[0].diff)
 
@@ -217,9 +212,7 @@ class Exclusions(ScopeCase):
         self.assertEqual(detected.paths(), ["app.py"], "only real source is reviewed")
         skipped = self.skipped_names(detected)
         for name in ("poetry.lock", "package-lock.json", "bundle.min.js"):
-            self.assertIn(
-                name, skipped, f"{name} must be reported as skipped, by name"
-            )
+            self.assertIn(name, skipped, f"{name} must be reported as skipped, by name")
         self.assertIn("excluded", self.skip_reason(detected, "poetry.lock"))
 
     def test_generated_directories_are_skipped_by_name(self):
@@ -241,7 +234,9 @@ class Exclusions(ScopeCase):
     def test_is_excluded_matches_the_pattern_list(self):
         self.assertTrue(scope.is_excluded("bundle.min.js", scope.DEFAULT_EXCLUSIONS))
         self.assertTrue(scope.is_excluded("poetry.lock", scope.DEFAULT_EXCLUSIONS))
-        self.assertTrue(scope.is_excluded("package-lock.json", scope.DEFAULT_EXCLUSIONS))
+        self.assertTrue(
+            scope.is_excluded("package-lock.json", scope.DEFAULT_EXCLUSIONS)
+        )
         self.assertFalse(scope.is_excluded("src/app.py", scope.DEFAULT_EXCLUSIONS))
 
         self.assertTrue(scope.is_excluded("notes.txt", ("*.txt",)))
@@ -253,9 +248,7 @@ class Exclusions(ScopeCase):
         self.write("notes.txt", "scratch\n")
         self.write("app.py", "two\n")
 
-        detected = scope.detect(
-            self.root, mode="uncommitted", exclusions=("*.txt",)
-        )
+        detected = scope.detect(self.root, mode="uncommitted", exclusions=("*.txt",))
 
         self.assertEqual(detected.paths(), ["app.py"])
         self.assertIn("notes.txt", self.skipped_names(detected))
@@ -283,7 +276,10 @@ class Exclusions(ScopeCase):
         self.assertEqual(len(detected.files), 2, "no more files than the limit")
         self.assertTrue(detected.truncated, "the scope says it was cut short")
         self.assertEqual(len(detected.skipped), 1)
-        self.assertIn("over the file limit", self.skip_reason(detected, detected.skipped[0]["path"]))
+        self.assertIn(
+            "over the file limit",
+            self.skip_reason(detected, detected.skipped[0]["path"]),
+        )
 
 
 class ScopeArguments(unittest.TestCase):

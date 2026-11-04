@@ -22,7 +22,11 @@ from . import paths
 from .coerce import as_bool, as_int, as_text
 from .review.config import (
     AUTO_RUN,
+)
+from .review.config import (
     clean_section as _clean_review,
+)
+from .review.config import (
     defaults as _review_defaults,
 )
 

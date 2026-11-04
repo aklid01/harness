@@ -30,6 +30,7 @@ class ReviewerEntry(TypedDict):
     enabled: bool
     focus: str
 
+
 DEFAULT_MAX_REVIEWERS = 4
 DEFAULT_MAX_FILES = 40
 DEFAULT_MAX_DIFF_BYTES = 200_000

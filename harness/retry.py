@@ -169,9 +169,7 @@ def run(
         try:
             return request()
         except Exception as failure:
-            err = errors_mod.classify(
-                failure, model=model, model_id=model_id
-            )
+            err = errors_mod.classify(failure, model=model, model_id=model_id)
             if _stopped(cancel):
                 raise errors_mod.cancelled(model=model, model_id=model_id)
             if not err.transient:

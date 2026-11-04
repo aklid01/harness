@@ -25,9 +25,7 @@ def start_server(token):
     from harness.server import get_backend
 
     get_backend()
-    return asyncio.ensure_future(
-        server_mod.serve("127.0.0.1", PORT, auth_token=token)
-    )
+    return asyncio.ensure_future(server_mod.serve("127.0.0.1", PORT, auth_token=token))
 
 
 class AuthCase(unittest.TestCase):

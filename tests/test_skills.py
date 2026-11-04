@@ -65,7 +65,9 @@ class SkillsCase(unittest.TestCase):
 
     def test_a_broken_skill_file_is_skipped_without_killing_the_scan(self):
         (self.project / "broken").mkdir()
-        (self.project / "broken" / "SKILL.md").write_text("no frontmatter", encoding="utf-8")
+        (self.project / "broken" / "SKILL.md").write_text(
+            "no frontmatter", encoding="utf-8"
+        )
         write_skill(self.project, "fine", "a fine skill")
         found = skills.find_skills()
         self.assertEqual([name for name in found], ["fine"])

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import paths
 
+
 def _project():
     return paths.project_root()
 
