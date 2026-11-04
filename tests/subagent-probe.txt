@@ -1,0 +1,3 @@
+report: (the subagent hit an error before reporting.)
+executed: []
+ERROR payload: {'text': 'subagent failed - TypeError: cannot unpack non-iterable types.SimpleNamespace object', 'nested': True}
