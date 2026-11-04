@@ -7,6 +7,7 @@ interpreter already on PATH. The exit code is the verdict - pipe nothing over
 it, a masked exit code is how a red suite ships.
 """
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -17,6 +18,13 @@ sys.path.insert(0, str(ROOT))
 site = ROOT / ".venv" / "Lib" / "site-packages"
 if site.is_dir():
     sys.path.insert(1, str(site))
+
+# The sandbox exports proxy vars; a proxy would turn the localhost mock
+# provider into a 502 because 127.0.0.1 resolves to the proxy itself.
+for key in ("NO_PROXY", "no_proxy"):
+    hosts = {h.strip() for h in os.environ.get(key, "").split(",") if h.strip()}
+    hosts.update(("127.0.0.1", "localhost", "::1"))
+    os.environ[key] = ",".join(sorted(hosts))
 
 suite = unittest.defaultTestLoader.discover(ROOT / "tests", pattern="test_*.py")
 result = unittest.TextTestRunner(verbosity=1).run(suite)

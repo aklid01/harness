@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -19,12 +20,19 @@ from harness import (
 class SessionCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(os.path.abspath("tmp-session-test"))
-        self.tmp.mkdir(exist_ok=True)
+        # A prior run whose tearDown could not delete its scratch (a lingering
+        # thread or a scanner holding a handle) must not leak its session file
+        # or titles sidecar into this one: save() appends, so a stale
+        # 20260101-000000.jsonl would poison every assertion below.
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        self.tmp.mkdir(parents=True, exist_ok=True)
         os.environ["HARNESS_SESSIONS_ROOT"] = str(self.tmp / "sessions")
         self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
         paths.init(project_root=self.tmp, app_data_dir=self.tmp / "appdata")
         self.addCleanup(paths.reset)
         self.dir = paths.session_dir()
+        shutil.rmtree(self.dir, ignore_errors=True)
+        self.dir.mkdir(parents=True, exist_ok=True)
         mock.patch.object(session, "CURRENT", "20260101-000000").start()
         mock.patch.object(session, "WRITTEN", 0).start()
         self.old_cwd = os.getcwd()
@@ -33,8 +41,6 @@ class SessionCase(unittest.TestCase):
         self.addCleanup(mock.patch.stopall)
 
     def tearDown(self):
-        import shutil
-
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_save_load_roundtrip(self):
