@@ -908,23 +908,29 @@ def active_context_window():
     return int(window) if window else config.context_window()
 
 
-def _credential_for(group):
-    """(base_url, api_key, source) for a provider. Never returns the key twice."""
-    if group is None:
-        from . import config
-
-        return config.base_url(), config.api_key(), "legacy-env"
+def _credential_state(group):
+    """(source, secret_or_None) for one provider group."""
     secret = _key_for_group(group["id"])
     if secret:
-        return group.get("base_url", ""), secret, "keyring"
+        return "keyring", secret
     legacy = _legacy_env()
     # Borrow the plaintext .env key only when it points at this same host,
     # otherwise the request would fail with a confusing authentication error.
     if legacy.get("API_KEY") and _same_host(
         legacy.get("BASE_URL"), group.get("base_url")
     ):
-        return group.get("base_url", ""), legacy["API_KEY"], "plaintext-env"
-    return group.get("base_url", ""), None, "missing"
+        return "plaintext-env", legacy["API_KEY"]
+    return "missing", None
+
+
+def _credential_for(group):
+    """(base_url, api_key, source) for a provider. Never returns the key twice."""
+    if group is None:
+        from . import config
+
+        return config.base_url(), config.api_key(), "legacy-env"
+    source, secret = _credential_state(group)
+    return group.get("base_url", ""), secret, source
 
 
 def active_config():
@@ -959,15 +965,7 @@ def provider_status(target_id):
     if not (group and model):
         return None
     flat = _flat(group, model)
-    legacy = _legacy_env()
-    if _key_for_group(group["id"]):
-        state = "keyring"
-    elif legacy.get("API_KEY") and _same_host(
-        legacy.get("BASE_URL"), group.get("base_url")
-    ):
-        state = "plaintext-env"
-    else:
-        state = "missing"
+    state, _ = _credential_state(group)
     flat.update({"key": state, "active": model["id"] == get_active_id()})
     return flat
 
