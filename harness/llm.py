@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from openai import OpenAI
 
 from . import errors as errors_mod
-from . import events, instructions, providers
+from . import events, instructions, providers, tools as tools_mod
 from . import retry as retry_mod
 from .errors import stream_interrupted
 from .skills import skills_prompt
@@ -91,8 +91,6 @@ def suggest_title(first_text, timeout=15):
 
 def _params(messages, tools, caps):
     """Request body for the active model - only what it actually supports."""
-    from . import tools as tools_mod
-
     # Reasoning is display-only: kept for the transcript, never sent back.
     wire = [
         {k: v for k, v in message.items() if k != "reasoning"}

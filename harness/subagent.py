@@ -20,6 +20,10 @@ Four rules, and the code below is really just these:
 
 import os
 
+from . import events, providers
+from .history import prepare
+from .llm import call_llm
+
 MAX_TURNS = 12  # a runaway explorer is worse than a missing answer
 
 
@@ -101,12 +105,6 @@ def task(description: str, execute, tool_schemas):
     come from the tools module that dispatched this call, so the guest
     loop runs exactly the toolset the dispatcher advertised.
     """
-    # Imported inside the function: llm imports tools, so a module-level
-    # import here would tie this module to the whole tool layer at import
-    # time instead of when a subagent actually runs.
-    from . import events, providers
-    from .history import prepare
-    from .llm import call_llm
     # --- rule 1 ---
     # Two messages. Not a copy of the caller's transcript, not a trimmed
     # version of it, and not whatever the last subagent left behind - this
