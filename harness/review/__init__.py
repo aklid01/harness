@@ -12,11 +12,9 @@ report. Everything else in this package is a piece of that:
 ``report``     the saved report, and the short version the agent reads
 """
 
-from . import aggregate, config, engine, findings, prompt, redact, report, scope
-
-run = engine.run
-
-__all__ = [
+# A lazy barrel: importing harness.review must not drag the engine (and
+# through it the provider stack) into every importer of a small submodule.
+_SUBMODULES = (
     "aggregate",
     "config",
     "engine",
@@ -25,5 +23,23 @@ __all__ = [
     "redact",
     "report",
     "scope",
-    "run",
-]
+)
+
+
+def __getattr__(name):
+    if name in _SUBMODULES:
+        import importlib
+
+        module = importlib.import_module("." + name, __name__)
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def run(*args, **kwargs):
+    from . import engine
+
+    return engine.run(*args, **kwargs)
+
+
+__all__ = [*_SUBMODULES, "run"]
