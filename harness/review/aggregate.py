@@ -30,10 +30,6 @@ VERDICT_LABELS = {
     "changes_requested": "changes requested",
 }
 
-# A finding at or above this rank is worth showing. Everything below it is
-# counted and dropped.
-THRESHOLDS = ("blocker", "high", "medium", "low", "nit")
-
 SAME_LINE = 5
 CONFLICT_LINE = 3
 

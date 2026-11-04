@@ -23,6 +23,7 @@ from .review.config import (
     _as_bool,
     _as_int,
     _as_text,
+    AUTO_RUN,
     clean_section as _clean_review,
 )
 
@@ -188,4 +189,4 @@ def review_auto_run(config):
     if not review.get("enabled"):
         return "off"
     auto = review.get("auto_run") or "off"
-    return auto if auto in ("offer", "start") else "off"
+    return auto if auto in AUTO_RUN else "off"
