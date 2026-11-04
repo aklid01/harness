@@ -15,6 +15,7 @@ TOOL_SCHEMAS. Two things here are worth stating plainly:
 """
 
 import json
+import contextvars
 import os
 import shutil
 import subprocess
@@ -293,7 +294,14 @@ def _validate_args(name, args):
     return None
 
 
-def execute(tool_call, note="", call_key=None):
+# The agent loop's cancel event, set by execute() for the duration of one
+# dispatch. Only a tool that loops (the task subagent) reads it back.
+_CANCEL = contextvars.ContextVar(
+    "tools_cancel_event", default=None
+)
+
+
+def execute(tool_call, note="", call_key=None, cancel=None):
     """Run one tool call through the permission layer.
 
     Shared by the main loop and by subagents, so a subagent is fenced in by
@@ -312,6 +320,8 @@ def execute(tool_call, note="", call_key=None):
     repeat (a retried frame, a re-entered stream, a duplicated event) returns
     the recorded result instead of running the tool a second time.
     """
+    _CANCEL.set(cancel)
+
     from . import events
 
     if call_key is not None and call_key in _EXECUTED:
@@ -386,6 +396,10 @@ def _remember(call_key, outcome):
 def executed_calls():
     """The registry, for tests and diagnostics."""
     return dict(_EXECUTED)
+
+def current_cancel():
+    """The cancel event of the agent loop that dispatched this call."""
+    return _CANCEL.get()
 
 
 TOOL_SCHEMAS = [
@@ -525,7 +539,12 @@ def _task(description: str) -> str:
     guest = [
         s for s in TOOL_SCHEMAS if s["function"]["name"] not in subagent.WITHHELD
     ]
-    return subagent.task(description, execute=execute, tool_schemas=guest)
+    return subagent.task(
+        description,
+        execute=execute,
+        tool_schemas=guest,
+        cancel=current_cancel(),
+    )
 
 
 TOOLS = {

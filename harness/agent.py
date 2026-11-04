@@ -1586,6 +1586,7 @@ class Runner:
                     tool_call,
                     note=(message.content or ""),
                     call_key=(request_id, call_id or index),
+                    cancel=self.cancel_event,
                 )
                 if tools.user_approved(name, args):
                     self._user_approved.add(decision_fp)

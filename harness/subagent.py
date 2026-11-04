@@ -98,12 +98,14 @@ is not.
 {_attachment_note()}"""
 
 
-def task(description: str, execute, tool_schemas):
+def task(description: str, execute, tool_schemas, cancel=None):
     """Run a fresh agent on one question and return only its final answer.
 
     The registry is handed in, not read: ``execute`` and ``tool_schemas``
     come from the tools module that dispatched this call, so the guest
-    loop runs exactly the toolset the dispatcher advertised.
+    loop runs exactly the toolset the dispatcher advertised. ``cancel``
+    is the lead agent's stop event; it is honoured between turns, between
+    tool calls, and inside each model call.
     """
     # --- rule 1 ---
     # Two messages. Not a copy of the caller's transcript, not a trimmed
@@ -122,6 +124,8 @@ def task(description: str, execute, tool_schemas):
     # tools, append, repeat. A subagent is not a new kind of thing. It is the
     # loop you already have, pointed at a different list of messages.
     for _ in range(MAX_TURNS):
+        if cancel is not None and cancel.is_set():
+            return report or "(stopped by the user before finishing.)"
         # Its context can overflow too, and nobody compacts it. Prepared as a
         # copy: the throwaway list is the only thing that ever gets trimmed.
         request, trimmed = prepare(messages, providers.active_context_window())
@@ -130,7 +134,7 @@ def task(description: str, execute, tool_schemas):
 
         events.emit(events.STATUS, {"active": "subagent exploring"})
         try:
-            message, usage = call_llm(request, tools=tool_schemas)
+            message, usage = call_llm(request, tools=tool_schemas, cancel=cancel)
         except Exception as failure:  # noqa: BLE001
             events.emit(events.STATUS, {"active": None})
             events.emit(
@@ -155,6 +159,8 @@ def task(description: str, execute, tool_schemas):
             return report or "(the subagent came back with nothing)"
 
         for tool_call in message.tool_calls:
+            if cancel is not None and cancel.is_set():
+                return report or "(stopped by the user before finishing.)"
             # The same executor the main loop uses, so the same permission
             # rules and the same sandbox apply. A subagent is a second caller,
             # not a privileged one - it is not a way around any of that.
