@@ -757,8 +757,9 @@ try {
   await pickMode("Build");
   await sleep(150);
 
-  /* The Storage tab is driven entirely by the Electron main process, so it is
-     checked before the turns: it must pass even when the engine never starts. */
+  /* The Storage tab is driven entirely by the Tauri shell's IPC commands, so
+     it is checked before the turns: it must pass even when the engine never
+     starts. */
   await evaluate(ws, `document.getElementById("btnSettings")?.click()`);
   await sleep(400);
   await evaluate(
