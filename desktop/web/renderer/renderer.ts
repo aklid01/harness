@@ -461,7 +461,7 @@ let activeApproval: { ctx: Ctx; id: string } | null = null;
 let pendingRewindCount: number | null = null;
 let popHideTimer: number | null = null;
 
-const EFFORTS = ["default", "low", "medium", "high", "xhigh"];
+const EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"];
 const MODE_OPTIONS: Array<{ label: string; value: Mode }> = [
   { label: "Build", value: "build" },
   { label: "Ask", value: "ask" },
@@ -4149,7 +4149,7 @@ function providerForm(
   restore?: ProviderFormSnapshot,
 ): void {
   const e: Partial<ProviderEntry> = existing ?? {};
-  const opts = ["default", "low", "medium", "high", "xhigh"];
+  const opts = ["default", "low", "medium", "high", "xhigh", "max"];
   const group = groupId ? providerGroups.find((g) => g.id === groupId) : null;
   const isNewModel = !existing;
   const providerOptionsHtml =
