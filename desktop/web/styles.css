@@ -2580,11 +2580,15 @@ body.hide-thinking .think-block {
 }
 /* Settings needs real width for the model table: the nav rail stays a fixed
    200px, the content column gets the rest, and the whole dialog is clamped so
-   it never turns into a full-screen sheet. */
+   it never turns into a full-screen sheet. The dialog itself never scrolls;
+   only the tab body does, so the nav rail stays put. */
 .modal-box.settings-modal {
   width: min(960px, 94vw);
   max-width: 94vw;
   max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 @keyframes modal-in {
   from {
@@ -2853,8 +2857,10 @@ body.hide-thinking .think-block {
 .settings {
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 18px;
   min-height: 320px;
+  flex: 1;
 }
 .settings-nav {
   display: flex;
@@ -2898,6 +2904,7 @@ body.hide-thinking .think-block {
 }
 .settings-body {
   min-width: 0;
+  overflow-y: auto;
 }
 .settings-body .sub {
   color: var(--text-3);
@@ -3536,6 +3543,7 @@ body.hide-thinking .think-block {
   }
   .settings {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .settings-nav {
     flex-direction: row;
