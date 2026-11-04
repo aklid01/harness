@@ -27,11 +27,35 @@ import threading
 import uuid
 import zipfile
 from pathlib import Path
+from typing import TypedDict
 
 from . import paths
 
 _DEFAULT_MAX_FILE_BYTES = 25 * 1024 * 1024
 _DEFAULT_MAX_FILES_PER_MESSAGE = 10
+
+
+class AttachmentMeta(TypedDict):
+    """The metadata that travels with one attached file, in transcript and UI."""
+
+    id: str
+    name: str
+    type: str
+    size: int
+
+
+class StagedAttachment(AttachmentMeta):
+    """A finished upload: complete on disk in its staging area."""
+
+    path: str
+
+
+class AdoptedAttachment(AttachmentMeta, total=False):
+    """An adopt() result: the final path, or why the file did not survive."""
+
+    path: str
+    error: str
+    missing: bool
 
 
 def max_file_bytes():
@@ -224,7 +248,7 @@ def part(upload_id, data):
     return record["written"]
 
 
-def finish(upload_id):
+def finish(upload_id) -> StagedAttachment:
     """Close the upload and hand back the attachment's metadata."""
     record = _slot(upload_id)
     with _LOCK:
@@ -261,7 +285,7 @@ def abandon(upload_id):
 # ------------------------------------------------------------------- adopt
 
 
-def adopt(items, session_id, project_root=None):
+def adopt(items, session_id, project_root=None) -> list[AdoptedAttachment]:
     """Move staged files into the session's own directory.
 
     Returns the final metadata for every item. An item whose file has gone
@@ -326,7 +350,7 @@ def within_limit(items):
     return items[:limit], items[limit:]
 
 
-def discard(meta):
+def discard(meta: AttachmentMeta):
     """Delete a staged file the user took back.
 
     Only files still in staging go: a file that was already sent belongs to
@@ -341,7 +365,7 @@ def discard(meta):
     return True
 
 
-def from_messages(messages):
+def from_messages(messages) -> list[AdoptedAttachment]:
     """Every attachment mentioned in a transcript, oldest first."""
     seen = set()
     found = []
@@ -385,7 +409,7 @@ def _human(size):
     return f"{size:.1f} GB"
 
 
-def manifest(items, can_view_images=True):
+def manifest(items: list[AdoptedAttachment], can_view_images=True):
     """The manifest the agent reads: what is attached, and where.
 
     The framing matters as much as the list - a file is data, and a file that

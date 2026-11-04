@@ -25,6 +25,7 @@ import json
 import secrets
 import threading
 from pathlib import Path
+from typing import TypedDict
 
 from . import paths
 
@@ -37,20 +38,54 @@ MODEL_PREFIX = "mdl-"
 _ACTIVE_ID = contextvars.ContextVar("providers_active_id", default=None)
 _EFFORT = contextvars.ContextVar("providers_effort", default=None)
 
-MODEL_FIELDS = (
-    "name",
-    "model",
-    "reasoning_effort",
-    "temperature",
-    "context_window",
-    "max_output_tokens",
-    "supports_tools",
-    "supports_reasoning",
-    "supports_images",
-    "supports_text_tools",
-    "extra_params",
-    "disabled",
-)
+class ModelPayload(TypedDict):
+    """One stored model configuration: a stable id plus its parameters.
+
+    The contract for every dict that goes into ``providers["models"]`` and
+    for the payloads the renderer sends through the model ops.
+    """
+
+    id: str
+    name: str
+    model: str
+    reasoning_effort: str | None
+    temperature: float | None
+    context_window: int | None
+    max_output_tokens: int | None
+    supports_tools: bool
+    supports_reasoning: bool
+    supports_images: bool
+    supports_text_tools: bool
+    extra_params: dict
+    disabled: bool
+
+
+# The fields a caller may set on a model payload, single-sourced from the
+# contract above (every key except the id, which the registry owns).
+MODEL_FIELDS = tuple(key for key in ModelPayload.__annotations__ if key != "id")
+
+
+class ModelRow(TypedDict):
+    """The one-model-per-row shape the engine and the renderer protocol expect."""
+
+    id: str
+    name: str
+    base_url: str
+    model: str
+    headers: dict
+    disabled: bool
+    reasoning_effort: str | None
+    temperature: float | None
+    context_window: int | None
+    max_output_tokens: int | None
+    supports_tools: bool
+    supports_reasoning: bool
+    supports_text_tools: bool
+    extra_params: dict
+    provider_id: str
+    provider_name: str
+
+
 MODEL_DEFAULTS = {
     "name": "",
     "model": "",
@@ -223,7 +258,12 @@ def _clean_model(payload):
             clean[key] = _as_float(value)
         elif key in ("context_window", "max_output_tokens"):
             clean[key] = _as_int(value)
-        elif key in ("supports_tools", "supports_reasoning", "supports_text_tools"):
+        elif key in (
+            "supports_tools",
+            "supports_reasoning",
+            "supports_images",
+            "supports_text_tools",
+        ):
             clean[key] = _as_bool(value)
         elif key == "extra_params":
             clean[key] = _clean_params(value)
@@ -805,10 +845,10 @@ def _legacy_env():
 
 
 def _flat(group, model):
-    """The one-model-per-row shape the engine and the renderer protocol expect."""
+    """Project one stored model into the ModelRow the protocol expects."""
     if not (group and model):
         return None
-    return {
+    row: ModelRow = {
         "id": model["id"],
         "name": model.get("name") or model.get("model") or "",
         "base_url": group.get("base_url", ""),
@@ -826,9 +866,10 @@ def _flat(group, model):
         "provider_id": group["id"],
         "provider_name": group.get("name") or group["id"],
     }
+    return row
 
 
-def list_models(group_id=None):
+def list_models(group_id=None) -> list[ModelRow]:
     """Every model configuration, optionally within a single provider."""
     out = []
     for group in _cached()["providers"]:
@@ -841,12 +882,12 @@ def list_models(group_id=None):
     return out
 
 
-def get_provider(target_id):
+def get_provider(target_id) -> ModelRow | None:
     group, model = _resolve(_cached(), target_id)
     return _flat(group, model)
 
 
-def active_model_entry():
+def active_model_entry() -> ModelRow | None:
     return _flat(*active_pair())
 
 

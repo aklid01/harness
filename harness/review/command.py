@@ -8,8 +8,11 @@ rules can be tested without a model, a workspace or a session.
     /multi-model-review base:main --models mdl-a,mdl-b --severity high
 """
 
+from typing import TypedDict
+
 from . import findings as findings_mod
 from . import scope as scope_mod
+from .config import ReviewerEntry
 
 HELP = """\
 /multi-model-review - run independent reviewer models over the change
@@ -35,7 +38,34 @@ Reviewers never see each other's answers, and a review never edits anything:
 it reads the change and reports what it found."""
 
 
-def new_args(**overrides):
+class ReviewArgs(TypedDict):
+    """The one shape of a review request (see new_args).
+
+    Every writer of review args - the parser, the review card's op, the
+    automatic post-run review - starts from new_args, so a key cannot drift
+    between writers.
+    """
+
+    scope: str
+    base: str
+    models: list
+    focus: str
+    severity: str
+    force: bool
+    json: bool
+    paths: list | None
+    auto: bool
+    offer: bool
+
+
+class ParsedArgs(ReviewArgs):
+    """new_args() plus the parser's own report (parse_args only)."""
+
+    help: bool
+    error: str
+
+
+def new_args(**overrides) -> ReviewArgs:
     """The one shape of a review request, with defaults.
 
     Every writer of review args - this parser, the review card's op, the
@@ -62,7 +92,7 @@ def new_args(**overrides):
     return args
 
 
-def parse_args(text):
+def parse_args(text) -> ParsedArgs:
     """Parse the argument text of the command.
 
     Returns a ``new_args()`` request plus the parser's own ``help`` and
@@ -128,7 +158,7 @@ def parse_args(text):
     return args
 
 
-def models_as_entries(models, focus=""):
+def models_as_entries(models, focus="") -> list[ReviewerEntry]:
     """The --models list as reviewer entries."""
     return [
         {"model_id": model_id, "label": "", "enabled": True, "focus": focus}

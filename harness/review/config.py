@@ -10,9 +10,24 @@ not silently dropped: the settings screen says which one and why, and a run
 says so too.
 """
 
+from typing import TypedDict
+
 from .. import providers
+from . import findings as findings_mod
 
 MODES = ("parallel", "sequential")
+
+# How a review may start after a run that edited files.
+AUTO_RUN = ("off", "offer", "start")
+
+
+class ReviewerEntry(TypedDict):
+    """One configured reviewer, as the engine and the settings screen see it."""
+
+    model_id: str
+    label: str
+    enabled: bool
+    focus: str
 
 DEFAULT_MAX_REVIEWERS = 4
 DEFAULT_MAX_FILES = 40
@@ -90,9 +105,9 @@ def clean_section(raw):
     if isinstance(auto, bool):
         auto = "start" if auto else "off"
     auto = _as_text(auto).lower() or "off"
-    clean["auto_run"] = auto if auto in ("off", "offer", "start") else "off"
+    clean["auto_run"] = auto if auto in AUTO_RUN else "off"
     mode = _as_text(raw.get("mode")) or "parallel"
-    clean["mode"] = mode if mode in ("parallel", "sequential") else "parallel"
+    clean["mode"] = mode if mode in MODES else "parallel"
 
     reviewers = []
     for item in raw.get("reviewers") or []:
@@ -126,7 +141,7 @@ def clean_section(raw):
     )
     threshold = _as_text(raw.get("severity_threshold")) or "low"
     clean["severity_threshold"] = (
-        threshold if threshold in ("blocker", "high", "medium", "low", "nit") else "low"
+        threshold if threshold in findings_mod.SEVERITIES else "low"
     )
     clean["full_context"] = _as_bool(raw.get("full_context"))
 
@@ -154,7 +169,7 @@ def save(section):
     return agent_roles.save(config).get("review", section)
 
 
-def reviewer_entries(config=None):
+def reviewer_entries(config=None) -> list[ReviewerEntry]:
     """The reviewers a user configured, enabled or not."""
     config = config or load()
     entries = []
@@ -175,7 +190,7 @@ def reviewer_entries(config=None):
     return entries
 
 
-def enabled_reviewers(config=None):
+def enabled_reviewers(config=None) -> list[ReviewerEntry]:
     """The reviewers that would run, in the order the user set them."""
     entries = [e for e in reviewer_entries(config) if e["enabled"]]
     limit = int((config or load()).get("max_reviewers") or DEFAULT_MAX_REVIEWERS)
