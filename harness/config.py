@@ -35,7 +35,16 @@ API_KEY = os.environ.get("API_KEY")
 
 MODEL = os.environ.get("MODEL", "deepseek/deepseek-v4-flash")
 
-# How much room the model has, and how we spend it.
-CONTEXT_WINDOW = int(os.environ.get("CONTEXT_WINDOW", 128_000))
+# How much room the model has, and how we spend it. A malformed value falls
+# back to the default at first use rather than killing the engine at import -
+# the same no-key-at-request-time posture as the credentials above.
+def _context_window():
+    try:
+        return int(os.environ.get("CONTEXT_WINDOW", 128_000))
+    except ValueError:
+        return 128_000
+
+
+CONTEXT_WINDOW = _context_window()
 COMPACT_AT = 0.85  # compact once the prompt crosses this much of the window
 COMPACT_TO = 0.35  # and cut back to this much, so it does not retrigger soon

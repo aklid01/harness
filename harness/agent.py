@@ -661,7 +661,7 @@ class Runner:
                     return (
                         None,
                         plan_mod.UNUSABLE,
-                        f"the planner errored ({type(failure).__name__})",
+                        f"the planner errored - {errors_mod.explain(failure)}",
                     )
                 events.emit(events.STATUS, {"active": None})
                 events.emit(events.USAGE, dict(usage))

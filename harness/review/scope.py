@@ -19,7 +19,6 @@ import base64
 import dataclasses
 import difflib
 import os
-import subprocess
 from pathlib import Path
 
 from . import findings as findings_mod
@@ -140,27 +139,15 @@ class Scope:
 def _git(root, args, timeout=20):
     """Run git in ``root`` and return (returncode, stdout).
 
-    Uses an argument list rather than a shell string: a path with a space or
-    a non-ascii character has to survive the trip, and nothing here needs a
-    shell to do it.
-
-    ``core.quotePath=false`` matters: without it git quotes a path that
-    holds a non-ascii character, and the quoted name matches no file - the
-    change would silently drop out of the review.
+    Thin over gitcmd.run; ``core.quotePath=false`` matters: without it git
+    quotes a path that holds a non-ascii character, and the quoted name
+    matches no file - the change would silently drop out of the review.
     """
-    try:
-        result = subprocess.run(
-            ["git", "-c", "core.quotePath=false", *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=str(root),
-            timeout=timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return 1, ""
-    return result.returncode, result.stdout or ""
+    from .. import gitcmd
+
+    return gitcmd.run(
+        root, *args, timeout=timeout, config=("-c", "core.quotePath=false")
+    )
 
 
 def is_repo(root):

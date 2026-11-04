@@ -5,11 +5,10 @@ stays cached.
 """
 
 import hashlib
-import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from . import paths
+from . import gitcmd, paths
 from .todos import todos_prompt
 
 LABELS = {"M": "modified", "D": "deleted", "A": "added", "??": "new"}
@@ -21,19 +20,7 @@ def git(*args):
     Never raises: the injection is best-effort context, and a locked index or
     a disappearing git binary must not kill a turn before the model call.
     """
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=str(paths.project_root()),
-            timeout=10,
-        )
-        return result.stdout or ""
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
+    return gitcmd.run(paths.project_root(), *args)[1]
 
 
 def is_git_worktree():
@@ -43,19 +30,8 @@ def is_git_worktree():
     the model deserves to be told that plainly instead of being handed an
     empty branch name that reads like a detached HEAD.
     """
-    try:
-        probe = subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=str(paths.project_root()),
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return probe.returncode == 0 and probe.stdout.strip() == "true"
+    probe = gitcmd.run(paths.project_root(), "rev-parse", "--is-inside-work-tree")
+    return probe[1].strip() == "true"
 
 
 def file_hash(path):

@@ -17,18 +17,10 @@ from . import attachments as attachments_mod
 
 
 def _git_run(root, *args, timeout=10):
-    import subprocess
+    from . import gitcmd
 
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except Exception:
-        return None
-    return result.stdout.strip() if result.returncode == 0 else None
+    code, out = gitcmd.run(root, *args, timeout=timeout)
+    return out.strip() if code == 0 else None
 
 
 def git_status(root):
