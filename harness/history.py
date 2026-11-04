@@ -74,7 +74,7 @@ def prepare(messages, window=None, tail=TAIL):
     """
 
     limit = (
-        int(window) if int(window or 0) > 0 else config.CONTEXT_WINDOW
+        int(window) if int(window or 0) > 0 else config.context_window()
     ) * config.COMPACT_AT
     if estimate(messages) <= limit:
         return list(messages), ""

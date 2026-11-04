@@ -149,6 +149,7 @@ def main(argv=None):
         scope_context = contextlib.nullcontext()
 
     with scope_context:
+        config_mod.reload()
         settings = dict(review_config.load())
         if args.severity:
             settings["severity_threshold"] = args.severity

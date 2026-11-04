@@ -907,7 +907,7 @@ def active_context_window():
     from . import config
 
     window = active_model_capabilities()["context_window"]
-    return int(window) if window else config.CONTEXT_WINDOW
+    return int(window) if window else config.context_window()
 
 
 def _credential_for(group):
@@ -915,7 +915,7 @@ def _credential_for(group):
     if group is None:
         from . import config
 
-        return config.BASE_URL, config.API_KEY, "legacy-env"
+        return config.base_url(), config.api_key(), "legacy-env"
     secret = _key_for_group(group["id"])
     if secret:
         return group.get("base_url", ""), secret, "keyring"
@@ -935,7 +935,7 @@ def active_config():
     if not (group and model):
         from . import config
 
-        return config.BASE_URL, config.API_KEY, config.MODEL, "legacy-env"
+        return config.base_url(), config.api_key(), config.model(), "legacy-env"
     base_url, api_key, source = _credential_for(group)
     return base_url, api_key, model.get("model", ""), source
 
