@@ -1,0 +1,28 @@
+failures=3 errors=1
+test_an_oversized_request_stubs_and_omits_but_stays_valid (test_history.Prepare.test_an_oversized_request_stubs_and_omits_but_stays_valid)
+Traceback (most recent call last):
+  File "D:\projects\harness\tests\test_history.py", line 137, in test_an_oversized_request_stubs_and_omits_but_stays_valid
+    self.assertTrue(note, "the user is told the request was trimmed")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '' is not true : the user is told the request was trimmed
+
+test_a_capped_result_still_strips (test_history.Strip.test_a_capped_result_still_strips)
+Traceback (most recent call last):
+  File "D:\projects\harness\tests\test_history.py", line 105, in test_a_capped_result_still_strips
+    self.assertEqual(history.strip(messages), 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+test_the_prefix_window_excludes_frozen_history (test_history.Strip.test_the_prefix_window_excludes_frozen_history)
+Traceback (most recent call last):
+  File "D:\projects\harness\tests\test_history.py", line 117, in test_the_prefix_window_excludes_frozen_history
+    self.assertEqual(history.strip(messages), 0)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0
+
+test_cap_without_a_temp_file_still_trims (test_history.TurnSpills.test_cap_without_a_temp_file_still_trims)
+Traceback (most recent call last):
+  File "D:\projects\harness\tests\test_history.py", line 51, in test_cap_without_a_temp_file_still_trims
+    with mock.patch(
+         ^^^^
+NameError: name 'mock' is not defined. Did you mean: 'self.mock'?
