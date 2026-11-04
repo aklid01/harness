@@ -432,6 +432,13 @@ export type OpPayload =
   | { op: "save_provider"; entry: ProviderEntry; key?: string }
   | { op: "delete_provider"; id: string; scope?: "model" | "provider" }
   | { op: "test_provider"; id: string }
+  | {
+      op: "fetch_model_info";
+      model: string;
+      provider_id?: string;
+      base_url?: string;
+      key?: string;
+    }
   | { op: "migrate_keys" }
   | { op: "get_context" }
   | { op: "ws_sessions"; root: string }
@@ -480,5 +487,7 @@ export interface ServerEnvelope {
   ok?: boolean;
   data?: unknown;
   error?: string;
+  /* save_provider only: what the /models backstop auto-configured. */
+  info?: { found: boolean; applied: string[]; note?: string };
   ready?: { project: string; project_root: string };
 }

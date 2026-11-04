@@ -80,6 +80,7 @@ class ModelRow(TypedDict):
     max_output_tokens: int | None
     supports_tools: bool
     supports_reasoning: bool
+    supports_images: bool
     supports_text_tools: bool
     extra_params: dict
     provider_id: str
@@ -861,6 +862,7 @@ def _flat(group, model):
         "max_output_tokens": model.get("max_output_tokens"),
         "supports_tools": bool(model.get("supports_tools", True)),
         "supports_reasoning": bool(model.get("supports_reasoning", True)),
+        "supports_images": bool(model.get("supports_images", True)),
         "supports_text_tools": bool(model.get("supports_text_tools", False)),
         "extra_params": dict(model.get("extra_params") or {}),
         "provider_id": group["id"],
@@ -1228,4 +1230,207 @@ def test_provider(target_id, timeout=20):
     except Exception as failure:  # noqa: BLE001 - the renderer shows this string
         detail = errors_mod.explain(failure, model=model)
         return False, detail
+
+
+# --------------------------------------------------------------- /models info
+
+
+def _first_int(*values):
+    """The first usable positive integer among the candidates, or None."""
+    for value in values:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            return number
+    return None
+
+
+def _normalize_models_entry(raw):
+    """Map one /models entry onto our model fields. Only derivable keys land
+    here; a bare OpenAI-style entry (id/created/owned_by) yields nothing."""
+    if not isinstance(raw, dict):
+        return {}
+    info = {}
+    top = raw.get("top_provider")
+    top = top if isinstance(top, dict) else {}
+    window = _first_int(
+        raw.get("context_length"),
+        raw.get("context_window"),
+        raw.get("max_model_len"),
+        top.get("context_length"),
+    )
+    if window:
+        info["context_window"] = window
+    max_out = _first_int(
+        top.get("max_completion_tokens"),
+        raw.get("max_completion_tokens"),
+        raw.get("max_output_tokens"),
+    )
+    if max_out:
+        info["max_output_tokens"] = max_out
+    name = _text(raw.get("name"))
+    if name and name != raw.get("id"):
+        info["name"] = name
+    arch = raw.get("architecture")
+    arch = arch if isinstance(arch, dict) else {}
+    modalities = raw.get("input_modalities")
+    if modalities is None:
+        modalities = arch.get("input_modalities")
+    if modalities is None:
+        modalities = raw.get("modalities")
+    if isinstance(modalities, (list, tuple)):
+        has_images = any(str(m).lower() == "image" for m in modalities)
+    elif isinstance(modalities, str):
+        has_images = "image" in modalities.lower()
+    else:
+        has_images = None
+    if has_images is False:
+        info["supports_images"] = False
+    params = raw.get("supported_parameters")
+    if isinstance(params, (list, tuple)) and params:
+        lowered = {str(p).lower() for p in params}
+        if not lowered & {"tools", "tool_choice"}:
+            info["supports_tools"] = False
+        if not lowered & {"reasoning", "include_reasoning", "reasoning_effort"}:
+            info["supports_reasoning"] = False
+    return info
+
+
+def _match_models_entry(entries, model_id):
+    """The /models entry for our model id: exact, then case-insensitive."""
+    if not _text(model_id):
+        return None
+    for raw in entries:
+        if isinstance(raw, dict) and raw.get("id") == model_id:
+            return raw
+    lowered = model_id.lower()
+    for raw in entries:
+        if isinstance(raw, dict) and str(raw.get("id", "")).lower() == lowered:
+            return raw
+    return None
+
+
+def apply_model_info(payload, info, include_bools=False):
+    """Fill only the fields the payload left empty, in place. Capability
+    switches move only when asked, and only ever to false. Returns the
+    human-readable labels of what changed."""
+    if not isinstance(info, dict) or not info:
+        return []
+    applied = []
+    if info.get("context_window") and payload.get("context_window") is None:
+        payload["context_window"] = int(info["context_window"])
+        applied.append(f"context window {info['context_window']}")
+    if info.get("max_output_tokens") and payload.get("max_output_tokens") is None:
+        payload["max_output_tokens"] = int(info["max_output_tokens"])
+        applied.append(f"max output {info['max_output_tokens']}")
+    name = _text(info.get("name"))
+    if name and not _text(payload.get("name")):
+        payload["name"] = name
+        applied.append(f'display name "{name}"')
+    if include_bools:
+        for key, label in (
+            ("supports_images", "images off"),
+            ("supports_tools", "tool calling off"),
+            ("supports_reasoning", "reasoning off"),
+        ):
+            if info.get(key) is False and payload.get(key, True):
+                payload[key] = False
+                applied.append(label)
+    return applied
+
+
+def _models_entries(base_url, api_key, timeout):
+    """The raw /models data list. Raises on transport and auth errors."""
+    from openai import OpenAI
+
+    # The SDK refuses an empty api_key at construction time, so a keyless
+    # endpoint (vLLM, Ollama, the fixture) gets a placeholder instead; the
+    # header is ignored where no auth is required.
+    client = OpenAI(
+        base_url=base_url, api_key=api_key or "missing-key", timeout=timeout
+    )
+    return [item.model_dump() for item in client.models.list()]
+
+
+def fetch_model_config(
+    model, provider_id=None, base_url=None, key=None, timeout=6
+):
+    """{found, info, note} for the model-form prefill op. Never raises."""
+    resolved_base = _text(base_url)
+    resolved_key = _text(key)
+    if provider_id:
+        group = _find_group(_cached(), provider_id)
+        if group is not None:
+            if not resolved_base:
+                resolved_base = _text(group.get("base_url"))
+            if not resolved_key:
+                source, secret = _credential_state(group)
+                resolved_key = secret or ""
+    if not _text(model):
+        return {"found": False, "info": None, "note": "no model id to look up"}
+    if not resolved_base:
+        return {"found": False, "info": None, "note": "no base url to query"}
+    try:
+        entries = _models_entries(resolved_base, resolved_key, timeout)
+    except Exception as failure:  # noqa: BLE001 - the renderer shows the note
+        from . import errors as errors_mod
+
+        return {
+            "found": False,
+            "info": None,
+            "note": errors_mod.explain(failure, model=model),
+        }
+    raw = _match_models_entry(entries, model)
+    if raw is None:
+        return {
+            "found": False,
+            "info": None,
+            "note": f"{model} is not in the /models list ({len(entries)} entries)",
+        }
+    return {"found": True, "info": _normalize_models_entry(raw), "note": ""}
+
+
+@_transaction
+def _apply_model_info_saved(target_id, info):
+    data = _cached()
+    group, stored = _resolve(data, target_id)
+    if stored is None:
+        return []
+    applied = apply_model_info(stored, info)
+    if applied:
+        _save(data)
+    return applied
+
+
+def autoconfigure_from_models(target_id, timeout=6):
+    """Save-time backstop: fill the stored model's empty numeric fields from
+    its /models endpoint. Capability switches are never touched here, so a
+    deliberate override survives every edit-save. Never raises."""
+    base_url, api_key, model, source = active_config_for(target_id)
+    if source == "disabled" or not model:
+        return {"found": False, "applied": [], "note": "model unavailable for lookup"}
+    if not base_url:
+        return {"found": False, "applied": [], "note": "no base url to query"}
+    try:
+        entries = _models_entries(base_url, api_key, timeout)
+    except Exception as failure:  # noqa: BLE001 - reported, never fatal here
+        from . import errors as errors_mod
+
+        return {
+            "found": False,
+            "applied": [],
+            "note": errors_mod.explain(failure, model=model),
+        }
+    raw = _match_models_entry(entries, model)
+    if raw is None:
+        return {
+            "found": False,
+            "applied": [],
+            "note": f"no /models metadata for {model}",
+        }
+    info = _normalize_models_entry(raw)
+    applied = _apply_model_info_saved(target_id, info) if info else []
+    return {"found": True, "applied": applied, "note": ""}
 

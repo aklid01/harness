@@ -457,6 +457,10 @@ let settingsRequested = false;
 let settingsLastTab = "models";
 /* Set by the model form while it is open, so a rejected save can re-enable it. */
 let providerFormFailure: ((message: string) => void) | null = null;
+/* The open model form consumes /models lookups through this hook; the save
+   reply carries what the engine's backstop auto-configured for the status line. */
+let modelInfoReply: ((data: ModelInfoResult) => void) | null = null;
+let pendingModelsStatus = "";
 let activeApproval: { ctx: Ctx; id: string } | null = null;
 let pendingRewindCount: number | null = null;
 let popHideTimer: number | null = null;
@@ -2584,6 +2588,7 @@ export function hideModal(): void {
   activeApproval = null;
   modal.classList.add("hidden");
   modalBox.innerHTML = "";
+  modelInfoReply = null;
   modalBackdropBehavior = "close";
   modalBackdropCancel = null;
   modalGuard = null;
@@ -3664,6 +3669,10 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         savePrefs();
         syncEffortFromModel(ctx);
       }
+      // The form is done either way; the backstop note moves to the Models tab.
+      modelInfoReply = null;
+      if (msg.reply === "save_provider" && msg.info?.applied?.length)
+        pendingModelsStatus = `auto-configured from /models: ${msg.info.applied.join(", ")}`;
       send(ctx, { op: "list_providers" });
     } else if (msg.reply === "save_provider") {
       // The form stays open and usable: show why the save was refused rather
@@ -3749,6 +3758,9 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       status.className = `status-line ${msg.ok ? "ok" : "fail"}`;
     }
     send(ctx, { op: "list_providers" });
+  } else if (msg.reply === "fetch_model_info") {
+    if (modelInfoReply && msg.ok && msg.data && typeof msg.data === "object")
+      modelInfoReply(msg.data as ModelInfoResult);
   } else if (msg.reply === "migrate_keys") {
     const status = document.getElementById("setStatus");
     if (status)
@@ -4114,6 +4126,21 @@ interface ProviderFormSnapshot {
   reasoning: boolean;
   images: boolean;
 }
+/* What the provider's /models endpoint told us about one model, already
+   normalized engine-side; only the keys worth prefilling arrive. */
+interface ModelInfo {
+  context_window?: number;
+  max_output_tokens?: number;
+  name?: string;
+  supports_images?: boolean;
+  supports_tools?: boolean;
+  supports_reasoning?: boolean;
+}
+interface ModelInfoResult {
+  found: boolean;
+  info?: ModelInfo | null;
+  note?: string;
+}
 const PROVIDER_FORM_FIELDS = [
   "fProvider",
   "fProviderName",
@@ -4184,6 +4211,7 @@ function providerForm(
       `<div class="set-row"><div class="set-info"><div class="set-label">Reasoning effort parameter</div><div class="set-desc">Turn off for models without a reasoning knob.</div></div><div class="set-ctl"><span id="swReason"></span></div></div>` +
       `<div class="set-row"><div class="set-info"><div class="set-label">Can see images</div><div class="set-desc">Turn off for models that reject image parts; attached images are then delivered as a path only.</div></div><div class="set-ctl"><span id="swImages"></span></div></div>` +
       `<div class="field"><label>Extra parameters (JSON)</label><input id="fExtra" value="${escapeHtml(Object.keys(e["extra_params"] ?? {}).length ? JSON.stringify(e["extra_params"]) : "")}" placeholder='{"top_p":0.9}' aria-describedby="fExtraErr" /><div class="field-err" id="fExtraErr" role="alert" hidden></div></div>` +
+      `<div class="field-note" id="fInfoNote" hidden></div>` +
       `<div class="field-note"><span class="req">*</span> required</div>` +
       `<div class="field-err" id="fFormErr" role="alert" hidden></div>` +
       `<div class="modal-actions"><button class="btn" id="fBack">Back</button><button class="btn primary" id="fSave">Save model</button></div>`,
@@ -4213,6 +4241,96 @@ function providerForm(
     /* no label needed */
   });
   describeTools(tools);
+  // /models prefill: once a model id and a base url exist, ask the engine what
+  // that endpoint publishes about the model and fill the empty fields with it.
+  const infoNote = el<HTMLDivElement>("fInfoNote");
+  const modelInput = el<HTMLInputElement>("fModel");
+  const baseInput = el<HTMLInputElement>("fBase");
+  const keyInput = el<HTMLInputElement>("fKey");
+  const nameInput = el<HTMLInputElement>("fName");
+  const ctxInput = el<HTMLInputElement>("fCtx");
+  const maxInput = el<HTMLInputElement>("fMax");
+  let infoTimer: number | null = null;
+  let lastInfoKey = "";
+  const resolveBase = (): string => {
+    if (providerSelect.value) {
+      const picked = providerGroups.find((g) => g.id === providerSelect.value);
+      return picked?.base_url ?? "";
+    }
+    return baseInput.value.trim();
+  };
+  const flipSwitchOff = (id: string): boolean => {
+    const sw = modalBox.querySelector<HTMLElement>(`#${id}`);
+    if (sw?.classList.contains("on")) {
+      sw.click();
+      return true;
+    }
+    return false;
+  };
+  const applyInfo = (info: ModelInfo): void => {
+    const filled: string[] = [];
+    if (info.context_window && !ctxInput.value.trim()) {
+      ctxInput.value = String(info.context_window);
+      filled.push(`context window ${info.context_window}`);
+    }
+    if (info.max_output_tokens && !maxInput.value.trim()) {
+      maxInput.value = String(info.max_output_tokens);
+      filled.push(`max output ${info.max_output_tokens}`);
+    }
+    if (info.name && !nameInput.value.trim()) {
+      nameInput.value = info.name;
+      filled.push(`name "${info.name}"`);
+    }
+    // Capability switches only move on a brand-new model, and only to off: an
+    // edit form holds the user's own overrides, which stay untouched.
+    if (isNewModel) {
+      if (info.supports_images === false && flipSwitchOff("swImages"))
+        filled.push("images off");
+      if (info.supports_tools === false && flipSwitchOff("swTools"))
+        filled.push("tool calling off");
+      if (info.supports_reasoning === false && flipSwitchOff("swReason"))
+        filled.push("reasoning off");
+    }
+    infoNote.hidden = filled.length === 0;
+    infoNote.textContent = filled.length
+      ? `auto-filled from /models: ${filled.join(", ")}`
+      : "";
+  };
+  modelInfoReply = (data): void => {
+    if (data.found && data.info) applyInfo(data.info);
+    else if (data.note) {
+      infoNote.hidden = false;
+      infoNote.textContent = data.note;
+    }
+  };
+  const maybeFetchInfo = (): void => {
+    const model = modelInput.value.trim();
+    const base = resolveBase();
+    if (!model || !base) {
+      infoNote.hidden = true;
+      return;
+    }
+    const signature = `${base}|${model}|${keyInput.value ? "key" : "nokey"}`;
+    if (signature === lastInfoKey) return;
+    lastInfoKey = signature;
+    infoNote.hidden = true;
+    if (infoTimer !== null) window.clearTimeout(infoTimer);
+    infoTimer = window.setTimeout(() => {
+      infoTimer = null;
+      send(ensureAppCtx(), {
+        op: "fetch_model_info",
+        model,
+        provider_id: providerSelect.value || undefined,
+        base_url: providerSelect.value ? undefined : base,
+        key: keyInput.value || undefined,
+      });
+    }, 400);
+  };
+  modelInput.addEventListener("change", maybeFetchInfo);
+  modelInput.addEventListener("blur", maybeFetchInfo);
+  baseInput.addEventListener("change", maybeFetchInfo);
+  keyInput.addEventListener("change", maybeFetchInfo);
+  providerSelect.addEventListener("change", maybeFetchInfo);
   el<HTMLButtonElement>("fBack").onclick = () => {
     settingsRequested = true;
     settingsLastTab = "models";
@@ -4483,6 +4601,7 @@ const SETTINGS_TABS = [
 ];
 export function openSettings(tab = settingsLastTab): void {
   settingsLastTab = tab;
+  modelInfoReply = null; // the form that owned the hook is about to be replaced
   // showModal resets the size and the backdrop behaviour, so a stale setting
   // from a dialog that was just closed cannot leak into Settings.
   showModal(
@@ -4601,6 +4720,12 @@ function settingsModels(): [string, () => void] {
     `<div class="set-row"><div class="set-info"><div class="set-label">Reasoning effort for new workspaces</div><div class="set-desc">Each model keeps its own effort; switching models loads that model's setting.</div></div><div class="set-ctl"><select class="sel-inline" id="defEffort">${EFFORTS.map((e) => `<option${e === prefs.effortGlobal ? " selected" : ""}>${e}</option>`).join("")}</select></div></div>`;
   const wire = (): void => {
     const body = el<HTMLDivElement>("settingsBody");
+    if (pendingModelsStatus) {
+      const status = el<HTMLDivElement>("setStatus");
+      status.textContent = pendingModelsStatus;
+      status.className = "status-line ok";
+      pendingModelsStatus = "";
+    }
     body.querySelectorAll("[data-act]").forEach((b) => {
       (b as HTMLButtonElement).onclick = () => {
         settingsRequested = true;

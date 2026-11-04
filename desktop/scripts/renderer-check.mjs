@@ -95,6 +95,37 @@ const writeFixture = (revision) => ({
 });
 function startLiveFixture() {
   const server = http.createServer((req, res) => {
+    /* The /models lookup for the auto-configuration scenarios: live-model gets
+       OpenRouter-style metadata, writer-model the Groq-style context_window. */
+    if (req.method === "GET" && (req.url ?? "").endsWith("/models")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          object: "list",
+          data: [
+            {
+              id: "live-model",
+              object: "model",
+              created: 1,
+              owned_by: "fixture",
+              name: "Live Fixture Model",
+              context_length: 131072,
+              top_provider: { max_completion_tokens: 16384 },
+              architecture: { input_modalities: ["text"] },
+              supported_parameters: ["temperature", "top_p"],
+            },
+            {
+              id: "writer-model",
+              object: "model",
+              created: 1,
+              owned_by: "fixture",
+              context_window: 8192,
+            },
+          ],
+        }),
+      );
+      return;
+    }
     if (req.method !== "POST") {
       res.writeHead(404).end();
       return;
@@ -2182,6 +2213,157 @@ try {
       fs.existsSync(path.join(WS_ROOT, "README.md")),
     );
   }
+
+  /* The composer effort menu must offer the new max level. */
+  await evaluate(ws, `document.getElementById("effortBtn")?.click()`);
+  await sleep(200);
+  const effortItems = await evaluate(
+    ws,
+    `[...document.querySelectorAll("#effortMenu button .m-label")].map((b) => b.textContent)`,
+  );
+  verdict(
+    "effort-menu-offers-max",
+    effortItems.includes("max"),
+    JSON.stringify(effortItems),
+  );
+  await evaluate(ws, `document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))`);
+  await sleep(300);
+
+  /* Settings > Models: /models auto-configuration against the scripted
+     endpoint. First the form prefill (metadata fills the empty fields while
+     the model id is typed), then the save backstop (a model saved without
+     waiting still gets its empty fields filled engine-side). Neither scenario
+     types a key: the fixture's /models needs none, and the engine's .env
+     borrow covers the backstop, so no keyring residue is left behind. */
+  await evaluate(ws, `document.getElementById("btnSettings")?.click()`);
+  await sleep(400);
+  await evaluate(
+    ws,
+    `document.querySelector(".settings-nav [data-nav='models']")?.click()`,
+  );
+  await sleep(300);
+  await evaluate(ws, `document.getElementById("mAdd")?.click()`);
+  await sleep(200);
+  await evaluate(
+    ws,
+    `(() => {
+  const set = (id, v) => {
+    const input = document.getElementById(id);
+    input.value = v;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  set("fProviderName", "Fixture Models");
+  set("fBase", ${JSON.stringify(ENDPOINT)});
+  set("fModel", "live-model");
+  document.getElementById("fModel").dispatchEvent(new Event("blur"));
+  return true;
+})()`,
+  );
+  let prefill = {};
+  for (let i = 0; i < 15; i++) {
+    await sleep(400);
+    prefill = await evaluate(
+      ws,
+      `(() => {
+  const val = (id) => document.getElementById(id)?.value ?? "";
+  const note = document.getElementById("fInfoNote");
+  return {
+    name: val("fName"),
+    ctx: val("fCtx"),
+    max: val("fMax"),
+    note: note?.textContent ?? "",
+    noteShown: !note?.hidden,
+    imagesOn: document.querySelector("#swImages")?.classList.contains("on"),
+    toolsOn: document.querySelector("#swTools")?.classList.contains("on"),
+  };
+})()`,
+    );
+    if (prefill.noteShown) break;
+  }
+  verdict(
+    "models-form-prefills-from-endpoint",
+    prefill.ctx === "131072" &&
+      prefill.max === "16384" &&
+      prefill.name === "Live Fixture Model" &&
+      prefill.imagesOn === false &&
+      prefill.toolsOn === false &&
+      /auto-filled from \/models/.test(prefill.note),
+    JSON.stringify(prefill),
+  );
+  // The user can override the prefill before saving: nothing re-fetches while
+  // the fields keep their values, so an edited window stays as typed.
+  await evaluate(
+    ws,
+    `(() => {
+  const ctx = document.getElementById("fCtx");
+  ctx.value = "999";
+  ctx.dispatchEvent(new Event("input", { bubbles: true }));
+  document.getElementById("fModel").dispatchEvent(new Event("blur"));
+  return true;
+})()`,
+  );
+  await sleep(1200);
+  const overridden = await evaluate(
+    ws,
+    `document.getElementById("fCtx")?.value ?? ""`,
+  );
+  verdict("models-prefill-is-overridable", overridden === "999", `ctx=${overridden}`);
+  // Back to Settings > Models, then add a second model and save it without
+  // waiting for the prefill: the engine backstop must fill the rest.
+  await evaluate(ws, `document.getElementById("fBack")?.click()`);
+  await sleep(800);
+  await evaluate(ws, `document.getElementById("mAdd")?.click()`);
+  await sleep(200);
+  await evaluate(
+    ws,
+    `(() => {
+  const set = (id, v) => {
+    const input = document.getElementById(id);
+    input.value = v;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  set("fProviderName", "Fixture Models");
+  set("fBase", ${JSON.stringify(ENDPOINT)});
+  set("fModel", "writer-model");
+  return true;
+})()`,
+  );
+  await evaluate(ws, `document.getElementById("fSave")?.click()`);
+  let backstop = {};
+  for (let i = 0; i < 15; i++) {
+    await sleep(400);
+    backstop = await evaluate(
+      ws,
+      `(() => {
+  const status = document.getElementById("setStatus");
+  const formErr = document.getElementById("fFormErr");
+  const group = [...document.querySelectorAll(".prov-group")].find((g) =>
+    g.querySelector(".pg-name")?.textContent.includes("Fixture Models"),
+  );
+  const row = group
+    ? [...group.querySelectorAll(".prov-table tr")].find((r) =>
+        r.textContent.includes("writer-model"),
+      )
+    : null;
+  return {
+    status: status?.textContent ?? "",
+    statusOk: status?.classList.contains("ok") ?? false,
+    formErr: formErr && !formErr.hidden ? formErr.textContent : "",
+    rowTags: row ? [...row.querySelectorAll(".tag")].map((t) => t.textContent) : [],
+  };
+})()`,
+    );
+    if (backstop.rowTags.some((t) => t.includes("k ctx"))) break;
+  }
+  verdict(
+    "models-backstop-fills-on-save",
+    backstop.rowTags.includes("8k ctx") &&
+      backstop.statusOk &&
+      /auto-configured from \/models: context window 8192/.test(backstop.status),
+    JSON.stringify(backstop),
+  );
 
   ws.close();
 } catch (err) {

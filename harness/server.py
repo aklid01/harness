@@ -884,6 +884,7 @@ class Harness:
             "save_provider",
             "delete_provider",
             "test_provider",
+            "fetch_model_info",
             "migrate_keys",
         ):
             return _reply(self._provider_op(op, obj))
@@ -1251,11 +1252,23 @@ class Harness:
                 providers_mod.set_key(stored["id"], obj["key"])
             if not providers_mod.get_active_model_id():
                 providers_mod.set_active(stored["id"])
+            # Backstop auto-config: fill whatever the form left empty from the
+            # provider's /models endpoint. Best effort; never blocks the save.
+            info = providers_mod.autoconfigure_from_models(stored["id"])
             return {
                 "reply": op,
                 "ok": True,
                 "data": providers_mod.get_provider(stored["id"]),
+                "info": info,
             }
+        if op == "fetch_model_info":
+            info = providers_mod.fetch_model_config(
+                model=obj.get("model", ""),
+                provider_id=obj.get("provider_id") or None,
+                base_url=obj.get("base_url") or None,
+                key=obj.get("key") or None,
+            )
+            return {"reply": op, "ok": True, "data": info}
         if op == "delete_provider":
             target = obj.get("id", "")
             if obj.get("scope") == "provider":
