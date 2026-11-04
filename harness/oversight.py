@@ -73,7 +73,7 @@ def decision_risk(name, args, touched=()):
     if name not in REVIEWABLE:
         return None
     if name in ("write_file", "str_replace"):
-        if str(args.get("path") or "") in touched and _small_edit(name, args):
+        if str(args.get("path") or "") in touched and _within_small_edit_budget(name, args):
             return "medium"
         return "high"
     if name == "bash":
@@ -81,7 +81,7 @@ def decision_risk(name, args, touched=()):
     return None
 
 
-def _small_edit(name, args):
+def _within_small_edit_budget(name, args):
     if name == "str_replace":
         size = len(str(args.get("old_str") or "")) + len(str(args.get("new_str") or ""))
     else:
@@ -92,7 +92,7 @@ def _small_edit(name, args):
 def is_small_edit(name, args):
     """Would this call count as a small follow-up? The per-file review-once
     rule lets these ride on an earlier verdict; anything bigger re-reviews."""
-    return name in ("write_file", "str_replace") and _small_edit(name, args)
+    return name in ("write_file", "str_replace") and _within_small_edit_budget(name, args)
 
 
 def min_review_risk(intensity):
