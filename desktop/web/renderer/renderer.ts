@@ -24,6 +24,8 @@ import type {
   PendingKind,
   PhaseEventPayload,
   PlanEventPayload,
+  IntentEventPayload,
+  AutoPlanEventPayload,
   PlanRecord,
   ProviderEntry,
   ProviderGroup,
@@ -124,10 +126,8 @@ interface Prefs {
   reduceMotion: boolean;
   rightPanel: boolean;
   confirmProtected: boolean;
-  defaultMode: Mode;
   defaultMidTurn: PendingKind;
   showThinking: boolean;
-  modeByWs: Record<string, Mode>;
   effortGlobal: string;
   effortByWs: Record<string, string>;
   providerByWs: Record<string, string>;
@@ -142,28 +142,46 @@ const DEFAULT_PREFS: Prefs = {
   reduceMotion: false,
   rightPanel: false,
   confirmProtected: true,
-  defaultMode: "build",
   defaultMidTurn: "queue",
   showThinking: true,
-  modeByWs: {},
   effortGlobal: "default",
   effortByWs: {},
   providerByWs: {},
   lastSessionByWs: {},
   tabsByWs: {},
 };
+/* Sessions whose old tab ref carried a mode from the removed selector: the
+   sticky equivalent is restored once, engine-side, when the session opens. */
+const legacyTabModes = new Map<string, Mode>();
 function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     if (!raw) return { ...DEFAULT_PREFS };
-    const saved = JSON.parse(raw) as Partial<Prefs>;
+    const saved = JSON.parse(raw) as Record<string, unknown>;
+    // The old selector's per-workspace and default modes are gone; a saved
+    // tab's mode maps to the sticky equivalent (plan-build becomes build).
+    const tabs = (saved["tabsByWs"] as Record<string, TabRef[]> | undefined) ?? {};
+    for (const refs of Object.values(tabs)) {
+      for (const ref of Array.isArray(refs) ? refs : []) {
+        const raw = ref as unknown as Record<string, unknown>;
+        const old = raw["mode"];
+        const sid = raw["session_id"];
+        if (typeof old === "string" && typeof sid === "string" && sid) {
+          if (old === "plan" || old === "ask")
+            legacyTabModes.set(sid, old as Mode);
+        }
+        delete raw["mode"];
+      }
+    }
+    delete saved["defaultMode"];
+    delete saved["modeByWs"];
     return {
       ...DEFAULT_PREFS,
-      ...saved,
-      effortByWs: saved.effortByWs ?? {},
-      providerByWs: saved.providerByWs ?? {},
-      lastSessionByWs: saved.lastSessionByWs ?? {},
-      tabsByWs: saved.tabsByWs ?? {},
+      ...(saved as Partial<Prefs>),
+      effortByWs: (saved["effortByWs"] as Prefs["effortByWs"]) ?? {},
+      providerByWs: (saved["providerByWs"] as Prefs["providerByWs"]) ?? {},
+      lastSessionByWs: (saved["lastSessionByWs"] as Prefs["lastSessionByWs"]) ?? {},
+      tabsByWs: tabs,
     };
   } catch {
     return { ...DEFAULT_PREFS };
@@ -229,9 +247,9 @@ const usageBox = el<HTMLDivElement>("usage");
 const contextBox = el<HTMLDivElement>("context");
 const connBox = el<HTMLSpanElement>("conn");
 const connText = el<HTMLSpanElement>("connText");
-const modeBtn = el<HTMLButtonElement>("modeBtn");
-const modeLabel = el<HTMLSpanElement>("modeLabel");
-const modeMenu = el<HTMLDivElement>("modeMenu");
+const modeChip = el<HTMLButtonElement>("modeChip");
+const modeChipLabel = el<HTMLSpanElement>("modeChipLabel");
+const cmdMenu = el<HTMLDivElement>("cmdMenu");
 const providerBtn = el<HTMLButtonElement>("providerBtn");
 const providerLabel = el<HTMLSpanElement>("providerLabel");
 const providerMenu = el<HTMLDivElement>("providerMenu");
@@ -278,9 +296,9 @@ const REQUIRED_IDS = [
   "context",
   "conn",
   "connText",
-  "modeBtn",
-  "modeLabel",
-  "modeMenu",
+  "modeChip",
+  "modeChipLabel",
+  "cmdMenu",
   "providerBtn",
   "providerLabel",
   "providerMenu",
@@ -342,7 +360,12 @@ export interface Ctx {
   draft: boolean;
   totals: Record<string, number>;
   planItems: TodoItem[];
-  modeVal: Mode;
+  stickyMode: Mode;
+  autoPlanReason: string | null;
+  /* A plan is ready and awaiting its one-action handoff: shown once the
+     plan's own turn has ended (the gate modal handles it mid-turn). */
+  pendingPlan: boolean;
+  pendingPlanAuto: boolean;
   providerId: string | null;
   effortVal: string;
   permsVal: string;
@@ -377,6 +400,7 @@ export interface Ctx {
   review: ReviewView | null;
   phaseEl: string | null;
   phaseCard: HTMLDivElement | null;
+  planActions: HTMLDivElement | null;
   retryTick: RetryTick | null;
   retryTimer: number | null;
   streamPre: HTMLDivElement | null;
@@ -423,7 +447,14 @@ let providerMigration: string[] = [];
 export const providerById = new Map<string, ProviderEntry>();
 export let agentConfig: AgentConfig | null = null;
 const DEFAULT_AGENT_CONFIG: AgentConfig = {
-  plan: { enabled: false, model_id: "", instructions: "" },
+  plan: {
+    enabled: false,
+    model_id: "",
+    instructions: "",
+    approve: true,
+    auto: true,
+    sensitivity: "balanced",
+  },
   build: { enabled: false, model_id: "", instructions: "" },
   oversight: {
     enabled: false,
@@ -453,6 +484,11 @@ const OVERSIGHT_INTENSITIES = [
   { value: "medium", label: "Medium - edits and risky shell" },
   { value: "high", label: "High - nearly every action" },
 ];
+const PLAN_SENSITIVITIES = [
+  { value: "conservative", label: "Conservative - plan only on real ambiguity" },
+  { value: "balanced", label: "Balanced - plan when rework is likely" },
+  { value: "eager", label: "Eager - plan at the first material doubt" },
+];
 let settingsRequested = false;
 let settingsLastTab = "models";
 /* Set by the model form while it is open, so a rejected save can re-enable it. */
@@ -467,21 +503,30 @@ let pendingRewindCount: number | null = null;
 let popHideTimer: number | null = null;
 
 const EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"];
-const MODE_OPTIONS: Array<{ label: string; value: Mode }> = [
-  { label: "Build", value: "build" },
-  { label: "Ask", value: "ask" },
-  { label: "Plan", value: "plan" },
-  { label: "Plan → Build", value: "plan-build" },
-];
-const MODE_LABELS: Record<Mode, string> = {
-  build: "Build",
+/* The mode chip: what a session's sticky mode reads as. Build is the default
+   and shows nothing; /plan, /ask and the engine's auto-plan show here. */
+const MODE_CHIP_TEXT: Record<Mode, string> = {
+  build: "",
   ask: "Ask",
   plan: "Plan",
-  "plan-build": "Plan → Build",
 };
-function modeLabelText(mode: Mode): string {
-  return MODE_LABELS[mode] ?? "Build";
-}
+/* Slash commands, for the composer autocomplete. The engine owns the truth
+   (harness/commands.py); these one-liners mirror it for the popup. */
+const COMMAND_HELP: Array<{ cmd: string; help: string }> = [
+  { cmd: "/plan", help: "plan this turn, read-only (alone: plan until /build)" },
+  { cmd: "/ask", help: "answer this turn, read-only (alone: ask until /build)" },
+  { cmd: "/build", help: "build now, the default (alone: leave plan or ask)" },
+  { cmd: "/rewind", help: "jump back to an earlier point in this chat" },
+  { cmd: "/sessions", help: "open a past chat" },
+  {
+    cmd: "/compact",
+    help: "summarise the history so far and free up the context window",
+  },
+  {
+    cmd: "/multi-model-review",
+    help: "have independent reviewer models critique the change",
+  },
+];
 const PERMS: Array<{ label: string; value: string }> = [
   { label: "Default", value: "default" },
   { label: "Strict", value: "strict" },
@@ -554,7 +599,10 @@ function makeCtx(
     draft: false,
     totals: {},
     planItems: [],
-    modeVal: prefs.modeByWs[root] ?? prefs.defaultMode,
+    stickyMode: "build",
+    autoPlanReason: null,
+    pendingPlan: false,
+    pendingPlanAuto: false,
     providerId: null,
     effortVal: prefs.effortGlobal,
     permsVal: "default",
@@ -583,6 +631,7 @@ function makeCtx(
     retryTimer: null,
     phaseEl: null,
     phaseCard: null,
+    planActions: null,
     streamPre: null,
     streamWrap: null,
     streamText: [],
@@ -816,10 +865,6 @@ function setBusy(ctx: Ctx, value: boolean): void {
     updateSendState();
     setStatusState(value ? "working" : "ready");
     renderTabs();
-    // The mode control locks for the whole turn; an open menu would keep
-    // offering options the guard below refuses, so close it now.
-    if (value && !modeMenu.classList.contains("hidden")) closeAllMenus();
-    refreshModeIndicator();
   }
   // The steer/queue affordance only exists while a turn runs; it follows the
   // tab that owns the turn, since the composer is shared between tabs.
@@ -1218,7 +1263,7 @@ function showThinking(ctx: Ctx): void {
   if (ctx.thinking || ctx.streamPre) return;
   ctx.thinking = document.createElement("div");
   ctx.thinking.className = "note thinking";
-  ctx.thinking.innerHTML = `<span class="spin"></span><span>thinking… [${modeLabelText(ctx.modeVal)}]</span>`;
+  ctx.thinking.innerHTML = `<span class="spin"></span><span>thinking…</span>`;
   ctx.chatBody.appendChild(ctx.thinking);
   scrollBottom(ctx);
 }
@@ -1297,6 +1342,42 @@ function addPlanCard(ctx: Ctx, text: string): void {
   ctx.chatBody.appendChild(wrap);
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
+}
+/* The one-action handoff under a plan that already ended its turn: an
+   explicit /plan, an automatic plan, or a session reopened with a plan still
+   waiting. Approve builds it once; skip and cancel dismiss it. */
+function addPlanActions(ctx: Ctx, auto: boolean): void {
+  removePlanActions(ctx);
+  const bar = document.createElement("div");
+  bar.className = "plan-actions" + (auto ? " auto" : "");
+  const tag = auto
+    ? "Plan mode entered automatically - nothing has been changed."
+    : "Approve to build this plan.";
+  bar.innerHTML =
+    `<span class="plan-actions-tag">${escapeHtml(tag)}</span>` +
+    `<div class="modal-actions inline">` +
+    `<button class="btn primary" data-act="approve">Approve &amp; build</button>` +
+    `<button class="btn" data-act="skip">Skip planning</button>` +
+    `<button class="btn danger" data-act="cancel">Cancel</button>` +
+    `</div>`;
+  for (const btn of Array.from(bar.querySelectorAll("button"))) {
+    btn.onclick = () => {
+      const act = btn.getAttribute("data-act") as
+        | "approve"
+        | "skip"
+        | "cancel";
+      send(ctx, { op: "plan_action", action: act });
+      removePlanActions(ctx);
+    };
+  }
+  ctx.chatBody.appendChild(bar);
+  ctx.planActions = bar;
+  updateEmptyStateOnly(ctx);
+  scrollBottom(ctx);
+}
+function removePlanActions(ctx: Ctx): void {
+  if (ctx.planActions && ctx.planActions.isConnected) ctx.planActions.remove();
+  ctx.planActions = null;
 }
 /* Decision Oversight status. Kept compact so internal review chatter does not
    flood the transcript: a review in progress is a status update, while a
@@ -1615,7 +1696,6 @@ function retryFailedRequest(ctx: Ctx): void {
       op: "retry",
       count: info.count,
       text: info.text,
-      mode: ctx.modeVal,
     })
   ) {
     setActivity("retry failed - engine busy");
@@ -1816,6 +1896,7 @@ function renderTranscript(
   ctx.thinkWrap = null;
   ctx.thinkBody = null;
   ctx.thinkText = [];
+  ctx.planActions = null;
   const results = new Map<string, string>();
   for (const m of messages)
     if (m["role"] === "tool" && typeof m["tool_call_id"] === "string")
@@ -1885,6 +1966,9 @@ function renderTranscript(
   // The review card is not part of the transcript either: it is built from
   // the saved report, so a rebuild of the body has to put it back too.
   if (ctx.reviewCard) ctx.chatBody.appendChild(ctx.reviewCard);
+  // The plan's one-action handoff is not part of the transcript either: a
+  // plan that still awaits its decision gets its bar back after a rebuild.
+  if (ctx.pendingPlan && !ctx.busy) addPlanActions(ctx, ctx.pendingPlanAuto);
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
 }
@@ -2101,13 +2185,11 @@ function renderActive(): void {
   renderPlan(ctx);
   renderUsage(ctx);
   renderContext(ctx);
-  modeLabel.textContent = modeLabelText(ctx.modeVal);
-  statusMode.textContent = modeLabelText(ctx.modeVal);
+  refreshModeChip();
   effortLabel.textContent = ctx.effortVal;
   permsLabel.textContent =
     PERMS.find((p) => p.value === ctx.permsVal)?.label ?? ctx.permsVal;
   refreshModelButton();
-  renderMenu(modeMenu, MODE_OPTIONS, ctx.modeVal, (v) => pickMode(ctx, v));
   renderMenu(
     effortMenu,
     EFFORTS.map((e) => ({ label: e, value: e })),
@@ -2161,14 +2243,14 @@ function issueOpen(ctx: Ctx): void {
     return;
   }
   if (intent === "session") {
-    send(ctx, { op: "open", id: openId ?? "", mode: ctx.modeVal });
+    send(ctx, { op: "open", id: openId ?? "" });
     return;
   }
   // resume: use the remembered session, else fall back to the workspace's most
   // recent session once the list arrives (never a fresh blank if history exists).
   const last = prefs.lastSessionByWs[ctx.root];
   if (last) {
-    send(ctx, { op: "open", id: last, mode: ctx.modeVal });
+    send(ctx, { op: "open", id: last });
     return;
   }
   ctx.pendingResume = true;
@@ -2272,7 +2354,6 @@ function persistTabs(changedRoot?: string): void {
     refs.push({
       session_id: t.sessionId,
       title: t.sessionTitle,
-      mode: t.modeVal,
       dirty:
         t === activeCtx
           ? Boolean(entry.value.trim())
@@ -2511,7 +2592,7 @@ function resumeIfNeeded(ctx: Ctx, list: SessionListItem[]): void {
     ctx.pendingOpenSessionId = null;
     if (ids.has(openId)) {
       collapsedWs.delete(ctx.root);
-      send(ctx, { op: "open", id: openId, mode: ctx.modeVal });
+      send(ctx, { op: "open", id: openId });
       return;
     }
   }
@@ -2519,7 +2600,7 @@ function resumeIfNeeded(ctx: Ctx, list: SessionListItem[]): void {
     ctx.pendingResume = false;
     if (ctx.sessionId) return;
     const newest = list[0]?.id;
-    send(ctx, { op: "open", id: newest ?? "", mode: ctx.modeVal });
+    send(ctx, { op: "open", id: newest ?? "" });
   }
 }
 function applyWorkspacePrefs(ctx: Ctx): void {
@@ -2540,6 +2621,8 @@ function clearWorkspaceUI(ctx: Ctx): void {
   ctx.pendingRewind = null;
   ctx.pendingText = null;
   ctx.pendingOpenSessionId = null;
+  ctx.planActions = null;
+  ctx.autoPlanReason = null;
   updateEmptyStateOnly(ctx);
   if (ctx === activeCtx) {
     renderPlan(ctx);
@@ -2735,7 +2818,8 @@ function removeWorkspace(ws: WorkspaceRef): void {
   delete prefs.effortByWs[ws.root];
   delete prefs.providerByWs[ws.root];
   delete prefs.lastSessionByWs[ws.root];
-  delete prefs.modeByWs[ws.root];
+  // The old per-workspace mode pref is gone with the selector; nothing to
+  // clear here any more.
   delete prefs.tabsByWs[ws.root];
   window.harness?.forgetWorkspace(ws.root);
   savePrefs();
@@ -2800,19 +2884,21 @@ function askApproval(
   risk = "",
   riskReason = "",
 ): void {
-  // A plan review is not a tool permission: it asks whether to build, with the
-  // full plan shown, Build/Skip instead of Allow/Deny. Enter builds, Esc skips,
-  // both through the same activeApproval keyboard path.
+  // A plan review is not a tool permission: it asks what to do with a
+  // finished plan - build it with the plan as context, skip planning and
+  // build now, or cancel (nothing built). Enter builds, Esc cancels, both
+  // through the same activeApproval keyboard path.
   if (tool === "plan") {
     showModal(
       `<h3>Build this plan?</h3>` +
         `<div class="perm-label">Plan</div><div class="plan-approve assistant">${renderMarkdown(why || reason)}</div>` +
-        `<div class="perm-hint">Enter to build · Esc to skip. If you skip, the plan stays here and nothing is built.</div>` +
-        `<div class="modal-actions"><button class="btn danger" id="mDeny">Skip</button><button class="btn primary" id="mAllow">Build</button></div>`,
+        `<div class="perm-hint">Enter to build · Esc to cancel. Skip builds now without the plan; cancel keeps the plan and builds nothing.</div>` +
+        `<div class="modal-actions"><button class="btn danger" id="mDeny">Cancel</button><button class="btn" id="mSkip">Skip planning</button><button class="btn primary" id="mAllow">Build</button></div>`,
       "keep",
     );
     const allow = el<HTMLButtonElement>("mAllow");
     allow.onclick = () => resolveApproval(ctx, id, true);
+    el<HTMLButtonElement>("mSkip").onclick = () => resolveApprovalSkip(ctx, id);
     el<HTMLButtonElement>("mDeny").onclick = () =>
       resolveApproval(ctx, id, false);
     activeApproval = { ctx, id };
@@ -2850,6 +2936,11 @@ function askApproval(
 function resolveApproval(ctx: Ctx, id: string, allow: boolean): void {
   activeApproval = null;
   send(ctx, { op: "approval_reply", id, allow });
+  hideModal();
+}
+function resolveApprovalSkip(ctx: Ctx, id: string): void {
+  activeApproval = null;
+  send(ctx, { op: "approval_reply", id, allow: false, choice: "skip" });
   hideModal();
 }
 
@@ -3085,7 +3176,7 @@ function doSubmit(ctx: Ctx, text: string): void {
   updateSendState();
   setBusy(ctx, true);
   showThinking(ctx);
-  send(ctx, { op: "submit", text, mode: ctx.modeVal, attachments: files });
+  send(ctx, { op: "submit", text, attachments: files });
 }
 
 /* The files the user attached, taken off the composer. They travel with this
@@ -3136,7 +3227,6 @@ function submit(ctx: Ctx, text: string): void {
         op: "resend",
         count: idx,
         text: trimmed,
-        mode: ctx.modeVal,
         attachments: files,
       })
     )
@@ -3400,6 +3490,17 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         // in memory.
         if (first) persistTabs(ctx.root);
         ctx.sessionTitle = "New Session";
+        // The session comes back in the mode it was left in; a tab saved by
+        // the old selector restores its equivalent once, engine-side.
+        ctx.stickyMode = (p["mode"] as Mode) ?? "build";
+        ctx.autoPlanReason = null;
+        if (id && legacyTabModes.has(id)) {
+          const restored = legacyTabModes.get(id)!;
+          legacyTabModes.delete(id);
+          if (restored !== ctx.stickyMode)
+            send(ctx, { op: "set_mode", mode: restored });
+          ctx.stickyMode = restored;
+        }
         // The pending strip rides along with the session payload, so a tab
         // that reattaches mid-conversation still sees what it filed.
         ctx.pendingItems = normPendingItems(p["pending"]);
@@ -3411,6 +3512,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
           (p["messages"] as Array<Record<string, unknown>>) ?? [],
         );
         renderPendingStrip(ctx);
+        if (ctx === activeCtx) refreshModeChip();
         primeContext(ctx);
         // A saved review comes back with the session: reopening a chat
         // restores the card, the report and the dismissed findings.
@@ -3468,17 +3570,25 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         } else if (pl.status === "ready") {
           hideThinking(ctx);
           if (ctx === activeCtx) setActivity("Plan ready");
-          addPlanCard(ctx, String(pl.plan ?? ""));
+          if (pl.inline) {
+            // The plan is the turn's own final message (an explicit /plan or
+            // an automatic plan). The one-action handoff appears when the
+            // turn ends - mid-turn, the approval modal is the affordance.
+            ctx.pendingPlan = true;
+            ctx.pendingPlanAuto = !!pl.auto;
+          } else {
+            addPlanCard(ctx, String(pl.plan ?? ""));
+          }
         } else if (pl.status === "failed") {
-          // Recoverable: planning ran out after its bounded attempts and built
-          // nothing. A note, not a red error card, so it never contradicts a
-          // plan the user can see is actually there.
+          // Recoverable: planning produced nothing usable and built nothing.
+          // A note, not a red error card, so it never contradicts a plan the
+          // user can see is actually there.
           hideThinking(ctx);
           if (ctx === activeCtx)
             setActivity("Planning could not produce a usable plan");
           addNote(
             ctx,
-            `Planning did not produce a usable plan${pl.reason ? ` (${pl.reason})` : ""}. Nothing was built - retry, refine the request, or use Build mode directly.`,
+            `Planning did not produce a usable plan${pl.reason ? ` (${pl.reason})` : ""}. Nothing was built - retry, refine the request, or send it again to build.`,
           );
         } else {
           hideThinking(ctx);
@@ -3491,6 +3601,36 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         }
         break;
       }
+      case "intent": {
+        const it = p as unknown as IntentEventPayload;
+        // Only a session-mode change moves the chip; a one-turn /plan or
+        // /ask binds that turn alone, and the engine already said so in the
+        // transcript (mode notice, phase).
+        if (it.sticky) {
+          ctx.stickyMode = it.intent;
+          ctx.autoPlanReason = null;
+          if (ctx === activeCtx) refreshModeChip();
+        }
+        break;
+      }
+      case "auto_plan": {
+        const ap = p as unknown as AutoPlanEventPayload;
+        ctx.autoPlanReason = String(ap.reason ?? "");
+        if (ctx === activeCtx) refreshModeChip();
+        break;
+      }
+      case "plan_approved":
+        ctx.autoPlanReason = null;
+        ctx.pendingPlan = false;
+        removePlanActions(ctx);
+        if (ctx === activeCtx) refreshModeChip();
+        break;
+      case "plan_skipped":
+        ctx.autoPlanReason = null;
+        ctx.pendingPlan = false;
+        removePlanActions(ctx);
+        if (ctx === activeCtx) refreshModeChip();
+        break;
       case "decision": {
         clearRetryCard(ctx);
         const d = p as unknown as DecisionEventPayload;
@@ -3500,16 +3640,26 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       case "phase": {
         const ph = p as unknown as PhaseEventPayload;
         showPhase(ctx, ph.phase);
+        // The plan is being built: its handoff was decided (approved, or not
+        // required), so no plan action bar when the turn ends.
+        if (ph.phase === "handing_off") ctx.pendingPlan = false;
         if (ctx === activeCtx) {
           statusMode.textContent = ph.phase
             ? (PHASE_SHORT[ph.phase] ?? ph.phase)
-            : modeLabelText(ctx.modeVal);
+            : "";
         }
         break;
       }
       case "done":
         setBusy(ctx, false);
         showPhase(ctx, null);
+        // The turn is over: an open automatic plan is no longer pending (it
+        // was approved, skipped or cancelled during the turn), so the chip
+        // returns to whatever the sticky mode says. A plan that still awaits
+        // its handoff (an explicit /plan) gets its one-action bar now.
+        ctx.autoPlanReason = null;
+        if (ctx.pendingPlan) addPlanActions(ctx, ctx.pendingPlanAuto);
+        if (ctx === activeCtx) refreshModeChip();
         // The turn is over: a retry that succeeded leaves no active retry card,
         // and a retry that failed has already shown its error card instead.
         clearRetryCard(ctx);
@@ -3542,6 +3692,18 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       !ctx.chatBody.querySelector(".plan-card")
     ) {
       addPlanCard(ctx, String(rec.plan));
+    }
+    // A plan still waiting for its handoff (the session was closed mid-decision)
+    // comes back with its one-action bar.
+    if (
+      rec &&
+      (rec.plan ?? "").trim() &&
+      (rec.phase === "planned" || rec.phase === "awaiting_user") &&
+      !ctx.busy
+    ) {
+      ctx.pendingPlan = true;
+      ctx.pendingPlanAuto = false;
+      addPlanActions(ctx, false);
     }
   } else if (msg.reply === "list_sessions" && Array.isArray(msg.data)) {
     const list = msg.data as SessionListItem[];
@@ -3799,7 +3961,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
 /* ---------------- menus (operate on active tab) ---------------- */
 function closeAllMenus(): void {
   for (const m of [
-    modeMenu,
+    cmdMenu,
     providerMenu,
     effortMenu,
     permsMenu,
@@ -3835,42 +3997,48 @@ function wireMenu(button: HTMLButtonElement, menu: HTMLDivElement): void {
     if (was) menu.classList.remove("hidden");
   };
 }
-function applyMode(ctx: Ctx, mode: Mode): void {
-  ctx.modeVal = mode;
-  // The workflow selection is a per-workspace preference, remembered so the user
-  // does not re-pick it every time; it never touches agent settings.
-  prefs.modeByWs[ctx.root] = mode;
-  savePrefs();
-  if (ctx === activeCtx) {
-    refreshModeIndicator();
-    renderMenu(modeMenu, MODE_OPTIONS, mode, (v) => pickMode(ctx, v));
-    refreshModelButton(); // the model control reflects the newly selected workflow
-  }
-}
-function pickMode(ctx: Ctx, value: string): void {
-  if (ctx.busy) {
-    closeAllMenus();
-    setActivity("the mode is locked while the agent works - stop the turn first");
+/* The mode chip beside the composer shows the active behaviour only when it
+   isn't the default build: the session's sticky mode, or the model's own
+   plan mode (tagged automatic, with its reason on hover). Clicking the chip
+   clears a sticky mode - engine-side, so it also works mid-turn. An
+   automatic plan clears itself when the plan is approved, skipped or
+   cancelled (the plan card carries those actions). */
+function refreshModeChip(): void {
+  const ctx = activeCtx;
+  if (!ctx) {
+    modeChip.classList.add("hidden");
     return;
   }
-  applyMode(ctx, value as Mode);
+  const auto = ctx.autoPlanReason !== null;
+  const sticky = ctx.stickyMode !== "build";
+  if (!auto && !sticky) {
+    modeChip.classList.add("hidden");
+    return;
+  }
+  modeChip.classList.remove("hidden");
+  const mode: Mode = auto ? "plan" : ctx.stickyMode;
+  modeChipLabel.textContent = auto ? "Plan · auto" : MODE_CHIP_TEXT[mode];
+  if (auto) {
+    modeChip.title = `Plan mode entered automatically: ${ctx.autoPlanReason}`;
+    modeChip.setAttribute(
+      "aria-label",
+      `Plan mode entered automatically: ${ctx.autoPlanReason}`,
+    );
+    modeChip.classList.add("auto");
+  } else {
+    modeChip.title = `${MODE_CHIP_TEXT[mode]} mode is on for this session - click to return to build`;
+    modeChip.setAttribute(
+      "aria-label",
+      `${MODE_CHIP_TEXT[mode]} mode active - click to return to build mode`,
+    );
+    modeChip.classList.remove("auto");
+  }
 }
-/* The composer's mode control always shows the ACTUAL selected workflow, so its
-   label and its menu checkmark can never disagree. It is the single place to
-   choose the workflow; the status bar above shows the live phase during a run.
-   The control locks while a turn runs: the mode binds a whole turn, so a
-   mid-turn switch could never reach the engine anyway (submit/retry/resend all
-   refuse while busy) - the lock just makes that honest instead of silent. */
-const MODE_LOCKED_TITLE = "Locked while the agent works - stop the turn to switch modes";
-function refreshModeIndicator(): void {
-  const mode = activeCtx?.modeVal ?? prefs.defaultMode;
-  const locked = !!activeCtx?.busy;
-  modeLabel.textContent = modeLabelText(mode);
-  modeLabel.title = locked ? MODE_LOCKED_TITLE : "Workflow: " + modeLabelText(mode);
-  modeBtn.title = modeLabel.title;
-  statusMode.textContent = modeLabelText(mode);
-  modeBtn.disabled = locked;
-  modeBtn.classList.toggle("workflow", mode === "plan-build");
+function pickModeChip(): void {
+  const ctx = activeCtx;
+  if (!ctx) return;
+  if (ctx.autoPlanReason !== null) return; // informational while a plan is open
+  send(ctx, { op: "set_mode", mode: "build" });
 }
 function pickEffort(ctx: Ctx, value: string): void {
   ctx.effortVal = value;
@@ -3933,53 +4101,23 @@ function syncEffortFromModel(ctx: Ctx): void {
   ctx.effortVal = own !== "default" ? own : prefs.effortGlobal;
   if (ctx === activeCtx) effortLabel.textContent = ctx.effortVal;
 }
-/* The composer model control tracks the SELECTED workflow: Build and Plan are the
-   normal, model-selected modes (plain session-model picker), while Plan -> Build
-   is the only agent workflow whose button shows the plan/build roles. Decision
-   Oversight is independent of the workflow, so when it is on it is flagged on the
-   button in every mode. */
+/* The composer model control shows the session's model; the plan/build roles
+   live in Settings > Agents. Decision Oversight is independent, so when it is
+   on it is flagged on the button. */
 function modelSummary(): {
   label: string;
   title: string;
   goesToAgents: boolean;
   oversight: boolean;
 } {
-  const mode = activeCtx?.modeVal ?? prefs.defaultMode;
   const cur = providerOptions.find((x) => x.id === activeCtx?.providerId);
   const sessionLabel = cur ? cur.label : "No providers";
   const sessionTitle = cur ? `${cur.label} · ${cur.sub}` : "No providers";
   const cfg = agentConfig;
   const oversight = !!(cfg?.oversight?.enabled && cfg.oversight.model_id);
   const ov = oversight ? nameOfModel(cfg!.oversight.model_id) : null;
-  const oversightTitle = ov
-    ? `${sessionTitle} · Oversight: ${ov} on`
-    : sessionTitle;
-  if (mode !== "plan-build" || !cfg) {
-    return {
-      label: sessionLabel,
-      title: oversightTitle,
-      goesToAgents: false,
-      oversight,
-    };
-  }
-  const planName =
-    cfg.plan?.enabled && cfg.plan.model_id
-      ? nameOfModel(cfg.plan.model_id)
-      : null;
-  const buildName =
-    cfg.build?.enabled && cfg.build.model_id
-      ? nameOfModel(cfg.build.model_id)
-      : null;
-  const p = planName ?? sessionLabel;
-  const b = buildName ?? sessionLabel;
-  const bits = [`Plan: ${p}`, `Build: ${b}`];
-  if (ov) bits.push(`Oversight: ${ov}`);
-  return {
-    label: `${p} › ${b}`,
-    title: `${bits.join(" · ")} - edit in Settings > Agents`,
-    goesToAgents: true,
-    oversight,
-  };
+  const title = ov ? `${sessionTitle} · Oversight: ${ov} on` : sessionTitle;
+  return { label: sessionLabel, title, goesToAgents: false, oversight };
 }
 function nameOfModel(id: string): string {
   const m = providerById.get(id);
@@ -3993,7 +4131,7 @@ function refreshModelButton(): void {
   providerBtn.classList.toggle("agents", s.goesToAgents);
   providerBtn.classList.toggle("oversight", s.oversight);
   providerBtn.classList.toggle("no-provider", !cur && !s.goesToAgents);
-  refreshModeIndicator();
+  refreshModeChip();
 }
 export function selectModel(
   ctx: Ctx,
@@ -4830,31 +4968,33 @@ function settingsAgents(): [string, () => void] {
     key: "plan" | "build",
     r: AgentRole,
   ): string => {
-    // Only the plan role offers the review-before-building pause.
-    const approveRow =
+    // Only the plan role carries the automatic-planning settings.
+    const planRows =
       key === "plan"
-        ? `<div class="set-row"><div class="set-info"><div class="set-label">Review the plan before building</div><div class="set-desc">After planning, pause so you can read the plan and choose Build or Skip. Off means it plans then builds in one go.</div></div><div class="set-ctl"><span id="sw_plan_approve"></span></div></div>`
+        ? `<div class="set-row"><div class="set-info"><div class="set-label">Automatic planning</div><div class="set-desc">The model may enter plan mode on its own when a request is ambiguous enough that a wrong guess would cost rework; you approve or skip the plan. Directive requests just build. /plan and /ask always work.</div></div><div class="set-ctl"><span id="sw_plan_auto"></span></div></div>` +
+          `<div class="set-row"><div class="set-info"><div class="set-label">Sensitivity</div><div class="set-desc">How readily the model plans on its own.</div></div><div class="set-ctl"><select class="sel-inline" id="ag_plan_sensitivity">${PLAN_SENSITIVITIES.map((s) => `<option value="${s.value}"${s.value === (r.sensitivity ?? "balanced") ? " selected" : ""}>${escapeHtml(s.label)}</option>`).join("")}</select></div></div>` +
+          `<div class="set-row"><div class="set-info"><div class="set-label">Require approval before an automatic plan builds</div><div class="set-desc">On (the default), the model pauses with the plan so you can approve, skip or cancel. Off, the plan is shown and the build starts right away.</div></div><div class="set-ctl"><span id="sw_plan_approve"></span></div></div>`
         : "";
     return (
       `<h4 class="card-title" style="margin-top:16px">${title} agent</h4>` +
       `<div class="set-row"><div class="set-info"><div class="set-label">Enable the ${title.toLowerCase()} agent</div><div class="set-desc">${desc}</div></div><div class="set-ctl"><span id="sw_${key}"></span></div></div>` +
       `<div class="set-row"><div class="set-info"><div class="set-label">Model</div><div class="set-desc">Pick a configured model, or keep the session's own. It keeps that model's key and settings.</div></div><div class="set-ctl"><select class="sel-inline" id="ag_${key}_model">${modelOpts(r.model_id)}</select></div></div>` +
       `<div class="set-row" style="align-items:flex-start"><div class="set-info"><div class="set-label">Instructions</div><div class="set-desc">Optional guidance for this role, kept separate from the project's AGENTS.md rules.</div></div><div class="set-ctl" style="flex:1"><textarea id="ag_${key}_instr" class="set-text" rows="3" placeholder="Optional instructions for the ${key} agent">${escapeHtml(r.instructions)}</textarea></div></div>` +
-      approveRow
+      planRows
     );
   };
   const ov = cfg.oversight;
   const html =
-    `<p class="sub">Optionally route planning and building to their own models, and let a stronger model review significant decisions. Everything is off by default - the app behaves exactly as before until you enable a role. Models come from Settings &gt; Models and reuse that model's own key and settings.</p>` +
+    `<p class="sub">Optionally give planning and building their own models, and let a stronger model review significant decisions. Everything is off by default - the roles only apply once you enable them. Models come from Settings &gt; Models and reuse that model's own key and settings.</p>` +
     role(
       "Plan",
-      "Runs a read-only pass to produce a plan, then hands it to the build agent as context.",
+      "Runs plan turns (from /plan or an automatic plan) on its own model when enabled; the plan role's instructions ride along.",
       "plan",
       cfg.plan,
     ) +
     role(
       "Build",
-      "Implements the task (and any plan) with tools, tests, and error correction.",
+      "Runs the build that follows an approved plan on its own model when enabled; plain builds always use the session model.",
       "build",
       cfg.build,
     ) +
@@ -4869,7 +5009,8 @@ function settingsAgents(): [string, () => void] {
     const body = el<HTMLDivElement>("settingsBody");
     wireSwitch(body, "sw_plan", cfg.plan.enabled, () => {});
     wireSwitch(body, "sw_build", cfg.build.enabled, () => {});
-    wireSwitch(body, "sw_plan_approve", cfg.plan.approve ?? false, () => {});
+    wireSwitch(body, "sw_plan_approve", cfg.plan.approve ?? true, () => {});
+    wireSwitch(body, "sw_plan_auto", cfg.plan.auto ?? true, () => {});
     wireSwitch(body, "sw_oversight", cfg.oversight.enabled, () => {});
     const val = (id: string): string =>
       (
@@ -4884,6 +5025,8 @@ function settingsAgents(): [string, () => void] {
         plan: {
           enabled: isOn("sw_plan"),
           approve: isOn("sw_plan_approve"),
+          auto: isOn("sw_plan_auto"),
+          sensitivity: val("ag_plan_sensitivity") || "balanced",
           model_id: val("ag_plan_model"),
           instructions: val("ag_plan_instr"),
         },
@@ -5091,7 +5234,6 @@ function settingsGeneral(): [string, () => void] {
   const html =
     `<p class="sub">Behavior defaults that apply across workspaces.</p>` +
     `<div class="set-row"><div class="set-info"><div class="set-label">Confirm before editing the default branch</div><div class="set-desc">Ask before a turn that writes directly to the protected branch.</div></div><div class="set-ctl"><span id="swProtected"></span></div></div>` +
-    `<div class="set-row"><div class="set-info"><div class="set-label">Default workflow for new sessions</div><div class="set-desc">Build runs directly. Plan proposes read-only. Plan → Build plans, then hands off to Build automatically.</div></div><div class="set-ctl">${seg(prefs.defaultMode, MODE_OPTIONS, "defMode")}</div></div>` +
     `<div class="set-row"><div class="set-info"><div class="set-label">When a turn is running, Enter sends</div><div class="set-desc">Steer joins the running turn before the model's next step. Queue runs after the turn ends, and is discarded if the provider fails. The caret next to Send picks the other one per message.</div></div><div class="set-ctl">${seg(prefs.defaultMidTurn, midTurnOptions, "defMidTurn")}</div></div>` +
     `<div class="set-row"><div class="set-info"><div class="set-label">Show model thinking</div><div class="set-desc">Stream reasoning into a collapsible block above the answer, for models that expose it.</div></div><div class="set-ctl"><span id="swThinking"></span></div></div>` +
     `<h4 class="card-title" style="margin-top:16px">Keyboard shortcuts</h4>` +
@@ -5101,12 +5243,6 @@ function settingsGeneral(): [string, () => void] {
     `<div class="set-row"><div class="set-info"><div class="set-label">Cancel edit · close dialog</div></div><div class="set-ctl"><span class="set-desc">Esc</span></div></div>`;
   const wire = (): void => {
     const body = el<HTMLDivElement>("settingsBody");
-    wireSeg(body, "defMode", (v) => {
-      prefs.defaultMode = v as Mode;
-      savePrefs();
-      const ctx = activeCtx;
-      if (ctx) applyMode(ctx, prefs.defaultMode);
-    });
     wireSeg(body, "defMidTurn", (v) => {
       prefs.defaultMidTurn = v === "steer" ? "steer" : "queue";
       savePrefs();
@@ -5436,13 +5572,85 @@ function renderSendExtraMenu(): void {
     sendExtraMenu.appendChild(btn);
   }
 }
+/* ---------------- slash-command autocomplete ---------------- */
+/* Typing "/" at the start of the composer lists the known commands with
+   their one-line descriptions, filtered as you type. Enter or Tab completes,
+   ArrowUp/Down move, Escape closes, a click completes. The engine still
+   parses whatever is sent - this is discovery, not a gate. */
+let cmdIndex = 0;
+let cmdMatches: Array<{ cmd: string; help: string }> = [];
+
+function updateCmdMenu(): void {
+  const value = entry.value;
+  const showing =
+    value.startsWith("/") && !/\s/.test(value) && activeCtx !== null;
+  if (!showing) {
+    cmdMenu.classList.add("hidden");
+    cmdMenu.replaceChildren();
+    cmdMatches = [];
+    return;
+  }
+  cmdMatches = COMMAND_HELP.filter((c) => c.cmd.startsWith(value.toLowerCase()));
+  if (!cmdMatches.length) {
+    cmdMenu.classList.add("hidden");
+    cmdMenu.replaceChildren();
+    return;
+  }
+  cmdIndex = Math.min(cmdIndex, cmdMatches.length - 1);
+  cmdMenu.replaceChildren();
+  cmdMatches.forEach((c, i) => {
+    const btn = document.createElement("button");
+    btn.className = "m-label" + (i === cmdIndex ? " current" : "");
+    btn.setAttribute("role", "option");
+    btn.setAttribute("aria-selected", String(i === cmdIndex));
+    btn.innerHTML = `<span class="m-check">${i === cmdIndex ? ICONS.check : ""}</span><span class="cmd-name">${escapeHtml(c.cmd)}</span><small>${escapeHtml(c.help)}</small>`;
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      completeCmd(c.cmd);
+    };
+    cmdMenu.appendChild(btn);
+  });
+  cmdMenu.classList.remove("hidden");
+}
+
+function completeCmd(cmd: string): void {
+  entry.value = `${cmd} `;
+  entry.dispatchEvent(new Event("input"));
+  entry.focus();
+}
+
 entry.addEventListener("input", () => {
   autogrow();
   if (activeCtx) activeCtx.entryDraft = entry.value;
   updateSendState();
+  updateCmdMenu();
 });
 entry.addEventListener("keydown", (e) => {
   if (activeApproval) return;
+  if (!cmdMenu.classList.contains("hidden") && cmdMatches.length) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      cmdIndex = (cmdIndex + 1) % cmdMatches.length;
+      updateCmdMenu();
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      cmdIndex = (cmdIndex - 1 + cmdMatches.length) % cmdMatches.length;
+      updateCmdMenu();
+      return;
+    }
+    if (e.key === "Tab" || (e.key === "Enter" && cmdMatches[cmdIndex].cmd !== entry.value.trim())) {
+      e.preventDefault();
+      completeCmd(cmdMatches[cmdIndex].cmd);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cmdMenu.classList.add("hidden");
+      return;
+    }
+  }
   if (e.key === "Escape" && activeCtx && activeCtx.pendingRewind !== null) {
     e.preventDefault();
     cancelEdit(activeCtx);
@@ -5460,21 +5668,15 @@ expandBtn.onclick = () => {
   entry.focus();
 };
 
-wireMenu(modeBtn, modeMenu);
+modeChip.onclick = (e) => {
+  e.stopPropagation();
+  pickModeChip();
+};
 wireMenu(effortBtn, effortMenu);
 wireMenu(permsBtn, permsMenu);
 providerBtn.onclick = (e) => {
   e.stopPropagation();
   if (!activeCtx) return;
-  // A custom build model makes the single session model redundant: the button
-  // edits the plan/build/oversight roles in Settings instead of switching one.
-  if (modelSummary().goesToAgents) {
-    settingsRequested = true;
-    settingsLastTab = "agents";
-    send(ensureAppCtx(), { op: "list_providers" });
-    send(ensureAppCtx(), { op: "get_agents" });
-    return;
-  }
   if (!providerOptions.length) {
     settingsRequested = true;
     settingsLastTab = "models";

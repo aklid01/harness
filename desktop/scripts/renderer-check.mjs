@@ -34,7 +34,18 @@ const REPORT =
    script. For the live model, request 1 reasons then calls read_file, request
    2 streams slowly (the window where pending strips are edited), request 3+
    answer fast (the queued turn and the title call). */
-const liveState = { requests: [], counters: {}, writes: 0, server: null };
+const liveState = {
+  requests: [],
+  counters: {},
+  writes: 0,
+  planBuilds: 0,
+  builds: 0,
+  server: null,
+};
+/* The content of PLAN-RESULT.md for the approved-plan build: names the plan it
+   implemented, so the transcript and the file can be cross-checked. */
+const writePlanResult = (n) =>
+  `implemented the approved plan (build ${n}): measured, cached, verified\n`;
 
 /* What each reviewer answers with. Two of them raise the same security
    finding, so the merged report can show that they agree; the third answers
@@ -187,6 +198,301 @@ function startLiveFixture() {
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
       const usage = { prompt_tokens: 10, completion_tokens: 20 };
+      if (model === "live-model") {
+        // The plan-or-proceed stages, keyed on what the conversation already
+        // contains so they never disturb the counter-based stages below.
+        const messages = payload.messages || [];
+        const history = messages.map((m) => String(m.content ?? "")).join("\n");
+        const ask = messages
+          .filter((m) => m.role === "user")
+          .map((m) => String(m.content ?? ""))
+          .join("\n");
+        const lastContent = String(messages[messages.length - 1]?.content ?? "");
+        const toolNames = messages.flatMap((m) =>
+          (m.tool_calls ?? []).map((c) => c.function?.name ?? ""),
+        );
+        if (lastContent.includes("Plan mode:")) {
+          // A read-only plan turn (explicit /plan, or a converted one):
+          // answer with the plan itself.
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  role: "assistant",
+                  content:
+                    "PLAN: measure first, then optimize. 1. Profile the render loop. 2. Cache the layout pass. 3. Verify with a benchmark.",
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (ask.includes("make the app faster") && !toolNames.includes("plan_decision") && !history.includes("<plan>")) {
+          // Ambiguous: the model enters plan mode with a reason.
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  role: "assistant",
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_pd1",
+                      type: "function",
+                      function: { name: "plan_decision", arguments: "" },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      function: {
+                        arguments: JSON.stringify({
+                          decision: "plan",
+                          reason: "several parts could be the bottleneck",
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (history.includes("Entering plan mode") && !history.includes("PLAN:")) {
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  role: "assistant",
+                  content:
+                    "PLAN: measure first, then optimize. 1. Profile the render loop. 2. Cache the layout pass. 3. Verify with a benchmark.",
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (history.includes("<plan>") && history.includes("PLAN-RESULT.md")) {
+          // The plan build already wrote its file: finish in words.
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  role: "assistant",
+                  content: "Implemented the plan.",
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (history.includes("<plan>")) {
+          // The approved handoff: exactly one build with the plan as context.
+          liveState.planBuilds += 1;
+          const files = writePlanResult(liveState.planBuilds);
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  role: "assistant",
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_pb1",
+                      type: "function",
+                      function: { name: "write_file", arguments: "" },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      function: {
+                        arguments: JSON.stringify({
+                          path: path.join(WS_ROOT, "PLAN-RESULT.md"),
+                          content: files,
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (ask.includes("make the app faster") && history.includes("PLAN:")) {
+          // Skip planning and build now: no handoff message, answer in words.
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  role: "assistant",
+                  content: "Built without the plan, straight to the point.",
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (ask.includes("rename the foo function to bar everywhere") && !toolNames.includes("plan_decision")) {
+          // Directive: the model answers the decision gate with build.
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  role: "assistant",
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_pd2",
+                      type: "function",
+                      function: { name: "plan_decision", arguments: "" },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      function: {
+                        arguments: JSON.stringify({ decision: "build" }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (history.includes("Proceeding as build.") && history.includes("FACTS.md")) {
+          // The build already wrote its file: finish in words.
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  role: "assistant",
+                  content: "Renamed foo to bar everywhere.",
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+        if (history.includes("Proceeding as build.")) {
+          // The build decision: one write lands.
+          liveState.builds += 1;
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  role: "assistant",
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_bd1",
+                      type: "function",
+                      function: { name: "write_file", arguments: "" },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      function: {
+                        arguments: JSON.stringify({
+                          path: path.join(WS_ROOT, "FACTS.md"),
+                          content: `renamed foo to bar (build ${liveState.builds})\n`,
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          });
+          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+      }
       if (model === "writer-model") {
         // The writer edits the workspace once per turn: the tool result ends
         // the turn, so the model only answers in words after that. The last
@@ -653,6 +959,18 @@ const verdict = (name, ok, detail = "") => {
   results.push({ name, ok });
   say(`VERDICT ${name}: ${ok}${detail ? ` (${detail})` : ""}`);
 };
+/* Type into the composer without sending: fires the input event so drafts,
+   autogrow and the slash-command autocomplete all react. */
+const typeEntry = (ws, text) =>
+  evaluate(
+    ws,
+    `(() => {
+  const entry = document.getElementById("entry");
+  entry.value = ${JSON.stringify(text)};
+  entry.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
+})()`,
+  );
 const submit = (ws, text) =>
   evaluate(
     ws,
@@ -664,6 +982,43 @@ const submit = (ws, text) =>
   return true;
 })()`,
   );
+/* Every transcript the engine saved, as messages. */
+const transcriptMessages = () => {
+  const out = [];
+  const walk = (dir) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith(".jsonl")) continue;
+      let raw = "";
+      try {
+        raw = fs.readFileSync(full, "utf-8");
+      } catch {
+        continue;
+      }
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          out.push(JSON.parse(line));
+        } catch {
+          /* a half-written line */
+        }
+      }
+    }
+  };
+  walk(path.join(TMP, "sessions"));
+  return out;
+};
+
 const snapshot = (ws) =>
   evaluate(
     ws,
@@ -748,45 +1103,62 @@ try {
     JSON.stringify(panel),
   );
 
-  /* Item 7: the mode menu offers Ask, and picking it updates the composer
-     label. Build is restored afterwards so later items run in the default
-     workflow. */
-  const pickMode = (name) =>
-    evaluate(
-      ws,
-      `(() => {
-    const btn = [...document.querySelectorAll("#modeMenu button")].find(
-      (b) => b.querySelector(".m-label")?.textContent.trim() === ${JSON.stringify(name)},
-    );
-    if (!btn) return false;
-    btn.click();
-    return true;
-  })()`,
-    );
-  await evaluate(ws, `document.getElementById("modeBtn")?.click()`);
-  await sleep(200);
-  const menu = await evaluate(
+  /* Item 7: the workflow selector is gone; the composer offers the slash
+     commands instead, with /plan, /ask and /build in the autocomplete. */
+  const selectorState = await evaluate(
     ws,
     `(() => ({
-    labels: [...document.querySelectorAll("#modeMenu button .m-label")].map((s) => s.textContent.trim()),
-    open: !document.getElementById("modeMenu").classList.contains("hidden"),
+    selectorGone: document.getElementById("modeBtn") === null,
+    chipHidden: document.getElementById("modeChip").classList.contains("hidden"),
+    statusModeEmpty: (document.getElementById("statusMode").textContent ?? "").trim() === "",
   }))()`,
   );
-  const pickedAsk = await pickMode("Ask");
-  await sleep(200);
-  const askLabel = await evaluate(
+  verdict(
+    "no-mode-selector-in-the-ui",
+    selectorState.selectorGone && selectorState.chipHidden && selectorState.statusModeEmpty,
+    JSON.stringify(selectorState),
+  );
+  await typeEntry(ws, "/");
+  await sleep(250);
+  const cmdAll = await evaluate(
     ws,
-    `document.getElementById("modeLabel")?.textContent ?? ""`,
+    `(() => ({
+    open: !document.getElementById("cmdMenu").classList.contains("hidden"),
+    names: [...document.querySelectorAll("#cmdMenu .cmd-name")].map((s) => s.textContent.trim()),
+    help: [...document.querySelectorAll("#cmdMenu .m-label small")].map((s) => s.textContent.trim()),
+  }))()`,
   );
   verdict(
-    "mode-menu-offers-ask",
-    menu.open && menu.labels.includes("Ask") && pickedAsk && askLabel === "Ask",
-    JSON.stringify({ labels: menu.labels, label: askLabel, pickedAsk }),
+    "slash-menu-lists-plan-ask-build",
+    cmdAll.open &&
+      ["[/plan]", "[/ask]", "[/build]"].every((want) =>
+        cmdAll.names.some((n) => n === want.slice(1, -1)),
+      ) &&
+      cmdAll.help.every((h) => h.length > 0),
+    JSON.stringify(cmdAll),
   );
-  await evaluate(ws, `document.getElementById("modeBtn")?.click()`);
-  await sleep(150);
-  await pickMode("Build");
-  await sleep(150);
+  await typeEntry(ws, "/pl");
+  await sleep(200);
+  const cmdFiltered = await evaluate(
+    ws,
+    `(() => ({
+    names: [...document.querySelectorAll("#cmdMenu .cmd-name")].map((s) => s.textContent.trim()),
+  }))()`,
+  );
+  await evaluate(
+    ws,
+    `document.getElementById("entry").dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }))`,
+  );
+  await sleep(200);
+  const completed = await evaluate(ws, `document.getElementById("entry").value`);
+  verdict(
+    "slash-autocomplete-filters-and-completes",
+    cmdFiltered.names.length === 1 &&
+      cmdFiltered.names[0] === "/plan" &&
+      completed === "/plan ",
+    JSON.stringify({ ...cmdFiltered, completed }),
+  );
+  await typeEntry(ws, "");
 
   /* The Storage tab is driven entirely by the Tauri shell's IPC commands, so
      it is checked before the turns: it must pass even when the engine never
@@ -837,32 +1209,6 @@ try {
      20+30s), so the poll has to span all of it. */
   await submit(ws, "first turn");
 
-  /* The mode control locks while the turn runs: disabled, with the reason on
-     hover, and a forced click cannot open the menu. */
-  await sleep(600);
-  const locked = await evaluate(
-    ws,
-    `(() => ({
-    disabled: document.getElementById("modeBtn").disabled,
-    title: document.getElementById("modeBtn").title,
-    menuHidden: document.getElementById("modeMenu").classList.contains("hidden"),
-  }))()`,
-  );
-  await evaluate(ws, `document.getElementById("modeBtn").click()`);
-  await sleep(150);
-  const stillHidden = await evaluate(
-    ws,
-    `document.getElementById("modeMenu").classList.contains("hidden")`,
-  );
-  verdict(
-    "mode-control-locks-mid-turn",
-    locked.disabled &&
-      locked.menuHidden &&
-      stillHidden &&
-      locked.title.includes("Locked"),
-    JSON.stringify({ ...locked, stillHidden }),
-  );
-
   let ticks = [];
   let final = { errors: [], hints: [] };
   for (let i = 0; i < 90; i++) {
@@ -884,17 +1230,6 @@ try {
     final.errors.some((e) => e.includes("Dead Local")),
     JSON.stringify(final.errors.slice(0, 1)),
   );
-  /* The lock releases once the turn is over (here: failed), so the next
-     message can start in a different mode. */
-  let released = false;
-  for (let i = 0; i < 12 && !released; i++) {
-    await sleep(500);
-    released = await evaluate(
-      ws,
-      `!document.getElementById("modeBtn").disabled`,
-    );
-  }
-  verdict("mode-control-releases-after-the-turn", released, "");
   verdict(
     "error-card-shown",
     final.errors.length > 0,
@@ -997,16 +1332,6 @@ try {
     }
     return last;
   };
-  const typeEntry = (text) =>
-    evaluate(
-      ws,
-      `(() => {
-    const entry = document.getElementById("entry");
-    entry.value = ${JSON.stringify(text)};
-    entry.dispatchEvent(new Event("input", { bubbles: true }));
-    return true;
-  })()`,
-    );
   const stripState = () =>
     evaluate(
       ws,
@@ -1077,7 +1402,7 @@ try {
   );
 
   // Steer via the caret menu (explicit per-message choice).
-  await typeEntry("steer mid-turn");
+  await typeEntry(ws, "steer mid-turn");
   await evaluate(ws, `document.getElementById("sendExtraCaret")?.click()`);
   await sleep(200);
   const menuSteer = await evaluate(
@@ -1100,7 +1425,7 @@ try {
   );
 
   // Queue via the default action (the extra button itself).
-  await typeEntry("queued work");
+  await typeEntry(ws, "queued work");
   await evaluate(ws, `document.getElementById("sendExtra")?.click()`);
   await sleep(300);
   const strip2 = await stripState();
@@ -1157,7 +1482,7 @@ try {
   verdict("pending-edit-updates-the-strip", editLanded, JSON.stringify(strip3));
 
   // File a third message and remove it again.
-  await typeEntry("remove me");
+  await typeEntry(ws, "remove me");
   await evaluate(ws, `document.getElementById("sendExtra")?.click()`);
   const strip4 = await waitFor(
     `(() => {
@@ -1234,21 +1559,31 @@ try {
 
   // The queued message auto-runs when the turn ends: a user bubble with a
   // queued chip, then the chain goes idle again.
-  const queuedRan = await waitFor(
-    `(() => {
-    const chips = [...document.querySelectorAll("#chat .via-chip.queue")];
-    return chips.some((c) => c.closest(".msg")?.textContent.includes("edited queue work"));
-  })()`,
-    30000,
-  );
   const chainIdle = await waitFor(
-    `!document.getElementById("modeBtn").disabled`,
+    `!document.getElementById("promptZone").classList.contains("busy")`,
     30000,
   );
+  // The via chip is wiped by the post-turn transcript re-render, so the
+  // auto-run is judged from the transcript on disk: the queued message, then
+  // its answer.
+  const queueDisk = (() => {
+    const messages = transcriptMessages();
+    const at = messages.findIndex(
+      (m) => m.role === "user" && String(m.content ?? "") === "edited queue work",
+    );
+    return {
+      at,
+      answered:
+        at >= 0 &&
+        messages
+          .slice(at)
+          .some((m) => String(m.content ?? "").includes("queued turn complete")),
+    };
+  })();
   verdict(
     "queue-auto-runs-after-the-turn",
-    queuedRan === true && chainIdle === true,
-    JSON.stringify({ queuedRan, chainIdle }),
+    queueDisk.at >= 0 && queueDisk.answered && chainIdle === true,
+    JSON.stringify({ ...queueDisk, chainIdle }),
   );
 
   /* ---- attachments: pick, remove, send, and a refused file ---- */
@@ -1356,7 +1691,7 @@ try {
 
   // The message still goes, with the file that was accepted.
   const beforeSend = liveState.requests.length;
-  await typeEntry("summarize the attached file");
+  await typeEntry(ws, "summarize the attached file");
   await evaluate(ws, `document.getElementById("sendstop").click()`);
   const sentChip = await waitFor(
     `(() => {
@@ -1509,6 +1844,390 @@ try {
 
   /* ---- the multi-model review: the card, the settings and the auto-run ---- */
 
+  /* ---- intent: mode chip, slash commands, automatic planning ---- */
+
+  const freshTab = async () => {
+    await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
+    await sleep(500);
+  };
+  const chip = () =>
+    evaluate(
+      ws,
+      `(() => {
+  const chip = document.getElementById("modeChip");
+  return {
+    hidden: chip.classList.contains("hidden"),
+    label: document.getElementById("modeChipLabel").textContent,
+    title: chip.title,
+  };
+})()`,
+    );
+  const planActions = () =>
+    evaluate(
+      ws,
+      `(() => {
+  const bar = document.querySelector("#chat .plan-actions");
+  if (!bar) return null;
+  return {
+    auto: bar.classList.contains("auto"),
+    tag: (bar.querySelector(".plan-actions-tag")?.textContent ?? "").trim(),
+    buttons: [...bar.querySelectorAll("button")].map((b) => b.getAttribute("data-act")),
+  };
+})()`,
+    );
+  const modalUp = (id) =>
+    `(() => { const m = document.getElementById("modal"); return !m.classList.contains("hidden") && Boolean(document.getElementById(${JSON.stringify(id)})); })()`;
+  const clickModal = async (id) => {
+    const there = await evaluate(ws, modalUp(id));
+    if (!there) return false;
+    await evaluate(
+      ws,
+      `document.getElementById(${JSON.stringify(id)}).click()`,
+    );
+    return true;
+  };
+  // The composer's busy class is the real turn marker: the activity line
+  // returns to "ready" after every message, busy or not.
+  const idle = () =>
+    waitFor(`!document.getElementById("promptZone").classList.contains("busy")`, 60000);
+
+  const latestPlanArtifact = () => {
+    const plansDir = path.join(TMP, "sessions");
+    let newest = null;
+    const walk = (dir) => {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.name.endsWith(".json") || !full.includes("_plans")) continue;
+        const stat = fs.statSync(full);
+        if (!newest || stat.mtimeMs > newest.mtime) newest = { full, mtime: stat.mtimeMs };
+      }
+    };
+    walk(plansDir);
+    try {
+      return newest ? JSON.parse(fs.readFileSync(newest.full, "utf-8")) : {};
+    } catch {
+      return {};
+    }
+  };
+
+  // A bare /ask is sticky: the chip appears and stays until cleared.
+  await freshTab();
+  await submit(ws, "/ask");
+  await waitFor(
+    `!document.getElementById("modeChip").classList.contains("hidden")`,
+    15000,
+  );
+  const askChip = await chip();
+  verdict(
+    "bare-ask-turns-on-the-mode-chip",
+    askChip.label === "Ask",
+    JSON.stringify(askChip),
+  );
+  await submit(ws, "what does the readme say?");
+  await idle();
+  const askChipStill = await chip();
+  verdict(
+    "ask-stays-until-cleared",
+    askChipStill.label === "Ask",
+    JSON.stringify(askChipStill),
+  );
+  await evaluate(ws, `document.getElementById("modeChip")?.click()`);
+  await sleep(600);
+  const clearedChip = await chip();
+  verdict(
+    "mode-chip-click-clears-to-build",
+    clearedChip.hidden,
+    JSON.stringify(clearedChip),
+  );
+
+  // A bare /plan is sticky too, and /build leaves it.
+  await freshTab();
+  await submit(ws, "/plan");
+  await waitFor(
+    `!document.getElementById("modeChip").classList.contains("hidden")`,
+    15000,
+  );
+  const planChip = await chip();
+  verdict(
+    "bare-plan-turns-on-the-mode-chip",
+    planChip.label === "Plan",
+    JSON.stringify(planChip),
+  );
+  await submit(ws, "/build");
+  await sleep(700);
+  const buildChip = await chip();
+  verdict(
+    "build-command-clears-the-chip",
+    buildChip.hidden,
+    JSON.stringify(buildChip),
+  );
+
+  // A one-turn /ask answers read-only and never sticks.
+  await freshTab();
+  await submit(ws, "/ask what does the readme say?");
+  const researching = await waitFor(
+    `Boolean(document.querySelector("#chat .phase-researching"))`,
+    20000,
+  );
+  await idle();
+  const oneTurnChip = await chip();
+  const oneTurnDiag = await evaluate(
+    ws,
+    `(() => ({
+    pills: [...document.querySelectorAll("#chat .phase")].map((p) => p.className.replace("phase phase-", "").replace(" settled", "")),
+    answers: [...document.querySelectorAll("#chat .assistant")].map((el) => el.textContent.slice(0, 60)),
+    errors: document.querySelectorAll("#chat .error").length,
+    tabs: [...document.querySelectorAll("#tabs .tab")].map((t) => t.className.includes("active")),
+    titles: [...document.querySelectorAll("#tabs .tab")].map((t) => (t.querySelector(".tab-title")?.textContent ?? "").slice(0, 24)),
+    children: [...(document.querySelector("#chat")?.firstElementChild?.children ?? [])].map((c) => c.className.split(" ")[0]).slice(0, 40),
+  }))()`,
+  );
+  const disk = (() => {
+    const out = [];
+    const walk = (dir) => {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.name.endsWith(".jsonl")) continue;
+        try {
+          for (const line of fs.readFileSync(full, "utf-8").split("\n")) {
+            if (line.trim()) out.push(JSON.parse(line));
+          }
+        } catch {
+          /* a half-written line */
+        }
+      }
+    };
+    walk(path.join(TMP, "sessions"));
+    return out;
+  })();
+  const askTurns = disk.filter(
+    (m) => m.role === "user" && String(m.content ?? "").startsWith("/ask what"),
+  ).length;
+  const askNotices = disk.filter((m) =>
+    String(m.content ?? "").includes("ASK (read-only)"),
+  ).length;
+  verdict(
+    "one-turn-ask-runs-read-only-without-sticking",
+    oneTurnChip.hidden && askTurns >= 1 && askNotices >= 2,
+    // The live phase pill is wiped by the post-turn transcript re-render, so
+    // the disk evidence (one ask turn, two ask notices) carries the verdict.
+    JSON.stringify({
+      researching: Boolean(researching),
+      ...oneTurnChip,
+      ...oneTurnDiag,
+      askTurns,
+      askNotices,
+    }),
+  );
+
+  // Automatic planning: the model enters plan mode on its own, the chip says
+  // so with its reason, and the gate asks before anything builds.
+  await freshTab();
+  await submit(ws, "make the app faster");
+  const autoChipUp = await waitFor(
+    `(() => { const c = document.getElementById("modeChip"); return !c.classList.contains("hidden") && document.getElementById("modeChipLabel").textContent.includes("auto"); })()`,
+    30000,
+  );
+  const autoChip = await chip();
+  verdict(
+    "auto-plan-chip-shows-with-reason",
+    Boolean(autoChipUp) && autoChip.title.includes("several parts could be the bottleneck"),
+    JSON.stringify(autoChip),
+  );
+  const planShown = await waitFor(
+    `[...document.querySelectorAll("#chat .assistant")].some((el) => el.textContent.includes("Profile the render loop"))`,
+    30000,
+  );
+  const gateShown = await waitFor(modalUp("mAllow"), 30000);
+  const resultBefore = fs.existsSync(path.join(WS_ROOT, "PLAN-RESULT.md"));
+  verdict(
+    "auto-plan-gate-asks-before-building",
+    Boolean(planShown) && Boolean(gateShown) && !resultBefore,
+    JSON.stringify({ planShown: Boolean(planShown), gateShown: Boolean(gateShown), resultBefore }),
+  );
+  await clickModal("mAllow");
+  await idle();
+  const resultAfter = fs.existsSync(path.join(WS_ROOT, "PLAN-RESULT.md"));
+  verdict(
+    "auto-plan-approve-builds-exactly-once",
+    !resultBefore && resultAfter && liveState.planBuilds === 1,
+    JSON.stringify({ resultBefore, resultAfter, planBuilds: liveState.planBuilds }),
+  );
+
+  // Skip planning and build now: no handoff, an immediate plain build.
+  await freshTab();
+  await submit(ws, "make the app faster");
+  const skipModal = await waitFor(
+    `Boolean(document.getElementById("mSkip"))`,
+    30000,
+  );
+  const skipModalState = await evaluate(
+    ws,
+    `(() => ({
+    busy: document.getElementById("promptZone").classList.contains("busy"),
+    modal: (() => { const m = document.getElementById("modal"); return !m.classList.contains("hidden") && Boolean(document.getElementById("mSkip")); })(),
+    notes: [...document.querySelectorAll("#chat .note")].map((n) => n.textContent.slice(0, 70)),
+    errors: [...document.querySelectorAll("#chat .error")].map((n) => n.textContent.slice(0, 70)),
+    tabs: document.querySelectorAll("#tabs .tab").length,
+  }))()`,
+  );
+  await clickModal("mSkip");
+  await idle();
+  const skippedText = await evaluate(
+    ws,
+    `[...document.querySelectorAll("#chat .assistant")].some((el) => el.textContent.includes("Built without the plan"))`,
+  );
+  const skipAfter = await evaluate(
+    ws,
+    `(() => ({
+    busy: document.getElementById("promptZone").classList.contains("busy"),
+    modal: (() => { const m = document.getElementById("modal"); return !m.classList.contains("hidden"); })(),
+    notes: [...document.querySelectorAll("#chat .note")].map((n) => n.textContent.slice(0, 70)),
+    answers: [...document.querySelectorAll("#chat .msg.assistant")].map((n) => n.textContent.slice(0, 70)),
+  }))()`,
+  );
+  const lastTranscript = (() => {
+    let newest = null;
+    const walk = (dir) => {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.name.endsWith(".jsonl")) continue;
+        const stat = fs.statSync(full);
+        if (!newest || stat.mtimeMs > newest.mtime) newest = { full, mtime: stat.mtimeMs };
+      }
+    };
+    walk(path.join(TMP, "sessions"));
+    try {
+      return newest
+        ? fs
+            .readFileSync(newest.full, "utf-8")
+            .split("\n")
+            .filter((l) => l.trim())
+            .map((l) => JSON.parse(l))
+            .map((m) => `${m.role}:${String(m.content ?? "").slice(0, 50)}`)
+        : [];
+    } catch {
+      return [];
+    }
+  })();
+  verdict(
+    "auto-plan-skip-builds-now-without-the-plan",
+    Boolean(skippedText) && liveState.planBuilds === 1,
+    JSON.stringify({ skippedText: Boolean(skippedText), planBuilds: liveState.planBuilds, ...skipAfter, lastTranscript: lastTranscript.slice(-6) }),
+  );
+
+  // Cancel: the plan stays, nothing is built.
+  await freshTab();
+  await submit(ws, "make the app faster");
+  await waitFor(modalUp("mDeny"), 30000);
+  await clickModal("mDeny");
+  await sleep(1500);
+  // The note is wiped by the transcript re-render; the durable evidence is
+  // the plan artifact (awaiting_user) and the untouched workspace.
+  const cancelledArtifact = latestPlanArtifact();
+  verdict(
+    "auto-plan-cancel-builds-nothing",
+    cancelledArtifact.phase === "awaiting_user" && liveState.planBuilds === 1,
+    JSON.stringify({ artifact: cancelledArtifact, planBuilds: liveState.planBuilds }),
+  );
+
+  // A directive request answers the gate with build and never pauses.
+  await freshTab();
+  await submit(ws, "rename the foo function to bar everywhere");
+  let factsWritten = false;
+  for (let i = 0; i < 90 && !factsWritten; i++) {
+    await sleep(500);
+    factsWritten = fs.existsSync(path.join(WS_ROOT, "FACTS.md"));
+  }
+  const directiveChip = await chip();
+  const directiveGate = await evaluate(
+    ws,
+    `(() => { const m = document.getElementById("modal"); return !m.classList.contains("hidden") && Boolean(document.getElementById("mAllow")); })()`,
+  );
+  verdict(
+    "directive-request-builds-without-planning",
+    factsWritten &&
+      directiveChip.hidden &&
+      !directiveGate &&
+      liveState.builds === 1,
+    JSON.stringify({
+      factsWritten,
+      chip: directiveChip,
+      gate: directiveGate,
+      builds: liveState.builds,
+    }),
+  );
+
+  // An explicit /plan runs read-only (no chip: one turn), then offers the
+  // one-action handoff, and approving it builds exactly once.
+  await freshTab();
+  await submit(ws, "/plan make the app faster");
+  await idle();
+  const explicitChip = await chip();
+  const explicitBar = await planActions();
+  verdict(
+    "explicit-plan-offers-one-action-handoff",
+    explicitChip.hidden &&
+      explicitBar &&
+      explicitBar.buttons.join(",") === "approve,skip,cancel",
+    JSON.stringify({ chip: explicitChip, bar: explicitBar }),
+  );
+  const explicitBarState = await evaluate(
+    ws,
+    `(() => ({
+    busy: document.getElementById("promptZone").classList.contains("busy"),
+    notes: [...document.querySelectorAll("#chat .note")].map((n) => n.textContent.slice(0, 70)),
+    errors: [...document.querySelectorAll("#chat .error")].map((n) => n.textContent.slice(0, 70)),
+    answers: [...document.querySelectorAll("#chat .msg.assistant")].map((n) => n.textContent.slice(0, 60)),
+    tabs: document.querySelectorAll("#tabs .tab").length,
+  }))()`,
+  );
+  await evaluate(
+    ws,
+    `document.querySelector("#chat .plan-actions [data-act='approve']")?.click()`,
+  );
+  let explicitBuilt = false;
+  for (let i = 0; i < 90 && !explicitBuilt; i++) {
+    await sleep(500);
+    explicitBuilt = liveState.planBuilds === 2;
+  }
+  const barGone = await planActions();
+  verdict(
+    "explicit-plan-approve-builds-once",
+    explicitBuilt && barGone === null,
+    JSON.stringify({ explicitBuilt, planBuilds: liveState.planBuilds, barGone, before: explicitBarState }),
+  );
+
   /* The review card, read in one call: the badge, the per-model rows, the
      findings and the group headings. */
   const reviewCard = () =>
@@ -1562,42 +2281,6 @@ try {
     return card;
   };
 
-  /* Every transcript the engine saved, as messages. */
-  const transcriptMessages = () => {
-    const out = [];
-    const walk = (dir) => {
-      let entries = [];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          walk(full);
-          continue;
-        }
-        if (!entry.name.endsWith(".jsonl")) continue;
-        let raw = "";
-        try {
-          raw = fs.readFileSync(full, "utf-8");
-        } catch {
-          continue;
-        }
-        for (const line of raw.split("\n")) {
-          if (!line.trim()) continue;
-          try {
-            out.push(JSON.parse(line));
-          } catch {
-            /* a half-written line */
-          }
-        }
-      }
-    };
-    walk(path.join(TMP, "sessions"));
-    return out;
-  };
   const toolResults = (messages, want) =>
     messages.filter(
       (m) =>
@@ -1726,10 +2409,6 @@ try {
   })()`,
     );
     await sleep(400);
-    await evaluate(ws, `document.getElementById("modeBtn")?.click()`);
-    await sleep(250);
-    await pickMode("Build");
-    await sleep(250);
     await submit(ws, firstMessage);
     const wrote = await waitFor(
       `(() => {
@@ -1739,7 +2418,7 @@ try {
       30000,
     );
     const idle = await waitFor(
-      `!document.getElementById("modeBtn").disabled`,
+      `!document.getElementById("promptZone").classList.contains("busy")`,
       30000,
     );
     return { picked, wrote, idle };
@@ -1959,7 +2638,7 @@ try {
     return Boolean(btn);
   })()`,
   );
-  await waitFor(`!document.getElementById("modeBtn").disabled`, 30000);
+  await waitFor(`!document.getElementById("promptZone").classList.contains("busy")`, 30000);
   const sentTools = await waitFor(
     `(() => {
     const names = [...document.querySelectorAll("#chat .tool .t-name")].map((n) => n.textContent ?? "");
@@ -2002,7 +2681,7 @@ try {
     return Boolean(btn);
   })()`,
   );
-  await waitFor(`!document.getElementById("modeBtn").disabled`, 30000);
+  await waitFor(`!document.getElementById("promptZone").classList.contains("busy")`, 30000);
   await sleep(1500);
   const applyBodies = toolResults(
     transcriptMessages(),
@@ -2098,7 +2777,7 @@ try {
   );
   await sleep(400);
   await submit(ws, "nothing to review here");
-  await waitFor(`!document.getElementById("modeBtn").disabled`, 30000);
+  await waitFor(`!document.getElementById("promptZone").classList.contains("busy")`, 30000);
   await submit(ws, "/multi-model-review");
   const nothing = await waitForCard((c) => c.badge === "nothing to review");
   verdict(

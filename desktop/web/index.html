@@ -245,8 +245,9 @@
               </div>
               <h1>How can I help you build today?</h1>
               <p>
-                Switch to <b>Ask</b> mode to ask questions about this codebase,
-                or <b>Plan</b> mode to design changes before making them.
+                Just type - building is the default. Use <b>/plan</b> to design
+                changes read-only first, or <b>/ask</b> to ask about this
+                codebase without changing anything.
               </p>
               <div class="empty-chips">
                 <button
@@ -291,9 +292,7 @@
             <span id="statusDot" class="status-dot"></span>
             <span id="activityText" class="status-text">ready</span>
             <span class="status-spacer"></span>
-            <span id="statusMode" class="status-mode" title="Current mode"
-              >Build</span
-            >
+            <span id="statusMode" class="status-mode" title="Current phase"></span>
           </div>
 
           <section id="promptZone" class="composer">
@@ -325,10 +324,16 @@
             <div id="pendingBar" class="pending-bar hidden"></div>
             <div id="attachBar" class="attach-bar hidden"></div>
             <div class="composer-box">
+              <div
+                id="cmdMenu"
+                class="menu hidden up cmd-menu"
+                role="listbox"
+                aria-label="Slash commands"
+              ></div>
               <textarea
                 id="entry"
                 rows="1"
-                placeholder="Ask anything…  (Enter to send, Shift+Enter for a newline, /compact /rewind)"
+                placeholder="Ask anything…  (Enter to send, Shift+Enter for a newline, / for commands)"
               ></textarea>
               <input id="fileInput" type="file" multiple hidden />
               <button
@@ -437,25 +442,33 @@
               </div>
             </div>
             <div id="controls" class="composer-toolbar">
-              <div class="menu-anchor">
-                <button id="modeBtn" class="ctl-btn">
-                  <span class="ctl-label" id="modeLabel">Build</span>
-                  <span class="ctl-caret"
-                    ><svg
-                      viewBox="0 0 24 24"
-                      width="12"
-                      height="12"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2.2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      <polyline points="6 9 12 15 18 9" /></svg
-                  ></span>
-                </button>
-                <div id="modeMenu" class="menu hidden"></div>
-              </div>
+              <button
+                id="modeChip"
+                class="ctl-btn mode-chip hidden"
+                aria-label="Session mode"
+              >
+                <span class="ctl-label" id="modeChipLabel"></span>
+                <span
+                  class="chip-clear"
+                  aria-hidden="true"
+                  ><svg
+                    viewBox="0 0 24 24"
+                    width="12"
+                    height="12"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" /><line
+                      x1="6"
+                      y1="6"
+                      x2="18"
+                      y2="18"
+                    /></svg
+                ></span>
+              </button>
               <span class="toolbar-divider"></span>
               <div class="menu-anchor">
                 <button

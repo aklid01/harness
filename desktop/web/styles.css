@@ -2155,16 +2155,76 @@ body.hide-thinking .think-block {
 .ctl-btn.oversight .ctl-glyph {
   color: var(--accent-text);
 }
-.ctl-btn.workflow .ctl-label {
+/* The mode chip: only visible when the session isn't in the default build
+   mode. It clears the sticky mode on click; an automatic plan reads as
+   "Plan · auto" and is informational. */
+.mode-chip .ctl-label {
   color: var(--accent-text);
 }
-.ctl-btn.workflow {
+.mode-chip {
   border-color: var(--accent-line);
+}
+.mode-chip .chip-clear {
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+}
+.mode-chip.auto {
+  border-style: dashed;
 }
 .ctl-caret {
   display: grid;
   place-items: center;
   color: var(--text-3);
+}
+/* The slash-command autocomplete, anchored above the composer entry. */
+.cmd-menu {
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% + 2px);
+  max-height: 40vh;
+}
+.cmd-menu .m-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: normal;
+}
+.cmd-menu .cmd-name {
+  font-weight: 600;
+  color: var(--text-1);
+  flex: none;
+}
+.cmd-menu .m-label small {
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The one-action handoff under a plan that already ended its turn. */
+.plan-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 4px 0 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent-line);
+  border-radius: 8px;
+  background: var(--raised);
+}
+.plan-actions.auto {
+  border-left-style: dashed;
+}
+.plan-actions-tag {
+  flex: 1 1 220px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.plan-actions .modal-actions.inline {
+  margin: 0;
+  gap: 8px;
 }
 
 .menu {

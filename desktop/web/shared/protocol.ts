@@ -1,4 +1,8 @@
-export type Mode = "build" | "ask" | "plan" | "plan-build";
+/* The session's sticky mode: what a plain message runs as. "build" is the
+   default and shows nothing in the UI; /plan, /ask and the mode chip change
+   it, /build (or clicking the chip) clears it. A one-turn /plan or /ask
+   never lands here - the engine binds that turn only. */
+export type Mode = "build" | "ask" | "plan";
 
 /* Workflow phase indicator for the Plan -> Build cycle. */
 export type WorkflowPhase =
@@ -127,14 +131,19 @@ export interface SessionListItem {
   title: string;
 }
 
-/* Optional role agents and decision oversight (harness/agents.py). Each role
-   names a model by the id it already has in Settings; no credential is stored
-   here. A disabled or unset role keeps the existing default agent. */
+/* Optional role agents and decision oversight (harness/agent_roles.py). Each
+   role names a model by the id it already has in Settings; no credential is
+   stored here. A disabled or unset role keeps the existing default agent. */
 export interface AgentRole {
   enabled: boolean;
   model_id: string;
   instructions: string;
+  /* The plan role: require approval before an automatic plan builds. */
   approve?: boolean;
+  /* The plan role: the model may enter plan mode on its own. */
+  auto?: boolean;
+  /* The plan role: conservative | balanced | eager. */
+  sensitivity?: string;
 }
 export interface AgentOversight extends AgentRole {
   intensity: string;
@@ -310,6 +319,33 @@ export interface PlanEventPayload {
   plan?: string;
   model?: string;
   reason?: string;
+  /* The plan is the turn's own final message: show actions, not a card. */
+  inline?: boolean;
+  /* The model entered plan mode on its own; reason says why. */
+  auto?: boolean;
+}
+
+/* How this turn was chosen to run, and where the choice came from. `sticky`
+   marks a session-mode change (a bare command or the mode chip), as opposed
+   to a one-turn binding. */
+export interface IntentEventPayload {
+  intent: Mode;
+  source:
+    | "command"
+    | "sticky"
+    | "default"
+    | "user"
+    | "model"
+    | "auto"
+    | "fallback"
+    | "approved"
+    | "skip";
+  sticky?: boolean;
+}
+
+/* The model entered plan mode on its own. */
+export interface AutoPlanEventPayload {
+  reason: string;
 }
 
 export interface DecisionEventPayload {
@@ -330,11 +366,11 @@ export interface DecisionEventPayload {
   question?: string;
 }
 
-/* A workspace's open tabs, persisted so a restart brings them back. */
+/* A workspace's open tabs, persisted so a restart brings them back. The
+   session's sticky mode is not here: it lives with the session, engine-side. */
 export interface TabRef {
   session_id: string | null;
   title: string;
-  mode: Mode;
   dirty?: boolean;
 }
 
@@ -387,7 +423,6 @@ export type OpPayload =
   | {
       op: "submit";
       text: string;
-      mode: Mode;
       submission_id?: string;
       attachments?: AttachmentMeta[];
     }
@@ -405,15 +440,16 @@ export type OpPayload =
   | { op: "attach_part"; id: string; data: string }
   | { op: "attach_finish"; id: string }
   | { op: "attach_discard"; id: string }
-  | { op: "open"; id: string; mode: Mode }
+  | { op: "open"; id: string }
   | { op: "stop" }
+  | { op: "set_mode"; mode: Mode }
+  | { op: "plan_action"; action: "approve" | "skip" | "cancel" }
   | { op: "rewind_to"; count: number }
   | { op: "rewind_preview"; count: number }
   | {
       op: "resend";
       count: number;
       text: string;
-      mode: Mode;
       attachments?: AttachmentMeta[];
     }
   | { op: "git_status" }
@@ -442,9 +478,16 @@ export type OpPayload =
   | { op: "migrate_keys" }
   | { op: "get_context" }
   | { op: "ws_sessions"; root: string }
-  | { op: "approval_reply"; id: string; allow: boolean }
+  | {
+      op: "approval_reply";
+      id: string;
+      allow: boolean;
+      /* A plan review answers three ways: allow, choice "skip" (build
+         without the plan), or a plain deny (cancel). */
+      choice?: "skip";
+    }
   | { op: "pick_reply"; id: string; index: number | null }
-  | { op: "retry"; count: number; text: string; mode: Mode }
+  | { op: "retry"; count: number; text: string }
   | {
       op: "review_start";
       args?: Record<string, unknown>;
