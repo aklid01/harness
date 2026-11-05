@@ -32,10 +32,11 @@ uv run python -m harness.server --port 8765 --project-root . --app-data-dir <dat
 
 ## UI tour
 
-- Composer: message box plus Build/Ask/Plan mode, provider/model picker,
-  reasoning effort picker, permission level (Default, Strict, Allow All,
-  Autopilot), attach-files button, send/stop button, Settings. Workspace and
-  git branch shown in the context panel.
+- Composer: message box plus a mode chip (shown only when the session isn't
+  in the default build mode), provider/model picker, reasoning effort picker,
+  permission level (Default, Strict, Allow All, Autopilot), attach-files
+  button, send/stop button, Settings. Workspace and git branch shown in the
+  context panel.
 - Left: workspaces, each listing its sessions with LLM-generated titles
   (rename/delete via right-click, current session highlighted). New session
   opens as a tab; tabs, sidebar and the backend stay on one session id.
@@ -45,23 +46,58 @@ uv run python -m harness.server --port 8765 --project-root . --app-data-dir <dat
   Each assistant message streams into one bubble and is finalized in place.
 - Right: plan checklist (from `write_todos`) and running token totals.
 
-Ask mode is read-only Q&A: fresh Ask sessions start with a research-identity
-system prompt, the write tools are withheld exactly as in Plan mode, and any
-bash command the permission classifier does not rate as read-only is refused
-outright - no approval dialog offers an edit path. Read-only commands
-(grep, ls, git status/diff/log, ...) still run silently.
+There is no workflow selector: typing runs a build turn, the default.
+`/plan`, `/ask` and `/build` are the explicit switches, and typing `/` opens
+an autocomplete listing every command with a one-line description.
 
-Plan mode is read-only: fresh Plan sessions start with a planning-identity
-system prompt, mid-session switches add an explicit mode notice to the
-transcript (plus a per-turn reminder), and any write call is refused before
-it runs, so the model describes changes instead of making them. Sessions
-started in Build keep their build identity; switch modes with a new session
-or a mid-session switch notice. Reasoning effort and temperature are per-model
-settings, forwarded to the API only when set, and only to models that support
-them.
+- `/plan <message>` plans that one turn, read-only. `/ask <message>`
+  answers that one turn, read-only. `/build <message>` builds now, even in
+  a sticky mode.
+- A bare `/plan` or `/ask` makes every following message run that way
+  until `/build` or a click on the mode chip clears it. The session
+  remembers the mode across restarts.
 
-The mode control locks while a turn runs: a mode binds a whole turn, so stop
-the turn to switch. Permission levels stay changeable mid-turn by design.
+Ask mode is read-only Q&A: a session that starts in ask gets a
+research-identity system prompt, the write tools are withheld exactly as in
+plan mode, and any bash command the permission classifier does not rate as
+read-only is refused outright - no approval dialog offers an edit path.
+Read-only commands (grep, ls, git status/diff/log, ...) still run silently.
+
+Plan mode is read-only: a session that starts in plan gets a
+planning-identity system prompt, mid-session switches add an explicit mode
+notice to the transcript (plus a per-turn reminder), and any write call is
+refused before it runs, so the model describes changes instead of making
+them. Sessions started in Build keep their build identity; switch modes
+with a slash command or a mid-session switch notice. Reasoning effort and
+temperature are per-model settings, forwarded to the API only when set, and
+only to models that support them.
+
+## Automatic planning
+
+When a build request is ambiguous enough that a wrong guess would cost
+rework, the model may enter plan mode on its own. The decision happens
+inside the build turn's first model call: the write tools are withheld and
+the model answers a structured `plan_decision` signal - plan (with a
+one-line reason) or build. A model that never answers the signal just
+builds; nothing is ever silently read-only.
+
+Directive requests - "build me...", "fix...", "add...", "rename..." with a
+clear target - never pause, even with minor open questions: the model makes
+reasonable assumptions and states them in its reply. Saying "just do it",
+"don't ask" or "no plan" always means build. `/plan` always plans.
+
+When the model plans on its own, the mode chip beside the composer reads
+"Plan · auto" with the reason on hover, a compact note lands in the
+transcript, and the plan (with its assumptions and open questions) is
+yours to decide with one action: approve and build, skip planning and
+build now, or cancel. The approval step blocks nothing else and can be
+turned off (or made automatic) in Settings > Agents; a non-interactive run
+returns the plan and stops. After a plan is approved or skipped, the model
+does not re-plan the same request again.
+
+Per-role models still apply: when a plan role is configured
+(Settings > Agents), plan turns run on it, and an approved build runs on
+the build role's model. Plain builds always use the session model.
 
 While a turn runs, typing and pressing Enter files the message instead of
 dropping it. A **steer** joins the running conversation at the next
@@ -109,14 +145,14 @@ passed to the model as images when the model is marked as able to see them
 
 The manifest also gives the agent the staged path, so it can look at an
 attachment with the shell (`ls`, `head`) as well as with `read_file`. That
-works in Ask mode too: a command the permission layer rates as read-only
+works in ask turns too: a command the permission layer rates as read-only
 runs there without a prompt, whatever shape it has - a merged stderr and a
 shell variable included.
 
 Attached files are read-only: the agent cannot edit them in place, and any
 change it makes goes to a copy in the workspace. Reading them needs no
-permission prompt in any permission mode, in every workflow (Build, Ask, Plan
-and Plan -> Build, whose planner is told about them too), and subagents can
+permission prompt in any permission mode, in every turn (build, ask and plan
+alike, automatic plans included), and subagents can
 read them too.
 
 Limits are configurable with `HARNESS_MAX_ATTACHMENT_BYTES` (25 MB per file)
@@ -372,7 +408,17 @@ refer to findings by id (`R1`, `R2`, ...).
 
 ### Command reference
 
+Every chat understands these, typed straight into the composer:
+
 ```text
+/plan <message>   plan this turn, read-only (a bare /plan makes every
+                  following message plan until /build)
+/ask <message>    answer this turn, read-only (a bare /ask is sticky the
+                  same way)
+/build <message>  build now, the default (a bare /build leaves plan or ask)
+/rewind           jump back to an earlier point in this chat
+/sessions         open a past chat
+/compact          summarise the history so far and free up the context window
 /multi-model-review [scope] [options]
 
   run | uncommitted | staged | base:<ref>   what to review
@@ -437,7 +483,11 @@ Tauri webview (renderer)  <-- WebSocket -->  harness/server.py  <-- events -->  
   `todos`, `usage`, `status`, `note`, `session`, `compacted`, `error`, `retry`,
   ...) and blocking `interact()` for approvals and picks. No UI imports.
 - `harness/agent.py`: `Runner` emits events; same turn logic as the original
-  loop (cap/strip/compact, permissions, subagents unchanged).
+  loop (cap/strip/compact, permissions, subagents unchanged). It also owns
+  the per-turn intent (command > sticky mode > the model's `plan_decision`
+  signal > build default) and the automatic-planning behaviour - the
+  decision procedure text lives in one documented place there
+  (`AUTO_PLAN_RULES`).
 - `harness/permissions.py`: allow/ask/deny policy with modes (default, strict,
   allow-all, autopilot). The deny list wins in every mode; autopilot only ever
   auto-allows what the policy would otherwise ask about.
@@ -480,8 +530,9 @@ uv run python tests/test_text_tools.py        # XML text tool calls: parse, vali
 uv run python tests/test_sessions.py          # storage, migration, LLM titles
 uv run python tests/test_permissions.py       # policy modes, deny-list supremacy
 uv run python tests/test_llm_params.py        # effort/temperature forwarding
-uv run python tests/test_agent_roles.py            # plan/build agent routing
-uv run python tests/test_e2e_workflow.py      # plan -> build -> oversight, end to end
+uv run python tests/test_intent.py            # intent resolution, sticky mode, auto-plan
+uv run python tests/test_agent_roles.py            # plan/build role routing
+uv run python tests/test_e2e_workflow.py      # auto-plan -> approval -> oversight, end to end
 uv run python tests/test_instructions.py      # AGENTS.md injection, 20k cap
 uv run python tests/test_oversight.py         # decision review gate
 uv run python tests/test_paths.py             # workspace/app-data resolution
