@@ -1,6 +1,0 @@
-test_the_file_limit_is_honoured_and_reported (test_review_scope.Exclusions.test_the_file_limit_is_honoured_and_reported)
-Traceback (most recent call last):
-  File "D:\projects\harness\tests\test_review_scope.py", line 284, in test_the_file_limit_is_honoured_and_reported
-    self.assertTrue(detected.truncated, "the scope says it was cut short")
-    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AssertionError: False is not true : the scope says it was cut short
