@@ -192,7 +192,9 @@ class Session:
                         "role": "system",
                         "content": system_prompt(mode),
                     }
-            self.on_event(events.INTENT, {"intent": mode, "source": "user"})
+            self.on_event(
+                events.INTENT, {"intent": mode, "source": "user", "sticky": True}
+            )
             from .agent import STICKY_NOTES
 
             self.on_event(events.NOTE, {"text": STICKY_NOTES[mode]})

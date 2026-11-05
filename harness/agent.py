@@ -314,7 +314,9 @@ class Runner:
             except Exception:  # noqa: BLE001 - persistence is best-effort
                 pass
         label = mode or "build"
-        events.emit(events.INTENT, {"intent": label, "source": source})
+        events.emit(
+            events.INTENT, {"intent": label, "source": source, "sticky": True}
+        )
         events.emit(events.NOTE, {"text": STICKY_NOTES[label]})
         log.info("sticky mode set to %s (source: %s)", label, source)
 
@@ -809,6 +811,9 @@ class Runner:
                     "kind": "plan_skipped",
                 },
             )
+            # The build-now turn is a build turn again: the plan turn's
+            # read-only mode ends here, and the build notice says so.
+            self._begin_turn("build", "skip")
             self._run_build_phase(
                 task,
                 default_model,
@@ -817,6 +822,7 @@ class Runner:
             )
         else:
             self._persist_plan(task, plan_text, plan_mod.COMPLETE, "awaiting_user")
+            events.emit(events.PLAN_SKIPPED, {"task": task, "via": "user"})
             events.emit(
                 events.NOTE,
                 {

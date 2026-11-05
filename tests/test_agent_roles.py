@@ -566,6 +566,19 @@ class AutoPlanApproval(RouteBase):
             ["default-model", "plan-model", "build-model"],
             "skip: the build runs at once (build role) without the plan handoff",
         )
+        # The build-now turn is a real build turn: the plan turn's read-only
+        # mode ended, which the transcript notice says out loud. (The notice
+        # is a system-reminder, so it is read from the raw transcript here.)
+        sid = self.sid()
+        raw = (
+            (paths_mod.session_dir() / f"{sid}.jsonl")
+            .read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "Your operational mode has changed to BUILD",
+            raw,
+            "the skip build runs as build, not as a fenced plan turn",
+        )
         self.assertFalse(
             any(u.startswith("<plan>") for u in self.transcript_users()),
             "no handoff message is injected on skip",
