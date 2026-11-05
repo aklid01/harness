@@ -4,7 +4,7 @@
    never lands here - the engine binds that turn only. */
 export type Mode = "build" | "ask" | "plan";
 
-/* Workflow phase indicator for the Plan -> Build cycle. */
+/* Workflow phase indicator (planning, handoff, build, ...). */
 export type WorkflowPhase =
   | "planning"
   | "replanning"

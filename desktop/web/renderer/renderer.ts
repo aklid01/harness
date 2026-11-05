@@ -1748,7 +1748,7 @@ const ROLE_LABEL: Record<string, string> = {
   build: "build",
   checker: "review",
 };
-/* Workflow phase marker for the Plan -> Build cycle. Each transition appends a
+/* Workflow phase marker for plan-and-build runs. Each transition appends a
    distinct marker into the transcript, so the sequence - planning, plan ready,
    handing off, building, done - reads as a timeline and it is clear which phase
    ran when. Per-decision reviews are not repeated here (the decision cards

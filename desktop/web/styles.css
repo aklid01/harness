@@ -1147,7 +1147,7 @@ button {
   padding: 4px 2px;
 }
 
-/* workflow phase indicator (Plan -> Build) */
+/* workflow phase indicator (plan turns and handoffs) */
 .phase {
   display: inline-flex;
   align-items: center;
