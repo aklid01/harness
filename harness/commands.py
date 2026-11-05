@@ -4,11 +4,32 @@ from . import compact as compaction
 from . import events, session
 
 COMMANDS = {
+    "/plan": "plan this turn, read-only (alone: plan every message until /build)",
+    "/ask": "answer this turn, read-only (alone: ask every message until /build)",
+    "/build": "build now, the default (alone: leave plan or ask)",
     "/rewind": "jump back to an earlier point in this chat",
     "/sessions": "open a past chat",
     "/compact": "summarise the history so far and free up the context window",
     "/multi-model-review": "have independent reviewer models critique the change",
 }
+
+# The three mode commands are parsed before anything else: with text they bind
+# one turn, without text they set the session's sticky mode (see Runner).
+MODE_COMMANDS = {"/plan": "plan", "/ask": "ask", "/build": "build"}
+
+
+def parse_mode_command(text):
+    """Split a leading mode command off ``text``.
+
+    Returns (kind, rest) with kind in ("plan", "ask", "build") and the text
+    after the command, or (None, None) when the text does not start with one.
+    The first token must match exactly, so "/planx" stays an unknown command.
+    """
+    parts = str(text or "").strip().split(None, 1)
+    kind = MODE_COMMANDS.get(parts[0]) if parts else None
+    if kind is None:
+        return None, None
+    return kind, (parts[1].strip() if len(parts) > 1 else "")
 
 
 def preview(message):

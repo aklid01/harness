@@ -1,11 +1,12 @@
-"""End-to-end: plan agent, build agent, and decision oversight on the wire.
+"""End-to-end: the plan-or-proceed decision, role routing, and oversight on the wire.
 
 This is the one test that does not patch call_llm. It runs the real Harness
 backend, the real model call and the real provider routing against a scripted
-in-process HTTP endpoint, so it proves what the unit tests cannot: that
-providers.use actually sends the plan request to the plan model, the build
-request to the build model, and the review to the reviewer model, over the wire,
-with the reviewer holding no tools - and that the approved edit really lands.
+in-process HTTP endpoint, so it proves what the unit tests cannot: that the
+model's plan_decision converts the turn and the plan request goes to the plan
+model, the approved build goes to the build model (or falls back to the session
+model), and the review goes to the reviewer model, over the wire, with the
+reviewer holding no tools - and that the approved edit really lands.
 
 Every model is a step-scripted endpoint keyed by model name, so the flow is
 deterministic and the run writes a JSON artifact (in the temp dir) that is read
@@ -140,6 +141,11 @@ class WorkflowE2E(unittest.TestCase):
             "coder-model": [
                 {
                     "kind": "tool",
+                    "name": "plan_decision",
+                    "arguments": {"decision": "plan", "reason": "ambiguous scope"},
+                },
+                {
+                    "kind": "tool",
                     "name": "write_file",
                     "arguments": {"path": str(self.edited), "content": "# marker\n"},
                 },
@@ -176,6 +182,23 @@ class WorkflowE2E(unittest.TestCase):
         self.sent = []
         self.backend.attach(self.sent.append)
         self.addCleanup(self.quiesce)
+        # The plan gate blocks on the approval channel, so a responder answers
+        # it the way the frontend would: allow by default, "skip" on demand.
+        self.approval_answer = True
+        self._answered: set = set()
+        self._stop = threading.Event()
+        threading.Thread(target=self._approver, daemon=True).start()
+        self.addCleanup(self._stop.set)
+
+    def _approver(self):
+        while not self._stop.wait(0.02):
+            for m in list(self.sent):
+                rid, req = m.get("id"), m.get("request")
+                if rid and req == "approval" and rid not in self._answered:
+                    self._answered.add(rid)
+                    s = self.backend.sessions.get(m.get("session"))
+                    if s:
+                        s.reply(rid, self.approval_answer)
 
     def quiesce(self):
         for s in list(self.backend.sessions.values()):
@@ -198,24 +221,32 @@ class WorkflowE2E(unittest.TestCase):
                 return m["payload"]["id"]
         return None
 
-    def run_turn(self, text="set a marker in app.py", mode="build"):
+    def run_turn(self, text="set a marker in app.py", mode=None):
         self.backend.dispatch(
             {
                 "op": "open",
                 "session": "s",
                 "root": str(self.root),
-                "mode": mode,
                 "req_id": time.time_ns(),
             }
         )
         self.assertTrue(self.done("s", kind="session"))
         self.sent.clear()
+        if mode:
+            # The sticky mode: what a plain message runs as (set_mode op).
+            self.backend.dispatch(
+                {
+                    "op": "set_mode",
+                    "session": "s",
+                    "mode": mode,
+                    "req_id": time.time_ns(),
+                }
+            )
         self.backend.dispatch(
             {
                 "op": "submit",
                 "session": "s",
                 "text": text,
-                "mode": mode,
                 "req_id": time.time_ns(),
             }
         )
@@ -224,6 +255,9 @@ class WorkflowE2E(unittest.TestCase):
             s.join_background(timeout=10)
 
     def test_the_whole_workflow_over_the_wire(self):
+        """The model's own decision converts the turn: plan on the plan model,
+        the user approves over the wire, the build runs on the session model
+        with the plan as context, oversight checks the edit, and it lands."""
         agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
@@ -236,7 +270,7 @@ class WorkflowE2E(unittest.TestCase):
                 },
             }
         )
-        self.run_turn(mode="plan-build")
+        self.run_turn(text="make the app faster")
 
         # Only workflow requests, not the background title request (coder-model).
         flow = [
@@ -249,12 +283,28 @@ class WorkflowE2E(unittest.TestCase):
         ]
         models = [r["model"] for r in flow]
 
-        # Order: the plan runs first, then the coder proposes, the reviewer
-        # checks that decision, and the coder continues after approval.
+        # Order: the decision call on the session model, the plan on the plan
+        # model, then - after the approval - the write, its oversight review,
+        # and the closing message.
         self.assertEqual(
-            models[:4],
-            ["plan-model", "coder-model", "reviewer-model", "coder-model"],
+            models[:5],
+            [
+                "coder-model",
+                "plan-model",
+                "coder-model",
+                "reviewer-model",
+                "coder-model",
+            ],
             f"routing order was {models}",
+        )
+
+        # The decision gate withheld the write tools from the first call.
+        decision_req = flow[0]
+        self.assertIn("plan_decision", decision_req["tool_names"])
+        self.assertNotIn(
+            "write_file",
+            decision_req["tool_names"],
+            "no write tool may be offered before the decision",
         )
 
         reviewer_req = next(r for r in flow if r["model"] == "reviewer-model")
@@ -262,12 +312,12 @@ class WorkflowE2E(unittest.TestCase):
 
         # The plan reached the coder: the coder's post-review request carries the
         # <plan> handoff as structured context.
-        coder_post = flow[3]
+        coder_post = flow[4]
         self.assertTrue(
             any(
                 "<plan>" in str(m.get("content") or "") for m in coder_post["messages"]
             ),
-            "the plan is handed to the build agent as context",
+            "the plan is handed to the build as context",
         )
 
         # The approved edit really landed.
@@ -275,7 +325,10 @@ class WorkflowE2E(unittest.TestCase):
 
         # A reproducible, checkable artifact of the run.
         report = {
-            "scenario": "plan -> build -> oversight-approve -> build",
+            "scenario": (
+                "auto-plan decision -> plan -> approval -> build -> "
+                "oversight-approve -> build"
+            ),
             "model_request_order": models,
             "reviewer_is_tool_less": not reviewer_req["has_tools"],
             "plan_reached_build": any(
@@ -295,8 +348,14 @@ class WorkflowE2E(unittest.TestCase):
         artifact.write_text(json.dumps(report, indent=2), encoding="utf-8")
         reread = json.loads(artifact.read_text(encoding="utf-8"))
         self.assertEqual(
-            reread["model_request_order"][:4],
-            ["plan-model", "coder-model", "reviewer-model", "coder-model"],
+            reread["model_request_order"][:5],
+            [
+                "coder-model",
+                "plan-model",
+                "coder-model",
+                "reviewer-model",
+                "coder-model",
+            ],
         )
         self.assertTrue(reread["reviewer_is_tool_less"])
         self.assertTrue(reread["plan_reached_build"])
@@ -434,6 +493,8 @@ class WorkflowE2E(unittest.TestCase):
         mock_state(self.server).cursors = {
             k: 0 for k in mock_state(self.server).scripts
         }
+        # The sticky ask mode: the session starts with the ask identity, the
+        # way a fresh ask session does.
         self.run_turn(text="What does this project do?", mode="ask")
 
         # The ask request on the wire: the session model, the ask identity in

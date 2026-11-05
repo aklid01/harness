@@ -58,7 +58,10 @@ class Session:
         self._seq = 0
         self._submissions: dict = {}
         self._workers: list = []
-        self.mode = "build"  # workflow: build / ask / plan / plan-build
+        # The session's sticky mode: what a plain message runs as. "build" is
+        # the default; /plan, /ask and the mode chip change it, /build clears
+        # it. A per-turn /plan or /ask never lands here.
+        self.mode = "build"
         self.perms = "default"  # permission policy: default/strict/...
         self._mode_ref = permissions_mod.mode_ref(
             self.perms
@@ -145,14 +148,55 @@ class Session:
         with paths_mod.rooted(self.root):
             yield
 
-    def ensure_runner(self, mode):
+    def ensure_runner(self):
         from .agent import Runner
 
+        # The runner's sticky mode follows the session; its per-turn mode is
+        # stamped by handle_input (a command, the sticky, or the default).
+        sticky = self.mode if self.mode in ("plan", "ask") else None
         if self.runner is None:
-            self.runner = Runner(stream=True, cancel_event=self.cancel, mode=mode)
-        else:
-            self.runner.mode = mode
+            self.runner = Runner(stream=True, cancel_event=self.cancel, mode=self.mode)
+        self.runner.sticky_mode = sticky
+        self.runner.on_sticky_change = self._sticky_changed
         self.runner.review_hook = self._review_request
+
+    def _sticky_changed(self, mode):
+        """The runner changed the sticky mode itself (a bare /plan or /build)."""
+        self.mode = mode or "build"
+        if self.session_id:
+            with self.workspace():
+                session_mod.set_sticky_mode(self.session_id, mode)
+
+    def set_mode(self, mode):
+        """Adopt a sticky mode from the mode chip: engine state, sidecar, UI."""
+        if mode not in ("build", "plan", "ask"):
+            return False
+        if mode != self.mode:
+            self.mode = mode
+            if self.session_id:
+                with self.workspace():
+                    session_mod.set_sticky_mode(
+                        self.session_id, None if mode == "build" else mode
+                    )
+            if self.runner is not None:
+                self.runner.sticky_mode = None if mode == "build" else mode
+                # A draft tab has no history yet: its identity prompt should
+                # follow the mode it will start in.
+                if (
+                    len(self.runner.messages) == 1
+                    and self.runner.messages[0].get("role") == "system"
+                ):
+                    from .llm import system_prompt
+
+                    self.runner.messages[0] = {
+                        "role": "system",
+                        "content": system_prompt(mode),
+                    }
+            self.on_event(events.INTENT, {"intent": mode, "source": "user"})
+            from .agent import STICKY_NOTES
+
+            self.on_event(events.NOTE, {"text": STICKY_NOTES[mode]})
+        return True
 
     def _thread(self, target, *args):
         threading.Thread(target=target, args=args, daemon=True).start()
@@ -204,7 +248,6 @@ class Session:
     def submit(
         self,
         text: str,
-        mode: str,
         submission_id: str | None = None,
         attachments: list | None = None,
     ) -> bool:
@@ -221,7 +264,7 @@ class Session:
         self.cancel.clear()
         # A new run supersedes a review that is still going: the card says so.
         self.cancel_review()
-        self._thread(self._turn, text, mode, None, self._keep_attachments(attachments))
+        self._thread(self._turn, text, None, self._keep_attachments(attachments))
         return True
 
     def _keep_attachments(self, items):
@@ -323,7 +366,7 @@ class Session:
             self.written = 0
             return new_id
 
-    def _turn(self, text, mode, via=None, attachments=None):
+    def _turn(self, text, via=None, attachments=None):
         crashed = None
         try:
             # Materialise INSIDE the try: a failing first prompt (read-only
@@ -341,11 +384,12 @@ class Session:
                             "label": "new",
                             "messages": [],
                             "id": new_id,
+                            "mode": self.mode,
                             "pending": self.mailbox.items(),
                             "review": self.review_state(),
                         },
                     )
-                self.ensure_runner(mode)
+                self.ensure_runner()
                 self.runner.mailbox = self.mailbox
                 self.runner.handle_input(text, via=via, attachments=attachments)
                 # Keep the append cursor in step with what was just written.
@@ -357,18 +401,20 @@ class Session:
             self.on_event(
                 events.ERROR, {"text": f"{type(failure).__name__}: {failure}"}
             )
-        self._end_turn(mode, crashed)
+        self._end_turn(crashed)
 
-    def _end_turn(self, mode, crashed=None):
+    def _end_turn(self, crashed=None):
         """Shared tail of a worker turn: classify the outcome, then either
         chain the next pending message or go idle.
 
         A provider error discards queued messages (steers stay pending); a
         manual stop keeps everything; success hands the mailbox's oldest
-        message a fresh turn. `done` fires only when nothing follows, so a
-        queue chain looks like one continuous busy spell to the UI. The whole
-        decision runs under the session lock so an enqueue racing the turn's
-        last moment either chains or is refused - never stranded idle.
+        message a fresh turn - which resolves its own intent when it runs, so
+        a queued /plan or /ask carries its command. `done` fires only when
+        nothing follows, so a queue chain looks like one continuous busy spell
+        to the UI. The whole decision runs under the session lock so an
+        enqueue racing the turn's last moment either chains or is refused -
+        never stranded idle.
         """
         with self.lock:
             if crashed is not None or getattr(self.runner, "turn_failed", False):
@@ -385,7 +431,6 @@ class Session:
                     self._thread(
                         self._turn,
                         follow["text"],
-                        mode,
                         follow["kind"],
                         follow.get("attachments"),
                     )
@@ -397,7 +442,7 @@ class Session:
             self._send({"event": "done", "payload": {}})
             self._maybe_title()
 
-    def open_chat(self, session_id, mode):
+    def open_chat(self, session_id):
         with self.lock:
             if self.running:
                 # Opening swaps session_id/written/runner; doing that under a
@@ -407,9 +452,9 @@ class Session:
                     {"text": "a turn is running - open the session after it finishes"},
                 )
                 return
-        self._thread(self._open, session_id, mode)
+        self._thread(self._open, session_id)
 
-    def _open(self, session_id, mode):
+    def _open(self, session_id):
         from . import history
 
         with self.bound():
@@ -418,9 +463,10 @@ class Session:
                 history.strip(messages)
                 self.session_id = session_mod.current_id()
                 self.written = session_mod.written()
+                # The session comes back in the mode it was left in.
+                self.mode = session_mod.sticky_mode(self.session_id) or "build"
                 self.runner = self._new_runner()
                 self.runner.messages = messages
-                self.runner.mode = mode
                 label = "opened"
             else:
                 # Nothing to open: no id at all (a workspace with no sessions
@@ -432,7 +478,7 @@ class Session:
                 # restart.
                 self.session_id = None
                 self.written = 0
-                self.runner = self._new_runner(mode=mode or "build")
+                self.runner = self._new_runner()
                 label = "new"
             self.on_event(
                 events.SESSION,
@@ -440,20 +486,22 @@ class Session:
                     "label": label,
                     "messages": self.runner.messages,
                     "id": self.session_id,
+                    "mode": self.mode,
                     "pending": self.mailbox.items(),
                     "review": self.review_state(),
                 },
             )
         self._maybe_title()
 
-    def _new_runner(self, mode="build"):
+    def _new_runner(self):
         from .agent import Runner
 
-        runner = Runner(stream=True, cancel_event=self.cancel, mode=mode)
+        runner = Runner(stream=True, cancel_event=self.cancel, mode=self.mode)
+        runner.sticky_mode = self.mode if self.mode in ("plan", "ask") else None
         runner.review_hook = self._review_request
         return runner
 
-    def resubmit(self, count, text, mode, restore_files=True, attachments=None):
+    def resubmit(self, count, text, restore_files=True, attachments=None):
         with self.lock:
             if self.running:
                 self.on_event(
@@ -463,14 +511,14 @@ class Session:
             self.running = True
         self.cancel.clear()
         self.cancel_review()
-        self._thread(self._resend, count, text, mode, restore_files, attachments)
+        self._thread(self._resend, count, text, restore_files, attachments)
         return True
 
-    def _resend(self, count, text, mode, restore_files=True, attachments=None):
+    def _resend(self, count, text, restore_files=True, attachments=None):
         crashed = None
         try:
             with self.bound():
-                self.ensure_runner(mode)
+                self.ensure_runner()
                 self.runner.mailbox = self.mailbox
                 try:
                     count = max(0, min(int(count), len(self.runner.messages)))
@@ -506,7 +554,72 @@ class Session:
             self.on_event(
                 events.ERROR, {"text": f"{type(failure).__name__}: {failure}"}
             )
-        self._end_turn(mode, crashed)
+        self._end_turn(crashed)
+
+    def plan_action(self, action):
+        """The plan card's actions on an already-ended plan.
+
+        approve starts the build handoff (exactly once per plan); skip and
+        cancel dismiss the plan, leaving it readable and nothing built.
+        """
+        from . import plan as plan_mod
+
+        if action not in ("approve", "skip", "cancel"):
+            return False
+        if not self.session_id:
+            return False
+        with self.workspace():
+            record = plan_mod.load(self.session_id)
+        if not record or not (record.get("plan") or "").strip():
+            self.on_event(events.NOTE, {"text": "no plan to act on"})
+            return False
+        if record.get("phase") not in ("planned", "awaiting_user"):
+            return False
+        task = record.get("task") or ""
+        plan_text = record.get("plan") or ""
+        if action != "approve":
+            with self.workspace():
+                plan_mod.save(
+                    self.session_id, phase="cancelled", completion=plan_mod.CANCELLED
+                )
+            self.on_event(events.PLAN_SKIPPED, {"task": task, "via": "user"})
+            self.on_event(
+                events.NOTE,
+                {
+                    "text": "The plan was dismissed; nothing was built.",
+                    "kind": "plan_skipped",
+                },
+            )
+            return True
+        with self.lock:
+            if self.running:
+                self.on_event(
+                    events.NOTE, {"text": "a turn is running - stop it first"}
+                )
+                return False
+            self.running = True
+        self.cancel.clear()
+        with self.workspace():
+            plan_mod.save(self.session_id, phase="building")
+        self.on_event(events.PLAN_APPROVED, {"task": task})
+        self._thread(self._handoff_worker, plan_text, task)
+        return True
+
+    def _handoff_worker(self, plan_text, task):
+        """One worker turn: build from the approved plan, then idle or chain."""
+        crashed = None
+        try:
+            with self.bound():
+                self.ensure_runner()
+                self.runner.mailbox = self.mailbox
+                self.runner.run_plan_handoff(plan_text, task)
+                self.written = session_mod.written()
+        except Exception as failure:  # noqa: BLE001 - report, don't kill the session
+            crashed = failure
+            self.on_event(
+                events.ERROR, {"text": f"{type(failure).__name__}: {failure}"}
+            )
+        self._end_turn(crashed)
 
     def rewind_to(self, count):
         with self.lock:
@@ -790,7 +903,7 @@ class Session:
                 f"Address the review findings {ids}. Use the suggested fixes "
                 "where they fit, and say which ones you did not apply and why."
             )
-        return self.submit(text, self.mode)
+        return self.submit(text)
 
     def _maybe_title(self):
         def work():
@@ -867,14 +980,13 @@ class Harness:
 
         if op in ("approval_reply", "pick_reply"):
             s = self.sessions.get(key) if key else None
-            ok = (
-                s.reply(
-                    obj.get("id"),
-                    obj.get("allow") if op == "approval_reply" else obj.get("index"),
-                )
-                if s
-                else False
-            )
+            if op == "approval_reply":
+                # A plan review answers three ways: allow, or choice "skip"
+                # (build without the plan), or a plain deny (cancel).
+                result = obj.get("choice") or obj.get("allow")
+            else:
+                result = obj.get("index")
+            ok = s.reply(obj.get("id"), result) if s else False
             return _reply({"reply": op, "ok": bool(ok)})
 
         if op in (
@@ -909,7 +1021,7 @@ class Harness:
             s.root = Path(str(root)).resolve()
 
         if op == "open":
-            s.open_chat(obj.get("id", ""), obj.get("mode", s.mode))
+            s.open_chat(obj.get("id", ""))
             return _reply({"reply": "open", "ok": True})
         if op in ("attach_begin", "attach_part", "attach_finish", "attach_discard"):
             return _reply(self._attachment_op(op, obj, key))
@@ -919,7 +1031,6 @@ class Harness:
                     "reply": "submit",
                     "ok": s.submit(
                         obj.get("text", ""),
-                        obj.get("mode", s.mode),
                         submission_id=obj.get("submission_id"),
                         attachments=obj.get("attachments"),
                     ),
@@ -960,6 +1071,12 @@ class Harness:
         if op == "stop":
             s.stop()
             return _reply({"reply": "stop", "ok": True})
+        if op == "set_mode":
+            return _reply({"reply": op, "ok": s.set_mode(obj.get("mode", "build"))})
+        if op == "plan_action":
+            return _reply(
+                {"reply": op, "ok": s.plan_action(obj.get("action", ""))}
+            )
         if op == "list_sessions":
             return _reply({"reply": op, "ok": True, "data": s.list_sessions()})
         if op == "get_transcript":
@@ -1019,7 +1136,6 @@ class Harness:
                     "ok": s.resubmit(
                         obj.get("count", 0),
                         obj.get("text", ""),
-                        obj.get("mode", s.mode),
                         attachments=obj.get("attachments"),
                     ),
                 }
@@ -1101,7 +1217,6 @@ class Harness:
             ok = s.resubmit(
                 obj.get("count", 0),
                 obj.get("text", ""),
-                obj.get("mode", s.mode),
                 restore_files=False,
             )
             return _reply({"reply": "retry", "ok": bool(ok)})

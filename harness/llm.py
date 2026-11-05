@@ -104,15 +104,24 @@ def _params(messages, tools, caps):
         # Only advertise what this session can actually run, and only from the
         # set the caller asked for. A tool that would fail on arrival is noise
         # the model has to pay for; a session where nothing runs sends no tools
-        # at all and says so instead of pretending.
+        # at all and says so instead of pretending. A schema the caller adds
+        # that the registry does not know (the turn loop's plan decision) is
+        # the caller's explicit choice and passes through untouched.
         wanted = {
             schema["function"]["name"]: schema
             for schema in (tools if tools is not None else TOOL_SCHEMAS)
         }
+        registry = {schema["function"]["name"] for schema in tools_mod.TOOL_SCHEMAS}
         offered = [
             schema
             for schema in tools_mod.tool_schemas()
             if schema["function"]["name"] in wanted
+        ]
+        known = {schema["function"]["name"] for schema in offered}
+        offered = offered + [
+            schema
+            for name, schema in wanted.items()
+            if name not in registry and name not in known
         ]
         if offered:
             params["tools"] = offered

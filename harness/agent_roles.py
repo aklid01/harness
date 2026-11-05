@@ -37,13 +37,30 @@ DEFAULT_INTENSITY = "medium"
 DEFAULT_MAX_ROUNDS = 2
 MAX_ROUNDS_LIMIT = 6
 
+# How readily the model plans on its own: conservative plans only on real
+# ambiguity, eager plans at the first doubt. Balanced is the default.
+SENSITIVITIES = ("conservative", "balanced", "eager")
+DEFAULT_SENSITIVITY = "balanced"
+# Approval is required before an automatic plan hands off to build. A plan
+# review is the point of planning automatically; turning it off makes the
+# plan advisory (shown, then built without waiting).
+DEFAULT_PLAN_APPROVAL = True
+DEFAULT_AUTO_PLAN = True
+
 # Roles are keyed by name so callers can index config["plan"], config["build"]
 # and config["oversight"] uniformly, while oversight carries its own extra
 # fields for the review loop.
 _ROLE_FIELDS = ("enabled", "model_id", "instructions")
 
 DEFAULTS = {
-    "plan": {"enabled": False, "model_id": "", "instructions": "", "approve": False},
+    "plan": {
+        "enabled": False,
+        "model_id": "",
+        "instructions": "",
+        "approve": DEFAULT_PLAN_APPROVAL,
+        "auto": DEFAULT_AUTO_PLAN,
+        "sensitivity": DEFAULT_SENSITIVITY,
+    },
     "build": {"enabled": False, "model_id": "", "instructions": ""},
     "oversight": {
         "enabled": False,
@@ -60,15 +77,24 @@ DEFAULTS = {
 }
 
 
-def _clean_role(raw, approve_default=None):
+def _clean_role(raw, plan=False):
     raw = raw if isinstance(raw, dict) else {}
     clean = {
         "enabled": as_bool(raw.get("enabled")),
         "model_id": as_text(raw.get("model_id")),
         "instructions": as_text(raw.get("instructions")),
     }
-    if approve_default is not None:
-        clean["approve"] = as_bool(raw.get("approve"), default=approve_default)
+    if plan:
+        # The plan role carries the automatic-planning settings. A stored
+        # value always wins; a missing one takes the current default, so an
+        # old agents.json keeps its explicit "approve": false and one that
+        # never set it starts gating now that the gate has a new job.
+        clean["approve"] = as_bool(raw.get("approve"), default=DEFAULT_PLAN_APPROVAL)
+        clean["auto"] = as_bool(raw.get("auto"), default=DEFAULT_AUTO_PLAN)
+        sensitivity = as_text(raw.get("sensitivity")) or DEFAULT_SENSITIVITY
+        clean["sensitivity"] = (
+            sensitivity if sensitivity in SENSITIVITIES else DEFAULT_SENSITIVITY
+        )
     if "intensity" in raw or "max_rounds" in raw:
         intensity = as_text(raw.get("intensity")) or DEFAULT_INTENSITY
         clean["intensity"] = (
@@ -90,11 +116,7 @@ def normalise(raw) -> dict:
     out["review"] = _clean_review(raw.get("review"))
     for role, default in DEFAULTS.items():
         merged = dict(default)
-        merged.update(
-            _clean_role(
-                raw.get(role), approve_default=False if role == "plan" else None
-            )
-        )
+        merged.update(_clean_role(raw.get(role), plan=role == "plan"))
         out[role] = merged
     return out
 
@@ -176,17 +198,28 @@ def resolve_model(role_config, default_id) -> str | None:
 
 
 def plan_active(config) -> bool:
-    """True when a dedicated planning pass should run before building."""
+    """True when a dedicated plan model should run plan turns."""
     return bool(config["plan"].get("enabled"))
 
 
-def plan_wants_approval(config) -> bool:
-    """True when the plan should pause for the user before building.
+def auto_plan_enabled(config) -> bool:
+    """True when the model may enter plan mode on its own (the default)."""
+    return bool(config["plan"].get("auto"))
 
-    Defaults to false, so a plan agent that is off (or one that left this off)
-    behaves exactly as before: plan then build automatically.
+
+def plan_sensitivity(config) -> str:
+    """How readily the model plans on its own: conservative, balanced or eager."""
+    sensitivity = config["plan"].get("sensitivity")
+    return sensitivity if sensitivity in SENSITIVITIES else DEFAULT_SENSITIVITY
+
+
+def plan_wants_approval(config) -> bool:
+    """True when an automatic plan must be approved before it builds.
+
+    This now governs only the automatic handoff: an explicit /plan never
+    blocks, and the plan card's approve action is always available.
     """
-    return bool(config["plan"].get("enabled")) and bool(config["plan"].get("approve"))
+    return bool(config["plan"].get("approve"))
 
 
 def oversight_enabled(config) -> bool:

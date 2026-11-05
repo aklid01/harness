@@ -82,6 +82,13 @@ def _titles_path():
     return paths.titles_file()
 
 
+def _modes_path():
+    r = _ROOT.get()
+    if r is not None:
+        return paths.modes_file(r)
+    return paths.modes_file()
+
+
 def migrate_root_sessions():
     """Move timestamp session files out of the project root."""
 
@@ -143,6 +150,43 @@ def delete_session(session_id):
             )
         except OSError:
             pass
+    set_sticky_mode(session_id, None)
+
+
+# The sticky mode a session keeps across messages and restarts: None is the
+# build default, otherwise "plan" or "ask". Stored next to the titles, keyed
+# by session id, so a reopened session comes back in the mode it was left in.
+STICKY_MODES = ("plan", "ask")
+
+
+def _modes():
+    try:
+        data = json.loads(_modes_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def sticky_mode(session_id):
+    """The saved sticky mode for one session, or None."""
+    mode = _modes().get(session_id)
+    return mode if mode in STICKY_MODES else None
+
+
+def set_sticky_mode(session_id, mode):
+    """Persist the sticky mode; None clears the entry."""
+    modes = _modes()
+    if mode in STICKY_MODES:
+        modes[session_id] = mode
+    else:
+        modes.pop(session_id, None)
+    try:
+        _dir().mkdir(parents=True, exist_ok=True)
+        _modes_path().write_text(
+            json.dumps(modes, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+    except OSError:
+        pass
 
 
 def path_for(session_id):

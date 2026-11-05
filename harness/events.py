@@ -43,6 +43,14 @@ DECISION = "decision"
 PHASE = "phase"
 PENDING = "pending"
 THINKING = "thinking"
+# Per-turn intent: how this turn was selected to run (build, plan or ask) and
+# where that choice came from - a slash command, the session's sticky mode,
+# the model's own auto-plan decision, or the build default.
+INTENT = "intent"
+# The model entered plan mode on its own; the payload carries its reason.
+AUTO_PLAN = "auto_plan"
+PLAN_APPROVED = "plan_approved"
+PLAN_SKIPPED = "plan_skipped"
 # The multi-model review. One event type carries every stage of a review -
 # offer, started, progress, finding, completed, failed, nothing, cancelled -
 # so a frontend can follow a review with a single case in its switch.

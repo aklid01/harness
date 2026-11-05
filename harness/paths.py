@@ -176,6 +176,10 @@ def titles_file(root: Path | str | None = None) -> Path:
     return session_dir(root) / "titles.json"
 
 
+def modes_file(root: Path | str | None = None) -> Path:
+    return session_dir(root) / "modes.json"
+
+
 def env_files() -> list[Path]:
     return [project_root() / ".env", Path.home() / ".agents" / "env"]
 

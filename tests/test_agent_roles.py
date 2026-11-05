@@ -1,14 +1,16 @@
-"""Optional plan/build agents: role routing around the existing agent.
+"""Optional plan/build role models around the per-turn intent.
 
 Everything here runs with the real backend but a mocked call_llm, so what is
 asserted is which *configured model* each phase used and what context the build
-phase received - not the wording a live model returns. The spine is the same
+turn received - not the wording a live model returns. The spine is the same
 one test_model_switch uses: providers for two models, and the recorded
 provider.active_config()[2] of each call proves the routing.
 
-The load-bearing guarantee: with the feature disabled, one submit is still one
-model request against the session's own model, with no planning handoff in the
-transcript - the existing agent, unchanged.
+The load-bearing guarantees: with the roles disabled, every turn runs on the
+session's model with no handoff in the transcript; a plan turn (explicit
+/plan or an auto-plan conversion) runs on the plan role's model when one is
+configured, and the approved build runs on the build role's model - exactly
+once per approved plan.
 """
 
 import json
@@ -176,6 +178,7 @@ class RouteBase(unittest.TestCase):
         self.seen = {}
 
         self.calls = []  # (model, has_plan_in_context)
+        self.plan_first = False  # the model answers the decision gate with "plan"
         self.patch = mock.patch("harness.agent.call_llm")
         self.llm = self.patch.start()
         self.addCleanup(self.patch.stop)
@@ -191,8 +194,19 @@ class RouteBase(unittest.TestCase):
         model = providers.active_config()[2]
         has_plan = any("<plan>" in str(m.get("content") or "") for m in messages)
         self.calls.append((model, has_plan))
-        # The planner answers with a plan; the builder answers with a summary.
-        if model == "plan-model":
+        names = [
+            c["function"]["name"]
+            for m in messages
+            for c in (m.get("tool_calls") or [])
+        ]
+        decided = any(
+            "Entering plan mode" in str(m.get("content") or "") for m in messages
+        )
+        if self.plan_first and "plan_decision" not in names and not decided:
+            return reply(
+                None, [("plan_decision", {"decision": "plan", "reason": "ambiguous"})]
+            ), USAGE
+        if decided or model == "plan-model":
             return reply("PLAN_BODY: step one, step two."), USAGE
         return reply("built it"), USAGE
 
@@ -227,11 +241,11 @@ class RouteBase(unittest.TestCase):
                 return m["payload"]["id"]
         return None
 
-    def submit(self, text="fix the bug", mode="build"):
+    def submit(self, text="fix the bug"):
         self.dispatch(op="open", session="s", root=str(self.root))
         self.assertTrue(self.done("s", kind="session"))
         self.calls.clear()
-        self.dispatch(op="submit", session="s", text=text, mode=mode)
+        self.dispatch(op="submit", session="s", text=text)
         self.assertTrue(self.done("s"))
 
     def transcript_users(self):
@@ -247,7 +261,12 @@ class RouteBase(unittest.TestCase):
                 del out[entry["rewind_to"] :]
             elif "compacted" not in entry:
                 out.append(entry)
-        return [m["content"] for m in out if m.get("role") == "user"]
+        return [
+            m["content"]
+            for m in out
+            if m.get("role") == "user"
+            and not str(m.get("content") or "").startswith("<system-reminder")
+        ]
 
 
 class RouteCase(RouteBase):
@@ -269,7 +288,12 @@ class RouteCase(RouteBase):
             "no plan handoff message is injected when the feature is off",
         )
 
-    # ---- plan + build ---------------------------------------------------
+    # ---- explicit /plan + approved build --------------------------------
+
+    def approve_plan(self):
+        """Approve the ended plan through the plan card's action."""
+        self.dispatch(op="plan_action", session="s", action="approve")
+        self.assertTrue(self.done("s"))
 
     def test_plan_and_build_use_their_own_models_in_order(self):
         agent_roles.save(
@@ -278,11 +302,12 @@ class RouteCase(RouteBase):
                 "build": {"enabled": True, "model_id": "mdl-build"},
             }
         )
-        self.submit(mode="plan-build")
+        self.submit("/plan fix the bug")
+        self.approve_plan()
         self.assertEqual(
             [m for m, _ in self.calls],
             ["plan-model", "build-model"],
-            "the plan runs on the plan model, the build on the build model",
+            "the plan runs on the plan model, the approved build on the build model",
         )
 
     def test_plan_is_handed_to_the_build_as_context(self):
@@ -292,7 +317,8 @@ class RouteCase(RouteBase):
                 "build": {"enabled": True, "model_id": "mdl-build"},
             }
         )
-        self.submit(mode="plan-build")
+        self.submit("/plan fix the bug")
+        self.approve_plan()
         plan_call = next(c for c in self.calls if c[0] == "plan-model")
         build_call = next(c for c in self.calls if c[0] == "build-model")
         self.assertFalse(plan_call[1], "the plan call does not carry a plan yet")
@@ -307,82 +333,78 @@ class RouteCase(RouteBase):
                 "build": {"enabled": True, "model_id": "mdl-build"},
             }
         )
-        self.submit(mode="plan-build")
+        self.submit("/plan fix the bug")
+        self.approve_plan()
         users = self.transcript_users()
-        self.assertEqual(users[0], "fix the bug", "the real request is first")
+        self.assertEqual(users[0], "/plan fix the bug", "the request as typed is first")
         self.assertTrue(
             any(u.startswith("<plan>") and "step one" in u for u in users),
             "the plan is stored, not just shown and dropped",
         )
 
-    def test_plan_event_is_emitted_then_ready(self):
-        agent_roles.save(
-            {
-                "plan": {"enabled": True, "model_id": "mdl-plan"},
-                "build": {"enabled": True, "model_id": "mdl-build"},
-            }
-        )
-        self.submit(mode="plan-build")
-        statuses = [
-            m["payload"].get("status")
-            for m in self.sent
-            if m.get("event") == events.PLAN
+    def test_plan_event_is_ready_and_the_plan_is_approvable(self):
+        agent_roles.save({"plan": {"enabled": True, "model_id": "mdl-plan"}})
+        self.submit("/plan fix the bug")
+        plan_events = [
+            m["payload"] for m in self.sent if m.get("event") == events.PLAN
         ]
-        self.assertIn("generating", statuses)
-        self.assertIn("ready", statuses)
+        ready = [p for p in plan_events if p.get("status") == "ready"]
+        self.assertTrue(ready and ready[-1].get("inline"), "the plan is approvable inline")
+        self.assertEqual(
+            [m for m, _ in self.calls],
+            ["plan-model"],
+            "an explicit plan never builds by itself",
+        )
 
     def test_build_mode_ignores_agent_settings_and_uses_the_session_model(self):
-        # Build is a normal, model-selected mode: a configured plan/build agent
-        # does not apply to it. It runs on the session's own model, directly.
+        # A plain build is the normal, model-selected turn: a configured
+        # plan/build role does not apply to it.
         agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
             }
         )
-        self.submit(mode="build")
+        self.submit()
         self.assertEqual(
             [m for m, _ in self.calls],
             ["default-model"],
-            "Build mode uses the session model, never the build agent",
+            "a plain build uses the session model, never the build agent",
         )
         self.assertFalse(any(u.startswith("<plan>") for u in self.transcript_users()))
 
-    def test_plan_mode_ignores_agent_settings_and_uses_the_session_model(self):
+    def test_plan_turn_runs_on_the_plan_model_when_configured(self):
         agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
             }
         )
-        self.submit(mode="plan")
+        self.submit("/plan fix the bug")
         self.assertEqual(
             [m for m, _ in self.calls],
-            ["default-model"],
-            "Plan mode is the normal session-model read-only turn, never the plan agent",
+            ["plan-model"],
+            "a plan turn runs on the plan role's model",
         )
 
-    def test_build_and_plan_both_use_the_session_model(self):
-        # The normal modes are independent of agent settings entirely.
+    def test_plan_turn_uses_the_session_model_without_a_plan_role(self):
+        # Roles off: the plan turn is the plain session-model read-only turn.
+        self.submit("/plan fix the bug")
+        self.assertEqual([m for m, _ in self.calls], ["default-model"])
+
+    def test_plan_action_approve_builds_exactly_once(self):
         agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
                 "build": {"enabled": True, "model_id": "mdl-build"},
             }
         )
-        self.submit(mode="build")
-        self.assertEqual([m for m, _ in self.calls], ["default-model"])
-        self.submit(mode="plan")
-        self.assertEqual([m for m, _ in self.calls], ["default-model"])
-
-    def test_plan_build_hands_off_and_builds_exactly_once(self):
-        agent_roles.save(
-            {
-                "plan": {"enabled": True, "model_id": "mdl-plan"},
-                "build": {"enabled": True, "model_id": "mdl-build"},
-            }
-        )
-        self.submit(mode="plan-build")
+        self.submit("/plan fix the bug")
+        self.approve_plan()
+        # A replayed approval is refused: the plan is already building.
+        self.dispatch(op="plan_action", session="s", action="approve")
+        replies = [m for m in self.sent if m.get("reply") == "plan_action"]
+        self.assertFalse(replies[-1].get("ok"), "a replayed approval is refused")
         self.assertEqual([m for m, _ in self.calls], ["plan-model", "build-model"])
         handoffs = [u for u in self.transcript_users() if u.startswith("<plan>")]
         self.assertEqual(len(handoffs), 1, "exactly one plan handoff")
@@ -394,26 +416,22 @@ class RouteCase(RouteBase):
                 "build": {"enabled": True, "model_id": "mdl-build"},
             }
         )
-        self.submit(mode="plan-build")
+        self.submit("/plan fix the bug")
+        self.approve_plan()
         phases = [
             m["payload"].get("phase")
             for m in self.sent
             if m.get("event") == events.PHASE
         ]
         self.assertIn("planning", phases)
+        self.assertIn("handing_off", phases)
         self.assertIn("building", phases)
 
     def test_a_configured_role_model_that_is_gone_is_reported_not_swapped(self):
-        # Only the agent workflow (Plan -> Build) validates role models.
-        agent_roles.save(
-            {
-                "plan": {"enabled": True, "model_id": "mdl-plan"},
-                "build": {"enabled": True, "model_id": "mdl-build"},
-            }
-        )
-        providers.delete_model("mdl-build")
-        self.submit(mode="plan-build")
-        self.assertEqual(self.calls, [], "no build runs on a substituted model")
+        agent_roles.save({"plan": {"enabled": True, "model_id": "mdl-plan"}})
+        providers.delete_model("mdl-plan")
+        self.submit("/plan fix the bug")
+        self.assertEqual(self.calls, [], "no plan runs on a substituted model")
         errors = [m for m in self.sent if m.get("event") == events.ERROR]
         self.assertTrue(errors, "the missing model is surfaced")
         self.assertIn("no longer exist", errors[-1]["payload"].get("text", ""))
@@ -421,129 +439,58 @@ class RouteCase(RouteBase):
     # ---- partial enablement falls back to the default -------------------
 
     def test_build_mode_ignores_a_build_agent(self):
-        # Even with only a build agent configured, plain Build stays the session model.
+        # Even with only a build agent configured, a plain build stays the
+        # session model.
         agent_roles.save({"build": {"enabled": True, "model_id": "mdl-build"}})
-        self.submit(mode="build")
+        self.submit()
         self.assertEqual(
             self.calls,
             [("default-model", False)],
-            "Build mode: session model, no planning, no build agent",
+            "a plain build: session model, no planning, no build agent",
         )
 
     def test_plan_only_plans_on_plan_model_then_builds_on_default(self):
         agent_roles.save({"plan": {"enabled": True, "model_id": "mdl-plan"}})
-        self.submit(mode="plan-build")
+        self.submit("/plan fix the bug")
+        self.approve_plan()
         self.assertEqual(
             [m for m, _ in self.calls],
             ["plan-model", "default-model"],
-            "plan->build: build falls back to the session default model",
+            "the approved build falls back to the session default model",
         )
         build_call = next(c for c in self.calls if c[0] == "default-model")
-        self.assertTrue(build_call[1], "the plan still reaches the default build agent")
+        self.assertTrue(build_call[1], "the plan still reaches the build")
 
     def test_enabled_but_unset_model_uses_default_model(self):
         agent_roles.save({"plan": {"enabled": True}, "build": {"enabled": True}})
-        self.submit(mode="plan-build")
-        # Planning still runs (a dedicated pass) but on the default model, and
-        # building continues on the default model too.
+        self.submit("/plan fix the bug")
+        self.approve_plan()
+        # Both roles fall back to the session default when no model is chosen.
         self.assertTrue(all(m == "default-model" for m, _ in self.calls))
         self.assertEqual(len(self.calls), 2)
 
-    def test_one_request_and_one_plan_phase_across_two_turns_no_dup_user_msg(self):
-        # A second turn re-plans, but the transcript still holds each user
-        # message exactly once and both turn phases run per submit.
-        agent_roles.save(
-            {
-                "plan": {"enabled": True, "model_id": "mdl-plan"},
-                "build": {"enabled": True, "model_id": "mdl-build"},
-            }
-        )
-        self.submit("first task", mode="plan-build")
-        self.assertEqual(self.transcript_users()[0], "first task")
-        self.assertEqual(len(self.transcript_users()), 2, "user + one plan handoff")
-        self.dispatch(op="submit", session="s", text="second task", mode="plan-build")
+    def test_user_messages_are_never_duplicated_across_turns(self):
+        agent_roles.save({"plan": {"enabled": True, "model_id": "mdl-plan"}})
+        self.submit("/plan first task")
+        self.approve_plan()
+        self.dispatch(op="submit", session="s", text="second task")
         self.assertTrue(self.done("s"))
         users = self.transcript_users()
         self.assertEqual(
             [u for u in users if not u.startswith("<plan>")],
-            ["first task", "second task"],
+            ["/plan first task", "second task"],
             "user messages are not duplicated",
         )
 
 
-class PlanFailure(RouteBase):
-    """A planner that never emits a finished plan must not hand a fake plan to
-    the build agent or start building on its own."""
-
-    def test_narration_is_not_a_plan_and_failure_builds_nothing(self):
-        from harness.agent import PLAN_MAX_TURNS, PLAN_REPLANS
-
-        # The plan model keeps "exploring" (a tool call every turn) and never
-        # produces a clean final answer, so it exhausts its turns.
-        def explore(
-            messages, tools=None, on_delta=None, on_reasoning=None, cancel=None
-        ):
-            model = providers.active_config()[2]
-            if model == "plan-model":
-                self.calls.append((model, True))
-                return reply(
-                    "Let me try a different approach for this exploration:",
-                    [("read_file", {"path": "nope_missing.py"})],
-                ), USAGE
-            self.calls.append((model, False))
-            return reply("built without a real plan"), USAGE
-
-        self.llm.side_effect = explore
-        agent_roles.save(
-            {
-                "plan": {"enabled": True, "model_id": "mdl-plan"},
-                "build": {"enabled": True, "model_id": "mdl-build"},
-            }
-        )
-        self.submit(mode="plan-build")
-
-        models = [m for m, _ in self.calls]
-        # The planner keeps replaying the same step: the no-progress guard (and
-        # then the bounded replan) cut it off, so it never burns a full turn and
-        # never finalises.
-        self.assertGreaterEqual(models.count("plan-model"), 1, "the planner ran")
-        self.assertLess(
-            models.count("plan-model"),
-            PLAN_MAX_TURNS * 3,
-            "the planner is bounded by its budget and no-progress guard",
-        )
-        self.assertNotIn("build-model", models, "build must not start on a failed plan")
-        failed = [
-            m
-            for m in self.sent
-            if m.get("event") == events.PLAN
-            and (m.get("payload", {}) or {}).get("status") == "failed"
-        ]
-        self.assertTrue(failed, "planning failure is surfaced, not hidden")
-        self.assertEqual(len(failed), 1, "exactly one terminal planning-failure signal")
-        replans = [
-            m
-            for m in self.sent
-            if m.get("event") == events.NOTE
-            and (m.get("payload", {}) or {}).get("kind") == "plan_replan"
-        ]
-        self.assertEqual(len(replans), PLAN_REPLANS, "one bounded replan, one note")
-        errors = [m for m in self.sent if m.get("event") == events.ERROR]
-        self.assertEqual(errors, [], "an unusable plan is not a hard session error")
-        # the incidental narration is never stored as a plan
-        self.assertFalse(
-            any(u.startswith("<plan>") for u in self.transcript_users()),
-            "no fabricated plan handoff is persisted",
-        )
-
-
-class PlanApproval(RouteBase):
-    """The optional review-before-building pause (plan.approve).
+class AutoPlanApproval(RouteBase):
+    """The automatic plan's gate: approve (build with the plan), skip (build
+    without it), or cancel (nothing built).
 
     Reuses RouteCase's providers, mocked coder, and backend, and adds an
-    approval responder so the runner can actually pause and be answered. With
-    the toggle off (RouteCase's other tests) nothing changes; with it on, the
-    plan is shown, the user decides, and only an approval builds.
+    approval responder so the runner can actually pause and be answered. The
+    model enters plan mode on its own (plan_decision), the plan is shown, and
+    the user decides with one action.
     """
 
     def setUp(self):
@@ -567,56 +514,79 @@ class PlanApproval(RouteBase):
     def approvals(self):
         return [m for m in self.sent if m.get("request") == "approval"]
 
-    def submit_with_plan(self):
+    def run_auto_plan(self):
         agent_roles.save(
             {
-                "plan": {"enabled": True, "model_id": "mdl-plan", "approve": True},
+                "plan": {
+                    "enabled": True,
+                    "model_id": "mdl-plan",
+                    "approve": True,
+                    "auto": True,
+                },
                 "build": {"enabled": True, "model_id": "mdl-build"},
             }
         )
-        self.submit(mode="plan-build")
-
-    def test_off_by_default_means_no_pause(self):
-        # approve is not set -> the toggle defaults off, so no approval is
-        # requested and plan flows straight into build (today's behaviour).
-        agent_roles.save(
-            {
-                "plan": {"enabled": True, "model_id": "mdl-plan"},
-                "build": {"enabled": True, "model_id": "mdl-build"},
-            }
-        )
-        self.submit(mode="plan-build")
-        self.assertEqual(self.approvals(), [], "no approval request without the toggle")
-        self.assertEqual([m for m, _ in self.calls], ["plan-model", "build-model"])
+        self.plan_first = True
+        self.submit("make the app faster")
 
     def test_approval_prompts_with_the_plan_visible(self):
-        self.submit_with_plan()
+        self.run_auto_plan()
         asks = self.approvals()
-        self.assertTrue(asks, "the plan review asks before building")
+        self.assertTrue(asks, "the automatic plan asks before building")
         self.assertEqual(asks[0].get("tool"), "plan")
         self.assertIn(
             "PLAN_BODY", asks[0].get("why", ""), "the plan is shown to the user"
         )
+        entered = [m for m in self.sent if m.get("event") == events.AUTO_PLAN]
+        self.assertTrue(entered and entered[0]["payload"].get("reason"))
 
-    def test_building_only_happens_on_approval(self):
-        self.approval_answer = True
-        self.submit_with_plan()
-        self.assertEqual([m for m, _ in self.calls], ["plan-model", "build-model"])
-        build_call = next(c for c in self.calls if c[0] == "build-model")
-        self.assertTrue(build_call[1], "the approved plan reaches the build agent")
-        # the plan handoff is persisted for inspectability
-        users = self.transcript_users()
-        self.assertTrue(any(u.startswith("<plan>") for u in users))
-
-    def test_skipping_builds_nothing_but_keeps_the_plan(self):
-        self.approval_answer = False
-        self.submit_with_plan()
+    def test_approval_builds_exactly_once_with_the_plan(self):
+        self.run_auto_plan()
         self.assertEqual(
             [m for m, _ in self.calls],
-            ["plan-model"],
-            "a skipped plan never reaches the build agent",
+            ["default-model", "plan-model", "build-model"],
+            "decide, plan on the plan model, then one approved build",
         )
-        # the plan is kept as an assistant message so the user can still read it
+        build_call = next(c for c in self.calls if c[0] == "build-model")
+        self.assertTrue(build_call[1], "the approved plan reaches the build")
+        self.assertEqual(
+            len([u for u in self.transcript_users() if u.startswith("<plan>")]),
+            1,
+            "exactly one handoff",
+        )
+        self.assertTrue(
+            [m for m in self.sent if m.get("event") == events.PLAN_APPROVED]
+        )
+
+    def test_skip_builds_now_without_the_plan(self):
+        self.approval_answer = "skip"
+        self.run_auto_plan()
+        self.assertEqual(
+            [m for m, _ in self.calls],
+            ["default-model", "plan-model", "build-model"],
+            "skip: the build runs at once (build role) without the plan handoff",
+        )
+        self.assertFalse(
+            any(u.startswith("<plan>") for u in self.transcript_users()),
+            "no handoff message is injected on skip",
+        )
+        self.assertTrue(
+            [
+                m
+                for m in self.sent
+                if m.get("event") == events.PLAN_SKIPPED
+                and m.get("payload", {}).get("via") == "user"
+            ]
+        )
+
+    def test_cancel_builds_nothing_and_keeps_the_plan(self):
+        self.approval_answer = False
+        self.run_auto_plan()
+        self.assertEqual(
+            [m for m, _ in self.calls],
+            ["default-model", "plan-model"],
+            "a cancelled plan never reaches the build",
+        )
         contents = []
         sid = self.sid()
         for line in (
@@ -631,7 +601,7 @@ class PlanApproval(RouteBase):
             if entry.get("role") == "assistant":
                 contents.append(entry.get("content") or "")
         self.assertTrue(
-            any("PLAN_BODY" in c for c in contents), "the plan is retained on skip"
+            any("PLAN_BODY" in c for c in contents), "the plan is retained on cancel"
         )
         skipped = [
             m
@@ -639,7 +609,28 @@ class PlanApproval(RouteBase):
             if m.get("event") == events.NOTE
             and (m.get("payload", {}) or {}).get("kind") == "plan_skipped"
         ]
-        self.assertTrue(skipped, "a skip is surfaced to the user")
+        self.assertTrue(skipped, "a cancel is surfaced to the user")
+
+    def test_approval_off_hands_off_automatically(self):
+        agent_roles.save(
+            {
+                "plan": {
+                    "enabled": True,
+                    "model_id": "mdl-plan",
+                    "approve": False,
+                    "auto": True,
+                },
+                "build": {"enabled": True, "model_id": "mdl-build"},
+            }
+        )
+        self.plan_first = True
+        self.submit("make the app faster")
+        self.assertEqual(self.approvals(), [], "no approval request with the toggle off")
+        self.assertEqual(
+            [m for m, _ in self.calls],
+            ["default-model", "plan-model", "build-model"],
+            "the plan hands off to build without pausing",
+        )
 
 
 class PlanArtifact(RouteBase):
@@ -648,18 +639,14 @@ class PlanArtifact(RouteBase):
     def test_plan_is_persisted_for_its_own_session_only(self):
         from harness import plan as plan_mod
 
-        agent_roles.save(
-            {
-                "plan": {"enabled": True, "model_id": "mdl-plan"},
-                "build": {"enabled": False},
-            }
-        )
-        self.submit(mode="plan-build")
+        agent_roles.save({"plan": {"enabled": True, "model_id": "mdl-plan"}})
+        self.submit("/plan fix the bug")
         sid = self.sid()
         record = plan_mod.load(sid)
         self.assertIsNotNone(record, "the plan is persisted for its session")
         self.assertEqual(record.get("completion"), plan_mod.COMPLETE)
         self.assertEqual(record.get("session_id"), sid)
+        self.assertEqual(record.get("task"), "fix the bug", "the command is stripped")
         self.assertIn("step one", record.get("plan", ""), "the plan text is stored")
         # No leak: an unrelated session id has nothing.
         self.assertIsNone(plan_mod.load("20990101-000000"))
@@ -667,13 +654,8 @@ class PlanArtifact(RouteBase):
     def test_get_plan_op_returns_the_persisted_record(self):
         from harness import plan as plan_mod
 
-        agent_roles.save(
-            {
-                "plan": {"enabled": True, "model_id": "mdl-plan"},
-                "build": {"enabled": False},
-            }
-        )
-        self.submit(mode="plan-build")
+        agent_roles.save({"plan": {"enabled": True, "model_id": "mdl-plan"}})
+        self.submit("/plan fix the bug")
         sid = self.sid()
         self.sent.clear()
         self.backend.dispatch(
@@ -764,49 +746,6 @@ class TodoReconcile(unittest.TestCase):
                 "write_file", {"path": "src/text_analyzer.py"}, "Wrote"
             )
         )
-
-
-class PlanFindings(RouteBase):
-    """The planner's own reads must carry to Build so it need not re-explore."""
-
-    def test_planner_exploration_is_carried_to_build(self):
-        (self.root / "AGENTS.md").write_text("- rule: be brief\n", encoding="utf-8")
-        state = {"n": 0}
-
-        def flow(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None):
-            model = providers.active_config()[2]
-            if model == "plan-model":
-                if state["n"] == 0:
-                    state["n"] = 1
-                    return reply(
-                        "Reading the rules", [("read_file", {"path": "AGENTS.md"})]
-                    ), USAGE
-                return reply("PLAN_BODY: keep it brief."), USAGE
-            has_exploration = any(
-                "<exploration>" in str(m.get("content") or "") for m in messages
-            )
-            has_plan = any("<plan>" in str(m.get("content") or "") for m in messages)
-            self.calls.append((model, has_exploration and has_plan))
-            return reply("built"), USAGE
-
-        self.llm.side_effect = flow
-        agent_roles.save(
-            {
-                "plan": {"enabled": True, "model_id": "mdl-plan"},
-                "build": {"enabled": True, "model_id": "mdl-build"},
-            }
-        )
-        self.submit(mode="plan-build")
-        build_call = next(c for c in self.calls if c[0] == "build-model")
-        self.assertTrue(
-            build_call[1], "the build agent received both the exploration and the plan"
-        )
-        users = self.transcript_users()
-        self.assertTrue(
-            any(u.startswith("<exploration>") for u in users),
-            "exploration is persisted alongside the handoff",
-        )
-        self.assertTrue(any(u.startswith("<plan>") for u in users))
 
 
 class CancelMidBatch(RouteBase):

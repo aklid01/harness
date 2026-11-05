@@ -226,6 +226,14 @@ class AttachE2E(unittest.TestCase):
         self.appdata.mkdir(parents=True)
         paths_mod.init(project_root=self.root, app_data_dir=self.appdata)
         self.addCleanup(paths_mod.reset)
+        # Auto-plan is off here: these tests pin the attachment pipeline, not
+        # the model's plan-or-proceed decision (test_intent owns that). Saved
+        # after paths.init, so it lands in this test's own app data dir.
+        from harness import agent_roles
+
+        agent_roles.save({"plan": {"auto": False}})
+        agent_roles.reset_cache()
+        self.addCleanup(agent_roles.reset_cache)
         os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
         self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
@@ -313,8 +321,8 @@ class AttachE2E(unittest.TestCase):
         self.assertTrue(done.get("ok"), done.get("error"))
         return done["data"]["attachment"]
 
-    def open_and_submit(self, text, attachments=None, mode="build"):
-        self.dispatch({"op": "open", "mode": mode})
+    def open_and_submit(self, text, attachments=None):
+        self.dispatch({"op": "open"})
         self.assertTrue(
             self.wait_until(
                 lambda: any(
@@ -328,7 +336,6 @@ class AttachE2E(unittest.TestCase):
             {
                 "op": "submit",
                 "text": text,
-                "mode": mode,
                 "attachments": attachments or [],
             }
         )
@@ -463,7 +470,7 @@ class AttachE2E(unittest.TestCase):
             )
 
         self.state.probe = probe
-        self.open_and_submit("what is in this", attachments=[meta], mode="ask")
+        self.open_and_submit("/ask what is in this", attachments=[meta])
         self.assertTrue(self.done())
 
         staged = None
