@@ -64,6 +64,10 @@ class Session:
         self._mode_ref = permissions_mod.mode_ref(self.perms)
         self.effort = "default"
         self.active_provider: str | None = None
+        # The session's write_todos checklist. Each turn thread works on a
+        # copy (see bound) and this is written back when the turn ends, so
+        # the list survives across turns and is re-injected into the next.
+        self.todos: list = []
         self.mailbox = Mailbox()
         self.mailbox.on_change = self._notify_pending
         self.review_cancel = None
@@ -128,8 +132,13 @@ class Session:
                 session_mod.scoped(self.root, self.session_id, self.written)
             )
 
-            stack.enter_context(todos_mod.scoped())
-            yield
+            # The turn inherits the session's checklist and diverges; the
+            # edited copy is kept below, before the scope unwinds.
+            stack.enter_context(todos_mod.scoped(self.todos))
+            try:
+                yield
+            finally:
+                self.todos = list(todos_mod.current())
 
     @contextlib.contextmanager
     def workspace(self):
@@ -446,11 +455,15 @@ class Session:
                 self.mode = session_mod.sticky_mode(self.session_id) or "build"
                 self.runner = self._new_runner()
                 self.runner.messages = messages
+                # The checklist is per session: switching sessions starts a
+                # fresh one (it is ephemeral by design).
+                self.todos = []
                 label = "opened"
             else:
                 self.session_id = None
                 self.written = 0
                 self.runner = self._new_runner()
+                self.todos = []
                 label = "new"
             self.on_event(
                 events.SESSION,

@@ -2177,6 +2177,7 @@ function renderActive(): void {
   chat.replaceChildren(ctx.chatBody);
   entry.value = ctx.entryDraft;
   autogrow();
+  updateCmdMenu();
   updateEmptyState();
   scrollBottom(ctx);
   renderPlan(ctx);
@@ -3171,6 +3172,7 @@ function doSubmit(ctx: Ctx, text: string): void {
   autogrow();
   const files = takeAttachments(ctx);
   updateSendState();
+  updateCmdMenu();
   setBusy(ctx, true);
   showThinking(ctx);
   send(ctx, { op: "submit", text, attachments: files });
@@ -5497,26 +5499,36 @@ function renderSendExtraMenu(): void {
 
 let cmdIndex = 0;
 let cmdMatches: Array<{ cmd: string; help: string }> = [];
+let cmdDismissed = "";
+
+/* The first token of the entry, when it is a command position: the text
+   starts with "/" (leading space tolerated, like the engine's parser). */
+function cmdToken(value: string): string {
+  const text = value.trimStart();
+  if (!text.startsWith("/")) return "";
+  return (text.split(/\s/, 1)[0] ?? "").toLowerCase();
+}
 
 function updateCmdMenu(): void {
-  const value = entry.value;
-  const showing =
-    value.startsWith("/") && !/\s/.test(value) && activeCtx !== null;
-  if (!showing) {
-    cmdMenu.classList.add("hidden");
-    cmdMenu.replaceChildren();
+  const token = cmdToken(entry.value);
+  const matches = token
+    ? COMMAND_HELP.filter((c) => c.cmd.startsWith(token))
+    : [];
+  // Escape dismisses for this token; clearing the composer re-arms it.
+  if (!token) cmdDismissed = "";
+  if (!token || !matches.length || token === cmdDismissed) {
     cmdMatches = [];
-    return;
-  }
-  cmdMatches = COMMAND_HELP.filter((c) =>
-    c.cmd.startsWith(value.toLowerCase()),
-  );
-  if (!cmdMatches.length) {
     cmdMenu.classList.add("hidden");
     cmdMenu.replaceChildren();
     return;
   }
-  cmdIndex = Math.min(cmdIndex, cmdMatches.length - 1);
+  if (
+    cmdMatches.length !== matches.length ||
+    cmdMatches[0]?.cmd !== matches[0].cmd
+  ) {
+    cmdIndex = 0;
+  }
+  cmdMatches = matches;
   cmdMenu.replaceChildren();
   cmdMatches.forEach((c, i) => {
     const btn = document.createElement("button");
@@ -5547,7 +5559,16 @@ entry.addEventListener("input", () => {
 });
 entry.addEventListener("keydown", (e) => {
   if (activeApproval) return;
-  if (!cmdMenu.classList.contains("hidden") && cmdMatches.length) {
+  // The menu is interactive only while the first token is still a strict
+  // prefix of a command (the user is choosing). Once the token names a
+  // command it stays up as a label, and the composer behaves normally -
+  // arrows edit, Enter sends.
+  const token = cmdToken(entry.value);
+  const choosing =
+    !cmdMenu.classList.contains("hidden") &&
+    cmdMatches.length > 0 &&
+    cmdMatches.some((c) => c.cmd !== token && c.cmd.startsWith(token));
+  if (choosing) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
       cmdIndex = (cmdIndex + 1) % cmdMatches.length;
@@ -5560,19 +5581,28 @@ entry.addEventListener("keydown", (e) => {
       updateCmdMenu();
       return;
     }
-    if (
-      e.key === "Tab" ||
-      (e.key === "Enter" && cmdMatches[cmdIndex].cmd !== entry.value.trim())
-    ) {
+    if (e.key === "Tab" || e.key === "Enter") {
       e.preventDefault();
       completeCmd(cmdMatches[cmdIndex].cmd);
       return;
     }
     if (e.key === "Escape") {
       e.preventDefault();
-      cmdMenu.classList.add("hidden");
+      cmdDismissed = token;
+      updateCmdMenu();
       return;
     }
+  }
+  if (
+    e.key === "Escape" &&
+    !cmdMenu.classList.contains("hidden") &&
+    !choosing
+  ) {
+    // The passive menu (the command is already chosen) still yields to Esc.
+    e.preventDefault();
+    cmdDismissed = token;
+    updateCmdMenu();
+    return;
   }
   if (e.key === "Escape" && activeCtx && activeCtx.pendingRewind !== null) {
     e.preventDefault();

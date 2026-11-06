@@ -222,12 +222,16 @@ class IntentCase(IsolatedCase):
         for name in (
             "write_file",
             "str_replace",
-            "write_todos",
             "task",
             "plan_decision",
         ):
             self.assertNotIn(name, offered, f"{name} offered in plan mode")
         self.assertIn("read_file", offered)
+        self.assertIn(
+            "write_todos",
+            offered,
+            "the plan turn keeps the checklist: it is the plan's own step list",
+        )
 
 
 class StickyPersistence(unittest.TestCase):
@@ -335,6 +339,158 @@ class StickyPersistence(unittest.TestCase):
             "ask",
             "the bare command persisted through the session hook",
         )
+
+
+class TodoChecklist(unittest.TestCase):
+    """The write_todos list is the plan's step list: it persists across turns
+    (so the build reconciles it) and a plan turn may write it."""
+
+    def setUp(self):
+        events.reset()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "proj"
+        self.root.mkdir(parents=True)
+        paths_mod.init(project_root=self.root, app_data_dir=Path(self.tmp.name) / "app")
+        self.addCleanup(paths_mod.reset)
+        self.addCleanup(agent_roles.reset_cache)
+        os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
+        self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
+        self.backend = server.Harness()
+        self.sent = []
+        self.backend.attach(self.sent.append)
+        self.addCleanup(self.quiesce)
+        self.patch = mock.patch("harness.agent.call_llm")
+        self.llm = self.patch.start()
+        self.addCleanup(self.patch.stop)
+        from harness import todos as todos_mod
+
+        todos_mod.TODOS.clear()
+        self.addCleanup(todos_mod.TODOS.clear)
+
+    def quiesce(self):
+        for s in list(self.backend.sessions.values()):
+            s.join_background(timeout=10)
+
+    def dispatch(self, **obj):
+        obj.setdefault("req_id", time.time_ns() % 1000000)
+        self.backend.dispatch(obj)
+
+    def done(self, session="s", timeout=30, kind="done"):
+        target = self._counts.get((session, kind), 0) + 1
+        limit = time.time() + timeout
+        while time.time() < limit:
+            n = sum(
+                1
+                for m in self.sent
+                if m.get("event") == kind and m.get("session") == session
+            )
+            if n >= target:
+                self._counts[(session, kind)] = target
+                return True
+            time.sleep(0.02)
+        return False
+
+    def setUp_data(self):
+        self._counts = {}
+
+    def test_checklist_persists_across_turns_and_reconciles(self):
+        self.setUp_data()
+        self.dispatch(op="open", session="s", root=str(self.root))
+        self.assertTrue(self.done(kind="session"))
+        answers = [
+            (
+                fake_message(
+                    None,
+                    [
+                        (
+                            "write_todos",
+                            {
+                                "todos": [
+                                    {
+                                        "content": "write PLAN-RESULT.md",
+                                        "activeForm": "writing the result",
+                                        "status": "in_progress",
+                                    },
+                                    {
+                                        "content": "run pytest",
+                                        "activeForm": "running the tests",
+                                        "status": "pending",
+                                    },
+                                ]
+                            },
+                        )
+                    ],
+                ),
+                USAGE,
+            ),
+            (
+                fake_message(
+                    None,
+                    [
+                        (
+                            "write_file",
+                            {"path": str(self.root / "PLAN-RESULT.md"), "content": "done"},
+                        )
+                    ],
+                ),
+                USAGE,
+            ),
+            (fake_message("finished"), USAGE),
+        ]
+        self.llm.side_effect = iter(answers)
+        self.dispatch(op="submit", session="s", text="do the steps")
+        self.assertTrue(self.done())
+        # The build turn's reconcile crossed the file's step off, from
+        # evidence, and said so on the wire.
+        todos_events = [m["payload"]["todos"] for m in self.sent if m.get("event") == events.TODOS]
+        self.assertTrue(todos_events, "the checklist reached the UI")
+        self.assertEqual(todos_events[-1][0]["status"], "done", "the written file completed its step")
+        self.assertEqual(todos_events[-1][1]["status"], "pending")
+        # The next turn inherits the list: the re-injected <todos> block
+        # carries it, so reconcile can keep crossing steps off.
+        self.sent.clear()
+        self._counts.clear()
+        self.llm.side_effect = None
+        self.llm.return_value = (fake_message("more"), USAGE)
+        self.dispatch(op="submit", session="s", text="keep going")
+        self.assertTrue(self.done())
+        request = self.llm.call_args[0][0]
+        injections = [
+            m
+            for m in request
+            if str(m.get("content") or "").startswith("<env>")
+            and "<todos>" in str(m.get("content") or "")
+        ]
+        self.assertTrue(injections, "the checklist is re-injected into the next turn")
+        self.assertIn("[ ] run pytest", injections[0]["content"])
+
+    def test_a_plan_turn_can_write_the_checklist(self):
+        self.setUp_data()
+        self.dispatch(op="open", session="s", root=str(self.root))
+        self.assertTrue(self.done(kind="session"))
+        steps = {
+            "todos": [
+                {"content": "measure first", "activeForm": "measuring", "status": "in_progress"},
+                {"content": "cache the layout", "activeForm": "caching", "status": "pending"},
+            ]
+        }
+        self.llm.side_effect = [
+            (fake_message(None, [("write_todos", steps)]), USAGE),
+            (fake_message("PLAN: measure, then cache."), USAGE),
+        ]
+        self.dispatch(op="submit", session="s", text="/plan plan the work")
+        self.assertTrue(self.done())
+        todos_events = [m["payload"]["todos"] for m in self.sent if m.get("event") == events.TODOS]
+        self.assertTrue(todos_events, "the plan turn's steps reached the checklist")
+        self.assertEqual([t["content"] for t in todos_events[0]], ["measure first", "cache the layout"])
+        writes = [
+            p["name"]
+            for m in self.sent
+            if m.get("event") == events.TOOL_CALL
+            for p in [m["payload"]]
+        ]
+        self.assertEqual(writes, ["write_todos"], "no workspace write happened in the plan turn")
 
 
 class AutoPlanCase(IsolatedCase):

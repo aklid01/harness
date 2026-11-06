@@ -180,7 +180,75 @@ function startLiveFixture() {
         const toolNames = messages.flatMap((m) =>
           (m.tool_calls ?? []).map((c) => c.function?.name ?? ""),
         );
+        // A write that actually landed, keyed on its tool result: the write's
+        // path alone is not evidence (the checklist step names it too).
+        const wroteResult = (name) =>
+          messages.some(
+            (m) =>
+              m.role === "tool" &&
+              String(m.content ?? "").startsWith("Wrote") &&
+              String(m.content ?? "").includes(name),
+          );
         if (lastContent.includes("Plan mode:")) {
+          // A read-only plan turn (explicit /plan, or a converted one):
+          // record the plan's steps in the checklist first, then answer with
+          // the plan itself - so the checklist tracks the plan and the build
+          // that follows can tick steps off from real evidence.
+          if (!toolNames.includes("write_todos")) {
+            send({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    role: "assistant",
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call_pt1",
+                        type: "function",
+                        function: { name: "write_todos", arguments: "" },
+                      },
+                    ],
+                  },
+                },
+              ],
+            });
+            send({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        function: {
+                          arguments: JSON.stringify({
+                            todos: [
+                              {
+                                content: "Write PLAN-RESULT.md with the results",
+                                activeForm: "Writing the results",
+                                status: "in_progress",
+                              },
+                              {
+                                content: "Benchmark the render loop",
+                                activeForm: "Benchmarking the render loop",
+                                status: "pending",
+                              },
+                            ],
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            });
+            send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+            send({ choices: [], usage });
+            res.write("data: [DONE]\n\n");
+            res.end();
+            return;
+          }
           send({
             choices: [
               {
@@ -272,7 +340,7 @@ function startLiveFixture() {
           res.end();
           return;
         }
-        if (history.includes("<plan>") && history.includes("PLAN-RESULT.md")) {
+        if (history.includes("<plan>") && wroteResult("PLAN-RESULT.md")) {
           send({
             choices: [
               {
@@ -1138,6 +1206,32 @@ try {
       cmdFiltered.names[0] === "/plan" &&
       completed === "/plan ",
     JSON.stringify({ ...cmdFiltered, completed }),
+  );
+  // The list stays up while the command line is composed, and Esc dismisses.
+  await typeEntry(ws, "/plan make it faster, please");
+  await sleep(200);
+  const composing = await evaluate(
+    ws,
+    `(() => ({
+    open: !document.getElementById("cmdMenu").classList.contains("hidden"),
+    names: [...document.querySelectorAll("#cmdMenu .cmd-name")].map((s) => s.textContent.trim()),
+  }))()`,
+  );
+  await evaluate(
+    ws,
+    `document.getElementById("entry").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`,
+  );
+  await sleep(150);
+  const cmdDismissedNow = await evaluate(
+    ws,
+    `document.getElementById("cmdMenu").classList.contains("hidden")`,
+  );
+  verdict(
+    "slash-menu-stays-up-while-composing-and-esc-dismisses",
+    composing.open &&
+      composing.names.join(",") === "/plan" &&
+      Boolean(cmdDismissedNow),
+    JSON.stringify({ ...composing, dismissed: Boolean(cmdDismissedNow) }),
   );
   await typeEntry(ws, "");
 
@@ -2014,6 +2108,11 @@ try {
     `[...document.querySelectorAll("#chat .assistant")].some((el) => el.textContent.includes("Profile the render loop"))`,
     30000,
   );
+  // The plan turn wrote the plan's steps into the checklist.
+  const checklistFilled = await waitFor(
+    `document.querySelectorAll("#plan .plan-item").length >= 2`,
+    30000,
+  );
   const gateShown = await waitFor(modalUp("mAllow"), 30000);
   const resultBefore = fs.existsSync(path.join(WS_ROOT, "PLAN-RESULT.md"));
   verdict(
@@ -2036,6 +2135,19 @@ try {
       resultAfter,
       planBuilds: liveState.planBuilds,
     }),
+  );
+  // The build achieved the plan's first step: the checklist says so.
+  const stepDone = await waitFor(
+    `(() => {
+    const item = [...document.querySelectorAll("#plan .plan-item")].find((n) => n.textContent.includes("PLAN-RESULT"));
+    return item ? item.className.includes("completed") : false;
+  })()`,
+    30000,
+  );
+  verdict(
+    "checklist-ticks-off-as-the-build-succeeds",
+    Boolean(checklistFilled) && Boolean(stepDone),
+    JSON.stringify({ checklistFilled: Boolean(checklistFilled), stepDone: Boolean(stepDone) }),
   );
 
   await freshTab();

@@ -80,9 +80,11 @@ PLAN_HANDOFF = (
     "<plan>\n"
     "A planning agent produced the plan below for the task you were given. Treat "
     "it as structured task context - the current plan, not completed work. "
-    "Implement it, verifying with the relevant tests as you go. If inspecting the "
-    "code or running tests shows a step is wrong or incomplete, do not force it: "
-    "adapt, and state plainly what you changed and why.\n\n"
+    "Implement it, verifying with the relevant tests as you go. If the "
+    "write_todos checklist carries this plan's steps, keep it up to date as you "
+    "complete each one; if it does not, record the steps there first. If "
+    "inspecting the code or running tests shows a step is wrong or incomplete, "
+    "do not force it: adapt, and state plainly what you changed and why.\n\n"
     "{plan}\n"
     "</plan>"
 )
@@ -1525,10 +1527,17 @@ class Runner:
 
             turn_tools = None
             if self.mode in ("plan", "ask"):
+                # A plan turn keeps write_todos: the checklist is the plan's
+                # own step list (session state, never the workspace), and the
+                # build that follows reconciles it from tool evidence. Ask
+                # turns have no checklist to keep.
+                withheld = READONLY_WITHHELD - (
+                    {"write_todos"} if self.mode == "plan" else set()
+                )
                 turn_tools = [
                     s
                     for s in tools.TOOL_SCHEMAS
-                    if s["function"]["name"] not in READONLY_WITHHELD
+                    if s["function"]["name"] not in withheld
                 ]
             elif self._auto_plan_pending:
                 turn_tools = [
