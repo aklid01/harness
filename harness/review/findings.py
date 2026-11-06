@@ -54,8 +54,7 @@ SEVERITY_RANK = {name: index for index, name in enumerate(SEVERITIES)}
 
 CONFIDENCES = ("high", "medium", "low")
 
-# A severity at or above this rank is worth showing; the settings slider picks
-# one and everything below it is filtered out of the card.
+
 DEFAULT_THRESHOLD = "low"
 
 
@@ -104,11 +103,6 @@ class Finding:
 
 class ReviewFormatError(Exception):
     """The reviewer returned something that is not a usable report."""
-
-
-# --------------------------------------------------------------------------
-# diff awareness: which lines a finding may legitimately cite
-# --------------------------------------------------------------------------
 
 
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
@@ -262,8 +256,6 @@ def parse(text):
         if raw is None:
             raw = data.get("issues")
         if raw is None:
-            # A reply that only says "no issues found" is a valid clean
-            # review.
             if _says_clean(body):
                 return []
             problem = "the reply had no findings list"

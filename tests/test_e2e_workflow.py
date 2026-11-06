@@ -159,9 +159,7 @@ class WorkflowE2E(unittest.TestCase):
             ],
         }
         self.server, base = start_mock(self.scripts)
-        # shutdown BEFORE server_close: closing the socket while serve_forever
-        # is still selecting on it crashed the loop with WinError 10038 and
-        # littered the suite output with tracebacks that masked real failures.
+
         self.addCleanup(self.server.shutdown)
         self.addCleanup(self.server.server_close)
 
@@ -182,8 +180,7 @@ class WorkflowE2E(unittest.TestCase):
         self.sent = []
         self.backend.attach(self.sent.append)
         self.addCleanup(self.quiesce)
-        # The plan gate blocks on the approval channel, so a responder answers
-        # it the way the frontend would: allow by default, "skip" on demand.
+
         self.approval_answer = True
         self._answered: set = set()
         self._stop = threading.Event()
@@ -233,7 +230,6 @@ class WorkflowE2E(unittest.TestCase):
         self.assertTrue(self.done("s", kind="session"))
         self.sent.clear()
         if mode:
-            # The sticky mode: what a plain message runs as (set_mode op).
             self.backend.dispatch(
                 {
                     "op": "set_mode",
@@ -261,7 +257,7 @@ class WorkflowE2E(unittest.TestCase):
         agent_roles.save(
             {
                 "plan": {"enabled": True, "model_id": "mdl-plan"},
-                "build": {"enabled": False},  # build falls back to the session model
+                "build": {"enabled": False},
                 "oversight": {
                     "enabled": True,
                     "model_id": "mdl-rev",
@@ -272,7 +268,6 @@ class WorkflowE2E(unittest.TestCase):
         )
         self.run_turn(text="make the app faster")
 
-        # Only workflow requests, not the background title request (coder-model).
         flow = [
             r
             for r in mock_state(self.server).requests
@@ -283,9 +278,6 @@ class WorkflowE2E(unittest.TestCase):
         ]
         models = [r["model"] for r in flow]
 
-        # Order: the decision call on the session model, the plan on the plan
-        # model, then - after the approval - the write, its oversight review,
-        # and the closing message.
         self.assertEqual(
             models[:5],
             [
@@ -298,7 +290,6 @@ class WorkflowE2E(unittest.TestCase):
             f"routing order was {models}",
         )
 
-        # The decision gate withheld the write tools from the first call.
         decision_req = flow[0]
         self.assertIn("plan_decision", decision_req["tool_names"])
         self.assertNotIn(
@@ -310,8 +301,6 @@ class WorkflowE2E(unittest.TestCase):
         reviewer_req = next(r for r in flow if r["model"] == "reviewer-model")
         self.assertFalse(reviewer_req["has_tools"], "the reviewer must hold no tools")
 
-        # The plan reached the coder: the coder's post-review request carries the
-        # <plan> handoff as structured context.
         coder_post = flow[4]
         self.assertTrue(
             any(
@@ -320,10 +309,8 @@ class WorkflowE2E(unittest.TestCase):
             "the plan is handed to the build as context",
         )
 
-        # The approved edit really landed.
         self.assertEqual(self.edited.read_text(encoding="utf-8"), "# marker\n")
 
-        # A reproducible, checkable artifact of the run.
         report = {
             "scenario": (
                 "auto-plan decision -> plan -> approval -> build -> "
@@ -364,9 +351,7 @@ class WorkflowE2E(unittest.TestCase):
         print("\n[e2e artifact]", json.dumps(report, indent=2))
 
     def test_oversight_revise_holds_the_edit_then_a_clarified_pass_writes(self):
-        # A higher-complexity scenario: the reviewer first refuses the coder's
-        # edit (revise), the coder adapts, and the reviewer approves. The flawed
-        # write never lands; the adapted one does. All three models are real.
+
         self.edited.write_text("# placeholder\n", encoding="utf-8")
         mock_state(self.server).scripts["reviewer-model"] = [
             {
@@ -379,7 +364,7 @@ class WorkflowE2E(unittest.TestCase):
                 "content": '{"verdict":"approve","reasoning":"append is safe"}',
             },
         ]
-        # coder first proposes an overwrite, then adapts to a str_replace.
+
         mock_state(self.server).scripts["coder-model"] = [
             {
                 "kind": "tool",
@@ -421,7 +406,7 @@ class WorkflowE2E(unittest.TestCase):
             )
         ]
         models = [r["model"] for r in flow]
-        # coder(1) revise, reviewer(1), coder(2) approve, reviewer(2), coder(3)
+
         self.assertEqual(
             models,
             [
@@ -457,8 +442,7 @@ class WorkflowE2E(unittest.TestCase):
         from harness import plan as plan_mod
 
         probe = self.root / "probe.txt"
-        # A file outside the workspace: the shape an agent uses when it looks
-        # at something the user attached.
+
         outside = self.appdata / "attached.html"
         outside.write_text("<html><body>attached</body></html>", encoding="utf-8")
         mock_state(self.server).scripts["coder-model"] = [
@@ -493,12 +477,9 @@ class WorkflowE2E(unittest.TestCase):
         mock_state(self.server).cursors = {
             k: 0 for k in mock_state(self.server).scripts
         }
-        # The sticky ask mode: the session starts with the ask identity, the
-        # way a fresh ask session does.
+
         self.run_turn(text="What does this project do?", mode="ask")
 
-        # The ask request on the wire: the session model, the ask identity in
-        # the system prompt, and no withheld tool offered at all.
         flow = [
             r
             for r in mock_state(self.server).requests
@@ -513,9 +494,6 @@ class WorkflowE2E(unittest.TestCase):
         self.assertIn("bash", offered)
         self.assertIn("read_file", offered)
 
-        # Each attempted call got a result: two refusals, one real run. The
-        # events name the mode they ran under, so the UI labels the work
-        # "ask", not "build".
         callers = [
             m["payload"].get("agent")
             for m in self.sent
@@ -535,16 +513,13 @@ class WorkflowE2E(unittest.TestCase):
         self.assertIn("read-only", outcomes[1][1])
         self.assertIn("ask-read-only-ok", outcomes[2][1])
 
-        # The read-only probe of a file outside the workspace - a shell
-        # variable and a merged stderr - ran instead of being refused.
         self.assertNotIn("Ask mode", outcomes[3][1], outcomes[3][1])
         self.assertNotIn("read-only", outcomes[3][1], outcomes[3][1])
         probe_ran = "attached.html" in outcomes[3][1] or "attached" in outcomes[3][1]
         if sandbox._find_bash() is None:
-            probe_ran = True  # no POSIX shell to list with; the refusal is the test
+            probe_ran = True
         self.assertTrue(probe_ran, f"the probe did not read the file: {outcomes[3][1]}")
 
-        # Nothing landed on disk, the answer arrived, the phase ran.
         self.assertFalse(probe.exists(), "an edit escaped ask mode")
         answers = [
             str(m["payload"].get("content") or "")
@@ -563,7 +538,6 @@ class WorkflowE2E(unittest.TestCase):
         self.assertIn("researching", phases)
         self.assertIsNone(plan_mod.load(self.sid()), "ask wrote a plan artifact")
 
-        # A reproducible, checkable artifact of the run.
         report = {
             "scenario": (
                 "ask mode: write tools withheld, edit refused, mutating bash "

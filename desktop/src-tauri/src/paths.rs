@@ -1,8 +1,8 @@
-/* Filesystem layout for the desktop shell.
 
-`data_root` holds the app's own small state (last workspace, recents, the
-data-dir override) and, unless overridden, the agent data itself: sessions,
-providers.json, agents.json. */
+
+
+
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -44,17 +44,17 @@ fn roaming_dir() -> PathBuf {
 }
 
 pub fn data_root() -> PathBuf {
-    // Isolation hook for tests and the renderer check: redirect ALL shell
-    // state (recents, last workspace, the data-dir override) away from the
-    // user's real profile, the way HARNESS_SESSIONS_ROOT isolates sessions.
+
+
+
     if let Some(dir) = std::env::var_os("HARNESS_DATA_ROOT") {
         return PathBuf::from(dir);
     }
     roaming_dir().join("Harness")
 }
 
-/* The Electron shell kept the same files one level deeper. Adopt them on the
-first launch of this shell so workspaces, sessions and providers carry over. */
+
+
 pub fn adopt_legacy_data_root(root: &Path) {
     if root.exists() {
         return;
@@ -139,7 +139,7 @@ pub fn save_recents(root: &Path, list: &[String]) {
     write_json(&recents_file(root), &list);
 }
 
-/* Most recent first, no duplicates, only folders that still exist. */
+
 pub fn push_recent(root: &Path, project_root: &str) {
     if project_root.is_empty() {
         return;
@@ -191,7 +191,7 @@ pub fn reset_custom_data_dir(root: &Path) {
     let _ = fs::remove_file(data_dir_file(root));
 }
 
-/* Environment override wins, then an explicit choice, then the default. */
+
 pub fn current_data_dir(root: &Path) -> (PathBuf, &'static str) {
     if let Some(dir) = std::env::var_os("HARNESS_APP_DATA") {
         return (PathBuf::from(dir), "env");
@@ -205,9 +205,9 @@ pub fn current_data_dir(root: &Path) -> (PathBuf, &'static str) {
 pub fn repo_root() -> PathBuf {
     // Where the APP CODE lives - never HARNESS_PROJECT_ROOT: that env var is
     // the agent's workspace (read by bootstrap for project_root), and using
-    // it as the sidecar's cwd spawned `uv run` from a directory with no
-    // pyproject.toml, which made uv pick a foreign interpreter that could not
-    // import harness at all.
+
+
+
     if let Ok(exe) = std::env::current_exe() {
         for dir in exe.ancestors().skip(1).take(8) {
             if dir.join("harness").join("server.py").is_file() {

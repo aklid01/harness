@@ -70,9 +70,6 @@ class ClassifyCase(unittest.TestCase):
             openai.APIConnectionError(request=mock.Mock(url="https://x/v1")),
             ConnectionResetError("connection reset by peer"),
             ValueError("Expecting value: line 1 column 1 (char 0)"),
-            # The SDK's base APIError: it could not map the provider's answer
-            # onto a status error, and "currently unavailable, try again
-            # later" reaches us in exactly this shape.
             openai.APIError(
                 "This model is currently unavailable. Please try again later.",
                 request=mock.Mock(url="https://x/v1"),
@@ -219,8 +216,7 @@ class RunCase(unittest.TestCase):
         self.assertLessEqual(elapsed, 3.0)
         self.assertTrue(raised.exception.exhausted)
         self.assertTrue(raised.exception.kind == "timeout")
-        # The scheduled 3s wait is squeezed into what is left of the window,
-        # so the deadline still allows a retry before it gives up.
+
         self.assertGreaterEqual(len(self.calls), 2, "the window still allows a retry")
 
     def test_attempt_count_caps_the_retries(self):
@@ -375,7 +371,7 @@ class RunCase(unittest.TestCase):
             t.join(5)
         self.assertFalse(any(t.is_alive() for t in threads))
         self.assertGreaterEqual(timings["first"], 0.4)
-        # it queued behind the first retry's wait instead of firing alongside it
+
         self.assertGreaterEqual(timings["second"], 0.35)
 
     def test_pause_is_cancellable(self):

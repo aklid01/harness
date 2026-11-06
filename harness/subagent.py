@@ -24,14 +24,9 @@ from . import events, providers
 from .history import prepare
 from .llm import call_llm
 
-MAX_TURNS = 12  # a runaway explorer is worse than a missing answer
+MAX_TURNS = 12
 
 
-# --- rule 2 -----------------------------------------------------------------
-# `task` would let a subagent spawn subagents, forever. `write_todos` writes to
-# a module global that belongs to the main agent's plan, and this one is a
-# guest in someone else's session. The file-writing tools are withheld too, so
-# the read-only rule below is structural and not just asking nicely.
 WITHHELD = {"task", "write_todos", "str_replace", "write_file"}
 
 
@@ -41,7 +36,7 @@ def _workspace_root() -> str:
     try:
         if paths.is_initialized():
             return str(paths.project_root())
-    except Exception:  # noqa: BLE001 - a label, never worth crashing over
+    except Exception:  # noqa: BLE001
         pass
     return os.getcwd()
 
@@ -106,27 +101,19 @@ def task(description: str, execute, tool_schemas, cancel=None):
     is the lead agent's stop event; it is honoured between turns, between
     tool calls, and inside each model call.
     """
-    # --- rule 1 ---
-    # Two messages. Not a copy of the caller's transcript, not a trimmed
-    # version of it, and not whatever the last subagent left behind - this
-    # list is born here and dies at the return statement.
+
     messages = [
         {"role": "system", "content": _system_prompt()},
         {"role": "user", "content": description},
     ]
     events.emit(events.SUBAGENT, {"description": description})
 
-    report = None  # newest thing it has said, kept in case we run out of turns
+    report = None
 
-    # --- rule 3 ---
-    # Compare this with the inner loop in agent.py: call, append, run the
-    # tools, append, repeat. A subagent is not a new kind of thing. It is the
-    # loop you already have, pointed at a different list of messages.
     for _ in range(MAX_TURNS):
         if cancel is not None and cancel.is_set():
             return report or "(stopped by the user before finishing.)"
-        # Its context can overflow too, and nobody compacts it. Prepared as a
-        # copy: the throwaway list is the only thing that ever gets trimmed.
+
         request, trimmed = prepare(messages, providers.active_context_window())
         if trimmed:
             events.emit(events.NOTE, {"text": trimmed})
@@ -150,19 +137,13 @@ def task(description: str, execute, tool_schemas, cancel=None):
         events.emit(events.USAGE, dict(usage))
         report = message.content or report
 
-        # --- rule 4 ---
-        # No tool calls means it has stopped looking and started answering.
-        # `messages` goes out of scope on this line - every tool result it
-        # gathered, every path it explored, all of it. One string comes back.
         if not message.tool_calls:
             return report or "(the subagent came back with nothing)"
 
         for tool_call in message.tool_calls:
             if cancel is not None and cancel.is_set():
                 return report or "(stopped by the user before finishing.)"
-            # The same executor the main loop uses, so the same permission
-            # rules and the same sandbox apply. A subagent is a second caller,
-            # not a privileged one - it is not a way around any of that.
+
             args, result = execute(tool_call)
             call_id = getattr(tool_call, "id", None)
             events.emit(
@@ -192,9 +173,6 @@ def task(description: str, execute, tool_schemas, cancel=None):
                 }
             )
 
-    # Out of turns. Hand back whatever it last managed to say rather than
-    # nothing at all - a partial finding still beats making the lead agent
-    # start the whole search again from scratch.
     if report:
         return (
             f"(stopped after {MAX_TURNS} turns, before finishing. Partial "

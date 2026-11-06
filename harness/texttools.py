@@ -24,7 +24,6 @@ import json
 import re
 from types import SimpleNamespace
 
-# Tag names are built from pieces so this file holds no sample markup.
 OPEN = "".join(["<", "tool", "_call", ">"])
 CLOSE = "".join(["</", "tool", "_call", ">"])
 CLOSE_PARAM = "".join(["</", "parameter", ">"])
@@ -81,7 +80,7 @@ class TextCall:
     def reason(self):
         return self.error or ""
 
-    def __repr__(self):  # pragma: no cover - debugging aid
+    def __repr__(self):
         return "TextCall(name=%r, arguments=%r, error=%r)" % (
             self.name,
             self.arguments,
@@ -125,7 +124,7 @@ def _validate(name, arguments, schema, available):
         return "'%s' is not available in this session" % name
     properties = schema.get("properties") or {}
     required = schema.get("required") or []
-    # An empty string is a value, not a missing argument (mirrors tools._validate_args).
+
     missing = [key for key in required if arguments.get(key) is None]
     if missing:
         return "%s is missing required argument(s): %s" % (name, ", ".join(missing))

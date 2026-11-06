@@ -176,8 +176,6 @@ class ToolFlowCase(unittest.TestCase):
             payloads.append(json.loads(line))
         return payloads
 
-    # ---- pipeline ------------------------------------------------------
-
     def test_native_tool_call_runs_and_the_result_returns(self):
         self.use("native")
         self.run_turn()
@@ -333,8 +331,7 @@ class ToolFlowCase(unittest.TestCase):
         self.assertTrue(report["bash"]["available"])
 
     def test_no_git_keeps_everything_else_usable(self):
-        # nothing in the registry needs git, so a plain folder loses nothing;
-        # the point is that one missing optional thing never darkens the rest
+
         self.assertFalse((self.root / ".git").exists())
         names = tools.available_tool_names()
         for expected in ("bash", "read_file", "write_file", "str_replace", "task"):

@@ -144,9 +144,7 @@ class TwoReviewers(EngineCase):
         self.assertEqual(len(report_doc["findings"]), 2, "both answers are merged")
 
     def test_the_reviewers_run_in_parallel(self):
-        # The barrier only releases when both reviewers are inside the model
-        # call at the same time, so a run that quietly serialised them would
-        # break here instead of merely being slower.
+
         fake = FakeLLM(
             replies={"mdl-a": A_FINDING, "mdl-b": '{"findings": []}'},
             barrier=threading.Barrier(2, timeout=15),

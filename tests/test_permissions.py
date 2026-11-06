@@ -52,15 +52,14 @@ class PermissionCase(unittest.TestCase):
         self.assertEqual(permissions.check("write_file", outside)[0], "allow")
 
     def test_mode_ref_is_read_live_so_mid_turn_changes_apply(self):
-        # The session binds permission mode by reference; changing it while a
-        # turn is running must take effect on the very next check.
+
         ref = permissions.mode_ref("default")
         with permissions.moded(ref):
             self.assertEqual(permissions.current_mode(), "default")
             self.assertEqual(
                 permissions.check("bash", {"command": "python -c 'print(1)'"})[0], "ask"
             )
-            ref.value = "autopilot"  # user switches policy mid-work
+            ref.value = "autopilot"
             self.assertEqual(permissions.current_mode(), "autopilot")
             self.assertEqual(
                 permissions.check("bash", {"command": "python -c 'print(1)'"})[0],
@@ -84,18 +83,18 @@ class ClassifyBashCase(unittest.TestCase):
             "ls -la",
             "dir /b",
             "dir",
-            "ls src tests && ls docs",  # several directories
-            "cat a.py b.py c.py",  # several files
-            'grep -rn "def foo" src/',  # quoted pattern
-            'findstr /n /c:"a b" README.md',  # quoted with a space
-            "sed -n '1,20p' README.md",  # read-only sed
+            "ls src tests && ls docs",
+            "cat a.py b.py c.py",
+            'grep -rn "def foo" src/',
+            'findstr /n /c:"a b" README.md',
+            "sed -n '1,20p' README.md",
             "git log --oneline -5",
             "git status",
             "find . -name '*.py'",
-            "type README.md 2>nul | findstr .",  # stderr to null, not a write
+            "type README.md 2>nul | findstr .",
             "ls -la /a 2>/dev/null || ls -la /b",
             "cd /d D:/x && dir /b",
-            "mkdir scratch/foo 2>/dev/null",  # benign create
+            "mkdir scratch/foo 2>/dev/null",
         ]:
             self.assertEqual(self.level(cmd), "low", cmd)
 
@@ -125,7 +124,7 @@ class ClassifyBashCase(unittest.TestCase):
         self.assertEqual(self.level("python -m pytest tests -q"), "medium")
 
     def test_compound_takes_the_worst_part(self):
-        # a read-only host with a redirect inside still writes
+
         self.assertEqual(self.level("cat a.txt && echo x > b.txt"), "high")
         self.assertEqual(self.level("ls && cat a && grep x b"), "low")
 
@@ -156,8 +155,7 @@ class BypassRegression(unittest.TestCase):
         return permissions.check("bash", {"command": command})[0]
 
     def test_newline_smuggles_a_second_command(self):
-        # fnmatch's * matches \n, so `echo *` allowed the whole multi-line
-        # command while bash executed every line.
+
         self.assertEqual(self.verdict("echo hi\nrm -rf ~"), "deny")
         self.assertEqual(self.verdict("echo hi\nls"), "allow")
 
@@ -171,20 +169,18 @@ class BypassRegression(unittest.TestCase):
         self.assertEqual(self.verdict("find . -name .git -exec rm -rf {} \\;"), "ask")
         self.assertEqual(self.verdict("sort -o evil.txt in.txt"), "ask")
         self.assertEqual(self.verdict("sed -n 's/x/y/w out.txt' file"), "ask")
-        # the read-only forms stay allowed
+
         self.assertEqual(self.verdict("find . -name '*.py'"), "allow")
         self.assertEqual(self.verdict("sort in.txt"), "allow")
         self.assertEqual(self.verdict("sed -n 1,5p file"), "allow")
 
     def test_unknown_tool_defaults_to_ask(self):
-        # A future mutating tool added to the registry without a check branch
-        # must surface as a prompt, not silently inherit the default-allow.
+
         self.assertEqual(permissions.check("mystery_tool", {})[0], "ask")
         self.assertEqual(permissions.check("read_file", {"path": "x"})[0], "allow")
 
     def test_withheld_sets_name_real_tools(self):
-        # The read-only guarantees are structural: a set naming a tool that
-        # does not exist (the `write` typo) withholds nothing at all.
+
         from harness import agent, subagent, tools
 
         real = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
@@ -221,8 +217,7 @@ class ReadonlyShapeRegression(unittest.TestCase):
         self.assertEqual(self.verdict('P1="/tmp/x"; ls -la "$P1"'), "allow")
 
     def test_the_probe_ask_mode_refused_is_allowed(self):
-        # The command Ask mode refused: a variable, a stderr merge and an
-        # absolute path outside the workspace.
+
         command = (
             "P1='/tmp/attached.html'; P2='/tmp/attached.html'; "
             'ls -la "$P1" 2>&1; echo \'---\'; ls -la "$P2" 2>&1; '
@@ -235,7 +230,7 @@ class ReadonlyShapeRegression(unittest.TestCase):
         self.assertEqual(permissions.classify_bash("P1='/tmp/x'")[0], "low")
 
     def test_the_shape_fix_does_not_loosen_the_fence(self):
-        # Everything that changes something still asks or denies.
+
         self.assertEqual(self.verdict("echo hi > out.txt"), "ask")
         self.assertEqual(self.verdict("cat 2>&1 > out.txt"), "ask")
         self.assertEqual(self.verdict("ls 2>&1 | rm -rf ~"), "deny")
@@ -244,14 +239,12 @@ class ReadonlyShapeRegression(unittest.TestCase):
         self.assertEqual(self.verdict("export P1=/tmp/x"), "ask")
 
     def test_a_descriptor_redirect_into_a_file_is_still_a_write(self):
-        # `>&file` sends both streams into the file; only `>&2` duplicates a
-        # descriptor. Keeping the `&` with its redirect must not confuse the
-        # two.
+
         self.assertEqual(self.verdict("echo hi >& out.txt"), "ask")
         self.assertEqual(self.verdict("echo hi >&out.txt"), "ask")
         self.assertEqual(self.verdict("cmd &> out.txt"), "ask")
         self.assertEqual(self.verdict("cmd 2>&1 > out.txt"), "ask")
-        # the descriptor duplication itself stays read-only
+
         self.assertEqual(self.verdict("echo hi >&2"), "allow")
         self.assertEqual(self.verdict("cat f 2>&1"), "allow")
 

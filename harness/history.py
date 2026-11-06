@@ -24,16 +24,15 @@ from pathlib import Path
 
 from . import config
 
-CAP = 10_000  # chars of a fresh tool result the agent sees inline
-STUB = 300  # chars kept once the turn that produced it is over
+CAP = 10_000
+STUB = 300
 
-CAPPED = "[output capped:"  # cap() wrote this result's tail to a spill file
-TRIMMED = "[output trimmed:"  # strip() marker; stripping twice is a no-op
-SUMMARY = "<summary>"  # the handoff note compaction leaves behind
+CAPPED = "[output capped:"
+TRIMMED = "[output trimmed:"
+SUMMARY = "<summary>"
 _OMITTED = "[left out of this request to fit the model's context window]"
 
-# Spill files parked during the CURRENT turn. Set per turn by begin_turn();
-# code outside a turn (tests, one-shot engine use) shares the fallback.
+
 _SPILLS: list = []
 _TURN_SPILLS = contextvars.ContextVar("harness_spills", default=None)
 
@@ -52,8 +51,6 @@ def begin_turn():
     _TURN_SPILLS.set([])
 
 
-# Oldest-to-newest: shrink tool output, then whole exchanges, then give up on
-# the middle. Only ever applied to a copy, never to the stored transcript.
 TAIL = 8
 
 
@@ -79,9 +76,7 @@ def prepare(messages, window=None, tail=TAIL):
         return list(messages), ""
 
     frozen = frozen_prefix_len(messages)
-    # Protect by object identity, not position: the second pass deletes from
-    # the request, so positional indices shift and the live tail would lose
-    # its protection (the current question could be deleted out of a request).
+
     protected = {
         id(message) for message in messages[max(frozen, len(messages) - tail) :]
     }
@@ -100,8 +95,6 @@ def prepare(messages, window=None, tail=TAIL):
         else:
             request.append(message)
 
-    # Still too big: leave out whole exchanges from the middle, oldest first.
-    # Never the system prompt, the compaction handoff, or the live tail.
     index = max(frozen, 1)
     floor = max(frozen, 1)
     while estimate(request) > limit and index < len(request):
@@ -120,9 +113,6 @@ def prepare(messages, window=None, tail=TAIL):
         "The stored history is unchanged."
     )
     return request, note
-
-
-# ------------------------------------------------------------------- 1. cap
 
 
 def spill(text):
@@ -148,8 +138,6 @@ def cap(text):
     try:
         path = spill(text)
     except OSError:
-        # No temp file (read-only /tmp, no space). Still better to trim and
-        # say so than to fail the tool call outright.
         return (
             text[:CAP]
             + f"\n\n{CAPPED} {len(text) - CAP} chars cut and the rest could not be saved.]"
@@ -188,9 +176,6 @@ def frozen_prefix_len(messages):
     return 0
 
 
-# ----------------------------------------------------------------- 2. strip
-
-
 def strip(messages):
     """Shrink every tool result that is no longer part of the live turn.
 
@@ -211,9 +196,6 @@ def strip(messages):
         )
         shrunk += 1
     return shrunk
-
-
-# ------------------------------------------------------------------ 3. drop
 
 
 def estimate(messages):

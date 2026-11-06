@@ -1,4 +1,4 @@
-/* Commands the renderer calls through `window.harness` (see web/renderer/bridge.ts). */
+
 use std::path::Path;
 
 use tauri::{AppHandle, Manager, State};

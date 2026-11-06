@@ -121,7 +121,7 @@ def _stream(model, step, index):
                 ]
             },
         ]
-        # reasoning tokens arrive before the call when the model exposes them
+
         if reasoning:
             thought_chunks = [
                 {
@@ -161,7 +161,7 @@ def _stream(model, step, index):
     else:
         text = step.get("content", "ok")
         chunks = []
-        # reasoning tokens arrive before the answer when the model exposes them
+
         if reasoning:
             for start in range(0, len(reasoning), 11):
                 chunks.append(
@@ -205,7 +205,7 @@ class Handler(BaseHTTPRequestHandler):
     state: MockState = None
     counter = 0
 
-    def log_message(self, *args):  # keep test output quiet
+    def log_message(self, *args):
         pass
 
     def do_POST(self):
@@ -234,7 +234,7 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("stream"):
             data = _stream(model, step, index).encode()
             if step.get("kind") == "fold":
-                data = data[: data.index(b"data: [DONE]")]  # cut the stream short
+                data = data[: data.index(b"data: [DONE]")]
         else:
             data = json.dumps(_payload(model, step, index)).encode()
         self.send_response(200)

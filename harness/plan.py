@@ -13,10 +13,9 @@ import json
 from . import paths
 from . import session as session_mod
 
-# Planning completion states, shared with the UI and the handoff decision.
-COMPLETE = "complete"  # the planner finished a usable plan
-PARTIAL = "partial"  # finished but thinned out by budget
-UNUSABLE = "unusable"  # no usable plan (empty, stalled or errored)
+COMPLETE = "complete"
+PARTIAL = "partial"
+UNUSABLE = "unusable"
 CANCELLED = "cancelled"
 
 

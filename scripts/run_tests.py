@@ -19,8 +19,7 @@ site = ROOT / ".venv" / "Lib" / "site-packages"
 if site.is_dir():
     sys.path.insert(1, str(site))
 
-# The sandbox exports proxy vars; a proxy would turn the localhost mock
-# provider into a 502 because 127.0.0.1 resolves to the proxy itself.
+
 for key in ("NO_PROXY", "no_proxy"):
     hosts = {h.strip() for h in os.environ.get(key, "").split(",") if h.strip()}
     hosts.update(("127.0.0.1", "localhost", "::1"))

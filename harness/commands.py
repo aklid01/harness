@@ -13,8 +13,7 @@ COMMANDS = {
     "/multi-model-review": "have independent reviewer models critique the change",
 }
 
-# The three mode commands are parsed before anything else: with text they bind
-# one turn, without text they set the session's sticky mode (see Runner).
+
 MODE_COMMANDS = {"/plan": "plan", "/ask": "ask", "/build": "build"}
 
 
@@ -75,8 +74,6 @@ def compact(messages, window=None):
         events.emit(events.STATUS, {"active": "compacting"})
         compacted = compaction.compact(messages, window)
     except Exception as failure:  # noqa: BLE001
-        # Compaction is one more API call, and it fires when the window is
-        # nearly full - the worst moment to lose the session over a rate limit.
         events.emit(events.STATUS, {"active": None})
         events.emit(
             events.NOTE,

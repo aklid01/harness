@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Harness</title>
     <script>
-      // Apply persisted appearance prefs before first paint to avoid a theme flash.
       (function () {
         var d = document.documentElement;
         try {
@@ -292,7 +291,11 @@
             <span id="statusDot" class="status-dot"></span>
             <span id="activityText" class="status-text">ready</span>
             <span class="status-spacer"></span>
-            <span id="statusMode" class="status-mode" title="Current phase"></span>
+            <span
+              id="statusMode"
+              class="status-mode"
+              title="Current phase"
+            ></span>
           </div>
 
           <section id="promptZone" class="composer">
@@ -448,9 +451,7 @@
                 aria-label="Session mode"
               >
                 <span class="ctl-label" id="modeChipLabel"></span>
-                <span
-                  class="chip-clear"
-                  aria-hidden="true"
+                <span class="chip-clear" aria-hidden="true"
                   ><svg
                     viewBox="0 0 24 24"
                     width="12"
@@ -461,12 +462,8 @@
                     stroke-linecap="round"
                     stroke-linejoin="round"
                   >
-                    <line x1="18" y1="6" x2="6" y2="18" /><line
-                      x1="6"
-                      y1="6"
-                      x2="18"
-                      y2="18"
-                    /></svg
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" /></svg
                 ></span>
               </button>
               <span class="toolbar-divider"></span>

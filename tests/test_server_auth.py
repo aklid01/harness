@@ -51,7 +51,6 @@ class AuthCase(unittest.TestCase):
                     with self.assertRaises(
                         (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed)
                     ):
-                        # No auth frame: the sidecar stays silent and closes.
                         await asyncio.wait_for(ws.recv(), timeout=1.5)
 
                 async with websockets.connect(f"ws://127.0.0.1:{PORT}") as ws:

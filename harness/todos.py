@@ -16,7 +16,7 @@ import contextvars
 
 MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 
-TODOS: list = []  # [{"content": ..., "activeForm": ..., "status": ...}]
+TODOS: list = []
 
 _CURRENT = contextvars.ContextVar("harness_todos", default=None)
 
@@ -63,9 +63,6 @@ def active_form():
     return "thinking"
 
 
-# Words that, in a todo, mean "this is a verification/validation step". A bash
-# command that actually runs one marks the step done - from evidence, not from
-# the agent claiming it.
 _COMPLETION_WORDS = (
     "py_compile",
     "py_test",

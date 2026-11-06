@@ -137,10 +137,7 @@ def compact(messages, window=None):
     size = int(window) if window else config.context_window()
     cut = tail_start(messages, size * config.COMPACT_TO)
     if cut <= 1 or cut >= len(messages):
-        # Nothing old enough to be worth summarising - or no safe cut exists
-        # at all (the transcript ends in unanswered tool calls), where cutting
-        # at len() would summarise away the ENTIRE conversation.
-        return messages  # nothing old enough to be worth summarising
+        return messages
 
     summary = summarize(messages[1:cut])
     kept = [
@@ -149,8 +146,5 @@ def compact(messages, window=None):
         *messages[cut:],
     ]
 
-    # Shrink the retained tail now, while we are already paying for a rebuilt
-    # prefix. Stripping is idempotent, so from here the frozen block is final
-    # and stays byte-identical - and cached - until the next compaction.
     strip(kept)
     return kept

@@ -9,14 +9,10 @@ from datetime import datetime, timedelta
 
 from . import paths
 
-# The unscoped mode's session id: the headless CLI and the tests run without a
-# scope, and one process is one chat there. Scoped callers (the sidecar's
-# Sessions) never read this - current_id() prefers the contextvar.
 CURRENT = datetime.now().strftime("%Y%m%d-%H%M%S")
 WRITTEN = 0
 
-# Per-session overrides. When a context is scoped (see ``scoped``), these take
-# precedence over the module globals, so one process can own many active chats.
+
 _CUR = contextvars.ContextVar("session_current", default=None)
 _WRIT = contextvars.ContextVar("session_written", default=None)
 _ROOT = contextvars.ContextVar("session_root", default=None)
@@ -153,9 +149,6 @@ def delete_session(session_id):
     set_sticky_mode(session_id, None)
 
 
-# The sticky mode a session keeps across messages and restarts: None is the
-# build default, otherwise "plan" or "ask". Stored next to the titles, keyed
-# by session id, so a reopened session comes back in the mode it was left in.
 STICKY_MODES = ("plan", "ask")
 
 
@@ -273,9 +266,6 @@ def load(session_id):
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:
-            # A half-written last line, usually from a kill mid-save. Skipping
-            # it costs one message; raising would break /sessions for every
-            # chat in the project, because listing them all calls load().
             continue
         if "rewind_to" in entry:
             del messages[entry["rewind_to"] :]

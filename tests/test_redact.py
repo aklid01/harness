@@ -21,7 +21,7 @@ SLACK = "xoxb-" + "s" * 12
 JWT = "eyJ" + "a" * 12 + "." + "b" * 12 + "." + "c" * 12
 BEARER_TOKEN = "b" * 24
 URL_SECRET = "u" * 20
-ASSIGN_SECRET = "K9" + "zX" * 9  # mixed case+digits: clearly not an identifier
+ASSIGN_SECRET = "K9" + "zX" * 9
 
 
 class TokenShapes(unittest.TestCase):

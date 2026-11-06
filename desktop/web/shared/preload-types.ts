@@ -1,8 +1,7 @@
 export interface SidecarConfig {
   port: number;
   projectRoot: string;
-  /* One-time token the shell also passed to the sidecar's command line.
-     The renderer presents it as the first frame on every socket. */
+
   authToken: string;
 }
 

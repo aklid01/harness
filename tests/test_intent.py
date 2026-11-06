@@ -23,9 +23,10 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness import agent_roles, commands, events, server, session as session_mod
+from harness import agent_roles, commands, events, server
 from harness import paths as paths_mod
 from harness import plan as plan_mod
+from harness import session as session_mod
 from harness.agent import Runner
 from harness.commands import parse_mode_command
 
@@ -69,7 +70,9 @@ class CommandParsing(unittest.TestCase):
     """The mode commands split off cleanly; lookalikes stay unknown."""
 
     def test_command_with_text(self):
-        self.assertEqual(parse_mode_command("/plan fix the bug"), ("plan", "fix the bug"))
+        self.assertEqual(
+            parse_mode_command("/plan fix the bug"), ("plan", "fix the bug")
+        )
         self.assertEqual(parse_mode_command("/ask  why?  "), ("ask", "why?"))
 
     def test_command_without_text(self):
@@ -146,9 +149,7 @@ class IntentCase(IsolatedCase):
         self.assertEqual(
             self.intents(), [("plan", "command")], "the sticky change is announced"
         )
-        self.assertEqual(
-            self.llm.call_count, 0, "a bare command runs no model turn"
-        )
+        self.assertEqual(self.llm.call_count, 0, "a bare command runs no model turn")
 
     def test_sticky_mode_applies_to_following_messages(self):
         runner = Runner()
@@ -199,7 +200,15 @@ class IntentCase(IsolatedCase):
         runner = Runner()
         self.llm.side_effect = [
             (
-                fake_message(None, [("write_file", {"path": str(self.root / "x.txt"), "content": "y"})]),
+                fake_message(
+                    None,
+                    [
+                        (
+                            "write_file",
+                            {"path": str(self.root / "x.txt"), "content": "y"},
+                        )
+                    ],
+                ),
                 USAGE,
             ),
             (fake_message("described it instead"), USAGE),
@@ -209,10 +218,14 @@ class IntentCase(IsolatedCase):
             runner.handle_input("/plan write it")
         results = [p["result"] for t, p in self.seen if t == events.TOOL_RESULT]
         self.assertTrue(results and "Plan mode" in results[0], results)
-        offered = [
-            s["function"]["name"] for s in self.llm.call_args[1]["tools"] or []
-        ]
-        for name in ("write_file", "str_replace", "write_todos", "task", "plan_decision"):
+        offered = [s["function"]["name"] for s in self.llm.call_args[1]["tools"] or []]
+        for name in (
+            "write_file",
+            "str_replace",
+            "write_todos",
+            "task",
+            "plan_decision",
+        ):
             self.assertNotIn(name, offered, f"{name} offered in plan mode")
         self.assertIn("read_file", offered)
 
@@ -250,8 +263,7 @@ class StickyPersistence(unittest.TestCase):
         self.backend.dispatch(obj)
 
     def done(self, session="s", timeout=20, kind="done"):
-        # Count-based, so a done from an earlier turn is never mistaken for
-        # this one; each call waits for the NEXT such event.
+
         target = self._counts.get((session, kind), 0) + 1
         limit = time.time() + timeout
         while time.time() < limit:
@@ -284,12 +296,10 @@ class StickyPersistence(unittest.TestCase):
         self.set_mode_op("plan")
         self.dispatch(op="open", session="s", root=str(self.root), id=sid)
         self.assertTrue(self.done(kind="session"))
-        payloads = [
-            m["payload"]
-            for m in self.sent
-            if m.get("event") == events.SESSION
-        ]
-        self.assertEqual(payloads[-1].get("mode"), "plan", "the session reopens in plan")
+        payloads = [m["payload"] for m in self.sent if m.get("event") == events.SESSION]
+        self.assertEqual(
+            payloads[-1].get("mode"), "plan", "the session reopens in plan"
+        )
         self.assertEqual(
             self.backend.sessions["s"].mode, "plan", "the engine state follows"
         )
@@ -355,7 +365,7 @@ class AutoPlanCase(IsolatedCase):
         return [(p["intent"], p["source"]) for t, p in self.seen if t == events.INTENT]
 
     def test_ambiguous_request_enters_plan_mode(self):
-        self.responder = lambda kind, payload: False  # the user cancels at the gate
+        self.responder = lambda kind, payload: False
         self.llm.side_effect = [
             (
                 fake_message(
@@ -407,7 +417,10 @@ class AutoPlanCase(IsolatedCase):
                     None,
                     [
                         ("plan_decision", {"decision": "plan", "reason": "scope?"}),
-                        ("write_file", {"path": str(self.root / "x.txt"), "content": "nope"}),
+                        (
+                            "write_file",
+                            {"path": str(self.root / "x.txt"), "content": "nope"},
+                        ),
                     ],
                 ),
                 USAGE,
@@ -425,37 +438,68 @@ class AutoPlanCase(IsolatedCase):
     def test_directive_request_proceeds_when_the_model_says_build(self):
         self.llm.side_effect = [
             (fake_message(None, [("plan_decision", {"decision": "build"})]), USAGE),
-            (fake_message(None, [("write_file", {"path": str(self.root / "x.txt"), "content": "y"})]), USAGE),
+            (
+                fake_message(
+                    None,
+                    [
+                        (
+                            "write_file",
+                            {"path": str(self.root / "x.txt"), "content": "y"},
+                        )
+                    ],
+                ),
+                USAGE,
+            ),
             (fake_message("built"), USAGE),
         ]
         runner = Runner()
         runner.handle_input("rename the foo function to bar everywhere")
         self.assertEqual(runner.mode, "build")
         self.assertEqual(
-            [(p["intent"], p["source"]) for t, p in self.seen if t == events.INTENT][-1],
+            [(p["intent"], p["source"]) for t, p in self.seen if t == events.INTENT][
+                -1
+            ],
             ("build", "model"),
         )
         results = [p["result"] for t, p in self.seen if t == events.TOOL_RESULT]
-        self.assertTrue(any("Wrote" in r and str(self.root / "x.txt") in r for r in results), "the write ran in the workspace")
-        # After the decision the gate is off: the second call's tools=None
-        # means the full registry, writes included.
+        self.assertTrue(
+            any("Wrote" in r and str(self.root / "x.txt") in r for r in results),
+            "the write ran in the workspace",
+        )
+
         second_tools = self.llm.call_args_list[1][1]["tools"]
         self.assertIsNone(second_tools, "writes flow after the decision")
 
     def test_a_model_that_ignores_the_decision_proceeds_as_build(self):
         self.llm.side_effect = [
-            (fake_message(None, [("write_file", {"path": str(self.root / "x.txt"), "content": "y"})]), USAGE),
+            (
+                fake_message(
+                    None,
+                    [
+                        (
+                            "write_file",
+                            {"path": str(self.root / "x.txt"), "content": "y"},
+                        )
+                    ],
+                ),
+                USAGE,
+            ),
             (fake_message("built"), USAGE),
         ]
         runner = Runner()
         runner.handle_input("just do it: write the file")
         self.assertEqual(runner.mode, "build", "never silently read-only")
         self.assertEqual(
-            [(p["intent"], p["source"]) for t, p in self.seen if t == events.INTENT][-1],
+            [(p["intent"], p["source"]) for t, p in self.seen if t == events.INTENT][
+                -1
+            ],
             ("build", "fallback"),
         )
         results = [p["result"] for t, p in self.seen if t == events.TOOL_RESULT]
-        self.assertTrue(any("Wrote" in r and str(self.root / "x.txt") in r for r in results), "the write still ran in the workspace")
+        self.assertTrue(
+            any("Wrote" in r and str(self.root / "x.txt") in r for r in results),
+            "the write still ran in the workspace",
+        )
 
     def test_turning_auto_plan_off_makes_ambiguous_requests_build(self):
         from harness import tools as tools_mod
@@ -466,12 +510,10 @@ class AutoPlanCase(IsolatedCase):
         runner = Runner()
         runner.handle_input("make the app faster")
         self.assertEqual(runner.mode, "build")
-        # With the gate unarmed, call_llm gets tools=None meaning "the full set".
+
         first_tools = [
             s["function"]["name"]
-            for s in (
-                self.llm.call_args_list[0][1]["tools"] or tools_mod.TOOL_SCHEMAS
-            )
+            for s in (self.llm.call_args_list[0][1]["tools"] or tools_mod.TOOL_SCHEMAS)
         ]
         self.assertNotIn("plan_decision", first_tools, "no decision gate when off")
         self.assertIn("write_file", first_tools)
@@ -507,7 +549,7 @@ class AutoPlanCase(IsolatedCase):
 
     def test_headless_auto_plan_returns_the_plan_and_stops(self):
         """No interaction channel: the plan is the deliverable, nothing builds."""
-        events.set_responder(None)  # nobody to answer
+        events.set_responder(None)
         self.llm.side_effect = [
             (
                 fake_message(
@@ -569,7 +611,7 @@ class SteerQueueIntent(IsolatedCase):
         from harness.pending import Mailbox
 
         runner.mailbox = Mailbox()
-        self.responder = lambda kind, payload: False  # cancel: nothing builds
+        self.responder = lambda kind, payload: False
         self.llm.side_effect = [(fake_message("PLAN: focused version"), USAGE)]
         runner.mailbox.add("/plan focus on the parser", "steer")
         runner.handle_input("make it better")
@@ -600,11 +642,10 @@ class SteerQueueIntent(IsolatedCase):
             (fake_message(None, [("read_file", {"path": "a"})]), USAGE),
             (fake_message("answering"), USAGE),
         ]
-        runner.handle_input("/ask")  # sticky ask
+        runner.handle_input("/ask")
         runner.mailbox.add("/plan and the tests", "steer")
         runner.handle_input("what about the tests?")
-        # The turn is already answering, so the /plan cannot convert it: it
-        # binds the next turn instead, and the text still lands.
+
         self.assertEqual(runner._pending_one_turn, "plan")
         deferred = [p for t, p in self.seen if t == events.NOTE]
         self.assertTrue(
@@ -715,7 +756,7 @@ class HandoffOnce(unittest.TestCase):
         self.backend.dispatch(obj)
 
     def done(self, session="s", timeout=30, kind="done"):
-        # Count-based, so a queue chain's second turn waits for its own done.
+
         target = self._counts.get((session, kind), 0) + 1
         limit = time.time() + timeout
         while time.time() < limit:
@@ -760,9 +801,7 @@ class HandoffOnce(unittest.TestCase):
             if str(entry.get("content") or "").startswith("<plan>"):
                 handoffs += 1
         self.assertEqual(handoffs, 1, "exactly one handoff for one approval")
-        self.assertEqual(
-            self.llm.call_count, 2, "the plan call plus one build call"
-        )
+        self.assertEqual(self.llm.call_count, 2, "the plan call plus one build call")
 
     def test_cancel_action_dismisses_without_building(self):
         self.dispatch(op="open", session="s", root=str(self.root))
@@ -798,8 +837,6 @@ class HandoffOnce(unittest.TestCase):
             answer = answers[min(calls["n"], len(answers) - 1)]
             calls["n"] += 1
             if calls["n"] == 1:
-                # File the queued message while the first turn runs, so the
-                # queue chain picks it up when the turn ends well.
                 self.dispatch(
                     op="enqueue", session="s", text="/plan draft it", kind="queue"
                 )
@@ -808,17 +845,12 @@ class HandoffOnce(unittest.TestCase):
         self.llm.side_effect = scripted
         self.dispatch(op="submit", session="s", text="start something")
         self.assertTrue(self.done())
-        # A queue chain is one busy spell: one done for the whole chain. Wait
-        # for the session to go idle instead of a second done event.
+
         limit = time.time() + 20
         while time.time() < limit and self.backend.sessions["s"].running:
             time.sleep(0.02)
         self.assertFalse(self.backend.sessions["s"].running, "the chain went idle")
-        intents = [
-            m["payload"]
-            for m in self.sent
-            if m.get("event") == events.INTENT
-        ]
+        intents = [m["payload"] for m in self.sent if m.get("event") == events.INTENT]
         self.assertEqual(
             [(p["intent"], p["source"]) for p in intents],
             [

@@ -43,8 +43,6 @@ def file_hash(path):
             else None
         )
     except OSError:
-        # A file locked by another process (log, sync client) must not kill
-        # the turn: "hash unknown" just means this file cannot be diffed.
         return None
 
 

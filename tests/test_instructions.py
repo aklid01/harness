@@ -35,7 +35,7 @@ class InstructionsCase(unittest.TestCase):
         prompt = llm.system_prompt("build")
         self.assertIn("Never use em dashes", prompt)
         self.assertIn("Use the venv python", prompt)
-        # paths.init resolves the root, so compare against the resolved path.
+
         self.assertIn(str((self.root / "AGENTS.md").resolve()), prompt)
 
     def test_no_agents_md_injects_nothing(self):
@@ -43,11 +43,7 @@ class InstructionsCase(unittest.TestCase):
         prompt = llm.system_prompt("build")
         self.assertNotIn("{instructions}", prompt)
         self.assertIn("## Project rules", prompt)
-        # The bound is the shared base prompt - rules, the attachment rules -
-        # and then some slack. It catches the instructions loader injecting a
-        # blob; it is not a cap on the prompt's own text. Installed skills'
-        # descriptions ride along with whichever checkout runs this, so their
-        # exact bytes are excluded from the count.
+
         skills = llm.skills_prompt()
         without_skills = len(prompt) - (len(skills) if skills else 0)
         self.assertLess(without_skills, 4400, "an empty instructions block stays small")
@@ -62,7 +58,7 @@ class InstructionsCase(unittest.TestCase):
             self.assertIn("Global rule: run the tests", prompt)
 
     def test_the_app_profile_folder_is_a_global_source(self):
-        # The Electron profile's own app data folder (harness-electron/harness).
+
         app_dir = Path(self.tmp.name) / "app"
         self.write(app_dir / "AGENTS.md", "- App rule: ask before deleting.")
         prompt = llm.system_prompt("build")
@@ -86,8 +82,7 @@ class InstructionsCase(unittest.TestCase):
         self.assertLess(prompt.index("Project rule"), prompt.index("App profile rule"))
 
     def test_the_profile_fallback_to_the_home_dir_is_not_duplicated(self):
-        # With no explicit app data dir the profile IS ~/.agents: one file, one
-        # copy, not two.
+
         home = Path(self.tmp.name) / "home"
         with mock.patch("pathlib.Path.home", return_value=home):
             paths.reset()
@@ -108,8 +103,7 @@ class InstructionsCase(unittest.TestCase):
         self.assertIn("Plan rule: read before writing", llm.system_prompt("plan"))
 
     def test_injected_content_cannot_rewrite_the_prompt(self):
-        # The file's own text is substituted last, so a placeholder inside it
-        # must stay literal rather than being expanded again.
+
         self.write(self.root / "AGENTS.md", "Rules: {cwd} {skills} {instructions}")
         prompt = llm.system_prompt("build")
         self.assertIn("{cwd} {skills} {instructions}", prompt)

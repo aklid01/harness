@@ -35,3 +35,4 @@ tests/last-full-run.txt
 tests/renderer-check.txt
 tests/migration-probe.txt
 scorecard.png
+tests/e2e-*.json

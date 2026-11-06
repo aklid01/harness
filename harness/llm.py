@@ -84,15 +84,13 @@ def suggest_title(first_text, timeout=15):
         title = " ".join(reply.strip().strip("\"'").split())
         return title[:40] or None
     except Exception:
-        # Best effort still leaves a trace: an untitled session with no log
-        # line would look like the model refused, not like a broken call.
         log.warning("session titling failed", exc_info=True)
         return None
 
 
 def _params(messages, tools, caps):
     """Request body for the active model - only what it actually supports."""
-    # Reasoning is display-only: kept for the transcript, never sent back.
+
     wire = [
         {k: v for k, v in message.items() if k != "reasoning"}
         if isinstance(message, dict)
@@ -101,12 +99,6 @@ def _params(messages, tools, caps):
     ]
     params = {"model": caps["model"], "messages": wire}
     if caps.get("supports_tools", True):
-        # Only advertise what this session can actually run, and only from the
-        # set the caller asked for. A tool that would fail on arrival is noise
-        # the model has to pay for; a session where nothing runs sends no tools
-        # at all and says so instead of pretending. A schema the caller adds
-        # that the registry does not know (the turn loop's plan decision) is
-        # the caller's explicit choice and passes through untouched.
         wanted = {
             schema["function"]["name"]: schema
             for schema in (tools if tools is not None else TOOL_SCHEMAS)
@@ -153,7 +145,7 @@ def _close(handle):
         if callable(target):
             try:
                 target()
-            except Exception:  # noqa: BLE001 - cleaning up must never raise
+            except Exception:  # noqa: BLE001
                 pass
             return
 
@@ -276,8 +268,6 @@ def call_llm(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None
             )
             try:
                 for chunk in stream:
-                    # Stop reading as soon as the user cancels or moves to
-                    # another model: closing here is what stops the tokens.
                     if cancel is not None and cancel.is_set():
                         raise errors_mod.Cancelled("the stream was abandoned")
                     if chunk.usage is not None:
@@ -341,11 +331,6 @@ def call_llm(messages, tools=None, on_delta=None, on_reasoning=None, cancel=None
         on_attempt=_progress(caps),
     )
 
-
-# The three mode prompts are one structure: a role header, then shared rule
-# blocks in a fixed order. Each paragraph exists once; a mode opts in or out
-# by listing blocks. {cwd}, {skills} and {instructions} are placeholders that
-# system_prompt() substitutes last.
 
 _TODOS_RULES = """\
 For any task that takes more than one step, call write_todos first and plan it
@@ -473,16 +458,13 @@ def system_prompt(mode="build", role_instructions=""):
         template = ASK_SYSTEM_PROMPT
     else:
         template = SYSTEM_PROMPT
-    # Instructions last: their own text can contain anything, and replacing
-    # placeholders after injecting it would let it rewrite the prompt.
+
     prompt = (
         template.replace("{cwd}", cwd)
         .replace("{skills}", skills)
         .replace("{instructions}", instructions.load())
     )
-    # Role instructions come after substitution too, so a custom instruction
-    # can never smuggle a placeholder expansion into the prompt. They are the
-    # user's words for this one role, kept separate from the project's rules.
+
     extra = (role_instructions or "").strip()
     if extra:
         prompt += f"\n\n## Instructions you were given for this task\n\n{extra}"

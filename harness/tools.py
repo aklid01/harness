@@ -26,9 +26,6 @@ from .permissions import approval_info, check
 from .skills import read_skill
 from .todos import TODO_SCHEMA, write_todos
 
-# What each tool needs before it can be offered at all. The question is "can
-# this run", not "will it succeed": a command that fails is a result the model
-# can react to, not a reason to hide the tool from it.
 REQUIRES = {
     "bash": {"shell": True, "workspace": True, "approval": True},
     "read_file": {"workspace": True},
@@ -163,8 +160,6 @@ def bash(command: str) -> str:
     try:
         result = sandbox.run(command)
     except subprocess.TimeoutExpired as expired:
-        # Hand the failure back as a result. A slow command is the model's
-        # problem to work around, not a reason to take the session down.
         return (
             f"Timed out after {expired.timeout}s and was killed. "
             "Narrow it down - search inside the working directory rather than /."
@@ -263,9 +258,7 @@ def _validate_args(name, args):
     if schema is None:
         return None
     properties = schema.get("properties") or {}
-    # An empty string is a VALUE, not a missing argument: rejecting "" made
-    # `write_file(content="")` (create an empty file) and
-    # `str_replace(new_str="")` (delete text) impossible.
+
     missing = [
         key
         for key in (schema.get("required") or [])
@@ -285,8 +278,6 @@ def _validate_args(name, args):
             "boolean": bool,
         }.get(kind)
         if not expected or isinstance(value, expected):
-            # bool is an int subclass: a boolean where a number is wanted is
-            # a wrong type, the other way round is fine.
             if kind in ("integer", "number") and isinstance(value, bool):
                 return f"{name} argument '{key}' should be {kind}."
             continue
@@ -294,8 +285,6 @@ def _validate_args(name, args):
     return None
 
 
-# The agent loop's cancel event, set by execute() for the duration of one
-# dispatch. Only a tool that loops (the task subagent) reads it back.
 _CANCEL = contextvars.ContextVar("tools_cancel_event", default=None)
 
 
@@ -360,7 +349,7 @@ def execute(tool_call, note="", call_key=None, cancel=None) -> tuple[dict, str]:
         return args, f"Error: wrong arguments for {name} ({mismatch})."
     except KeyError as missing:
         return args, f"Error: {name} needs an argument you did not send: {missing}."
-    except Exception as failure:  # noqa: BLE001 - the model gets to see and retry
+    except Exception as failure:  # noqa: BLE001
         return args, f"Error: {name} failed - {type(failure).__name__}: {failure}"
 
     if call_key is not None:
@@ -368,14 +357,10 @@ def execute(tool_call, note="", call_key=None, cancel=None) -> tuple[dict, str]:
     return outcome
 
 
-# One entry per executed call, keyed by (request, call id). Bounded: only the
-# most recent calls are remembered, which is the window a retry can land in.
 _EXECUTED: dict = {}
 _EXECUTED_LIMIT = 64
 
-# Calls a human approved through the permission dialog, newest last. A re-run
-# of an identical call then skips the decision reviewer: the user already
-# looked at exactly this action.
+
 _USER_APPROVED: list = []
 _USER_APPROVED_LIMIT = 32
 
@@ -495,9 +480,6 @@ TOOL_SCHEMAS = [
         },
     },
     TODO_SCHEMA,
-    # Inlined rather than imported from subagent: the registry is the one
-    # place schemas live, and subagent imports this module back, so a
-    # module-level import here would close the cycle.
     {
         "type": "function",
         "function": {

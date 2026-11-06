@@ -1,5 +1,5 @@
-/* Shell state: where the app lives on disk, which port the sidecar uses, and
-the child process handle. */
+
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -63,9 +63,9 @@ pub fn bootstrap() -> AppState {
     }
 }
 
-/* Runs off the main thread: `uv` may sync dependencies on a cold start and the
-window should not wait for that. The renderer retries the socket until the
-backend answers. */
+
+
+
 pub fn spawn_sidecar(app: AppHandle) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
@@ -81,10 +81,10 @@ pub fn spawn_sidecar(app: AppHandle) {
 
         match started {
             Ok(child) => {
-                // Store FIRST, then re-check the shutdown flag under the same
-                // lock: a quit landing between spawn and store used to find an
-                // empty slot, skip the kill, and orphan the engine on exactly
-                // the path built to prevent that.
+
+
+
+
                 let mut stopped = false;
                 if let Ok(mut slot) = state.sidecar.lock() {
                     *slot = Some(child);
@@ -118,10 +118,10 @@ fn backend_error_dialog(app: &AppHandle, detail: &str) {
         .show(|_| {});
 }
 
-/* A sidecar that dies after a successful start is not silent anymore: it is
-   respawned (bounded), and only when the budget is spent does the user hear
-   about it. Without this, a crash at minute ten left the renderer retrying a
-   dead port forever with nothing on screen. */
+
+
+
+
 fn monitor_sidecar(app: AppHandle) {
     const MAX_RESPAWNS: u32 = 3;
     let mut respawns = 0u32;
@@ -135,14 +135,14 @@ fn monitor_sidecar(app: AppHandle) {
             Ok(mut slot) => match slot.as_mut() {
                 Some(child) => match child.try_wait() {
                     Ok(Some(status)) => {
-                        let dead = slot.take(); // drop the dead handle
+                        let dead = slot.take();
                         drop(dead);
                         Some(status)
                     }
                     Ok(None) => None,
                     Err(_) => None,
                 },
-                None => continue, // still starting up
+                None => continue,
             },
             Err(_) => continue,
         };

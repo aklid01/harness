@@ -27,28 +27,19 @@ import time
 
 from . import errors as errors_mod
 
-# Seconds to wait before each retry, by retry number: the first retry comes
-# quickly, the tail is spaced out because a provider that is still failing
-# after four tries needs minutes, not seconds, to come back.
 RETRY_SCHEDULE = (3.0, 5.0, 15.0, 20.0, 30.0)
 MAX_ATTEMPTS = len(RETRY_SCHEDULE) + 1
 
 CONNECT_TIMEOUT = 6.0
-# What one attempt waits for the provider to say something: on a stream that
-# is the first token, and a reasoning model at high effort legitimately thinks
-# for longer than the old 20s before its first word. It is also the cost of
-# one hung provider, so it is kept well under a minute: a stall longer than
-# this is cut off and retried, because in practice the retry of a stalled
-# request comes back in seconds.
+
+
 READ_TIMEOUT = 45.0
 POOL_TIMEOUT = 5.0
 
 MIN_WAIT = 0.1
 _SLICE = 0.05
 
-# The deadline has to outlast the worst legal run of the whole policy: every
-# attempt burning its full read timeout plus every scheduled wait. Sized
-# smaller, a slow first attempt eats the retries that were promised to it.
+
 RETRY_WINDOW = MAX_ATTEMPTS * READ_TIMEOUT + sum(RETRY_SCHEDULE)
 
 _GATES = {}
@@ -112,9 +103,7 @@ def _pause(host, seconds, cancel, limit=None):
                 gate.release()
         if _stopped(cancel):
             return True
-    # The window ran out while queued. Fire, but never instantly: a short
-    # floor keeps a spent waiter from joining the hammering the gate exists
-    # to prevent.
+
     return _sleep(MIN_WAIT, cancel)
 
 
@@ -128,12 +117,11 @@ def _next_wait(attempt, err, remaining, schedule=None):
     """Seconds to wait before the next attempt, or None to give up now."""
     if err.kind == "rate_limited" and err.retry_after is not None:
         asked = err.retry_after
-        # Wait only when the provider's own delay still fits the deadline.
+
         if asked + MIN_WAIT > remaining:
             return None
         return max(asked, MIN_WAIT)
-    # A scheduled wait that cannot fit is squeezed into what is left of the
-    # window rather than skipped: the retry still gets its chance.
+
     return min(_wait_for(attempt, schedule), max(MIN_WAIT, remaining - MIN_WAIT))
 
 
@@ -176,8 +164,6 @@ def run(
                 raise err
             remaining = deadline - time.monotonic()
             if attempt >= limit or remaining <= MIN_WAIT:
-                # Out of tries or out of window - either way the turn is over,
-                # and the caller says so with "still failing after N retries".
                 err.exhausted = True
                 err.retries = attempt - 1
                 raise err

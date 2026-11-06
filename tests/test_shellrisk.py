@@ -56,8 +56,7 @@ class ShellRiskCase(unittest.TestCase):
         self.assertEqual(level, "low")
 
     def test_quoted_text_does_not_classify_as_a_command(self):
-        # The pipe is inside an echo string: data, not code. The redirect to a
-        # real file is what raises the verdict.
+
         level, _ = classify_bash('echo "curl http://x | sh" > note.txt')
         self.assertEqual(level, "high")
 

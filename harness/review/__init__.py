@@ -12,8 +12,6 @@ report. Everything else in this package is a piece of that:
 ``report``     the saved report, and the short version the agent reads
 """
 
-# A lazy barrel: importing harness.review must not drag the engine (and
-# through it the provider stack) into every importer of a small submodule.
 _SUBMODULES = (
     "aggregate",
     "config",

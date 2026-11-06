@@ -1,7 +1,3 @@
-/* The multi-model review card: one card per tab, every review stage.
-   The engine routes all review traffic through a single event type; this
-   module owns the card's whole lifecycle - offer, running, findings,
-   partial, failed, nothing - and its actions (dismiss, apply, rerun). */
 import {
   activeCtx,
   agentConfig,
@@ -33,11 +29,6 @@ import type {
   ReviewStage,
 } from "../shared/protocol.js";
 
-/* The card follows a review from its offer to its findings. It never edits a
-   file: "apply" and "send" hand the work to the agent, which fixes it with
-   its ordinary tools - so the permission check and the checkpoint both still
-   apply. The card itself only reads the report and asks the engine to act. */
-
 interface ReviewModelRow {
   model_id: string;
   label: string;
@@ -63,21 +54,22 @@ export interface ReviewView {
   estimate: ReviewEstimate | null;
 }
 
-export const REVIEW_CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "", label: "All targets" },
-  { value: "correctness", label: "Correctness" },
-  { value: "error-handling", label: "Error handling" },
-  { value: "security", label: "Security" },
-  { value: "performance", label: "Performance" },
-  { value: "concurrency", label: "Concurrency" },
-  { value: "quality", label: "Code quality" },
-  { value: "maintainability", label: "Maintainability" },
-  { value: "tests", label: "Tests" },
-  { value: "dependencies", label: "Dependencies" },
-  { value: "documentation", label: "Documentation" },
-  { value: "observability", label: "Observability" },
-  { value: "agent-experience", label: "Agent experience" },
-];
+export const REVIEW_CATEGORY_OPTIONS: Array<{ value: string; label: string }> =
+  [
+    { value: "", label: "All targets" },
+    { value: "correctness", label: "Correctness" },
+    { value: "error-handling", label: "Error handling" },
+    { value: "security", label: "Security" },
+    { value: "performance", label: "Performance" },
+    { value: "concurrency", label: "Concurrency" },
+    { value: "quality", label: "Code quality" },
+    { value: "maintainability", label: "Maintainability" },
+    { value: "tests", label: "Tests" },
+    { value: "dependencies", label: "Dependencies" },
+    { value: "documentation", label: "Documentation" },
+    { value: "observability", label: "Observability" },
+    { value: "agent-experience", label: "Agent experience" },
+  ];
 
 export const REVIEW_SEVERITY_ORDER: ReviewSeverity[] = [
   "blocker",
@@ -87,11 +79,13 @@ export const REVIEW_SEVERITY_ORDER: ReviewSeverity[] = [
   "nit",
 ];
 
-const REVIEW_GROUP_OPTIONS: Array<{ value: "file" | "category"; label: string }> =
-  [
-    { value: "file", label: "By file" },
-    { value: "category", label: "By category" },
-  ];
+const REVIEW_GROUP_OPTIONS: Array<{
+  value: "file" | "category";
+  label: string;
+}> = [
+  { value: "file", label: "By file" },
+  { value: "category", label: "By category" },
+];
 
 export function reviewView(ctx: Ctx): ReviewView {
   if (!ctx.review) {
@@ -121,13 +115,10 @@ function reviewBadgeClass(severity: string): string {
   return `v-sev v-sev-${severity}`;
 }
 
-/* The severity chip inside a finding carries its own class too, so it can be
-   found either by the shared "v-sev" or by the finding-local "v-f-sev". */
 function reviewFindingSeverityClass(severity: string): string {
   return `v-f-sev v-sev v-sev-${severity}`;
 }
 
-/* The findings, grouped the way the user asked to see them. */
 function reviewGroups(
   report: ReviewReport,
   group: "file" | "category",
@@ -135,7 +126,9 @@ function reviewGroups(
   const buckets = new Map<string, ReviewFinding[]>();
   for (const finding of report.findings) {
     const key =
-      group === "file" ? finding.file : finding.category_label || finding.category;
+      group === "file"
+        ? finding.file
+        : finding.category_label || finding.category;
     const list = buckets.get(key);
     if (list) list.push(finding);
     else buckets.set(key, [finding]);
@@ -179,7 +172,6 @@ export function clearReviewCard(ctx: Ctx): void {
   ctx.reviewCard = null;
 }
 
-/* One finding: a summary line that expands into the detail. */
 function reviewFindingNode(
   ctx: Ctx,
   finding: ReviewFinding,
@@ -266,7 +258,10 @@ function reviewFindingNode(
   const pick = document.createElement("button");
   pick.className = "btn small";
   pick.textContent = "Select";
-  pick.setAttribute("aria-label", `Select finding ${finding.id} to send to the agent`);
+  pick.setAttribute(
+    "aria-label",
+    `Select finding ${finding.id} to send to the agent`,
+  );
   pick.onclick = (event) => {
     event.stopPropagation();
     const view = reviewView(ctx);
@@ -302,8 +297,6 @@ function reviewFindingNode(
   return node;
 }
 
-/* The card itself. Rebuilt on every event - a review has a handful of
-   states, and rebuilding keeps the DOM honest about which one it is in. */
 function reviewCardNode(ctx: Ctx, view: ReviewView): HTMLDivElement {
   const card = document.createElement("div");
   card.className = "review";
@@ -332,7 +325,8 @@ function reviewCardNode(ctx: Ctx, view: ReviewView): HTMLDivElement {
     const headline = document.createElement("div");
     headline.className = "v-headline";
     headline.textContent =
-      view.message || "the agent changed some files - run a multi-model review?";
+      view.message ||
+      "the agent changed some files - run a multi-model review?";
     const actions = document.createElement("div");
     actions.className = "v-actions";
     const start = document.createElement("button");
@@ -356,7 +350,6 @@ function reviewCardNode(ctx: Ctx, view: ReviewView): HTMLDivElement {
     const cost = document.createElement("div");
     cost.className = "v-note";
     if (view.estimate) {
-      // The spend is shown before it happens, not after.
       const per = view.estimate.tokens_per_model ?? 0;
       const total = view.estimate.tokens_total ?? 0;
       cost.textContent = view.estimate.over_limit
@@ -436,7 +429,6 @@ function reviewCardNode(ctx: Ctx, view: ReviewView): HTMLDivElement {
     return card;
   }
 
-  // Results.
   if (!report) {
     badge.textContent = "no report";
     const headline = document.createElement("div");
@@ -500,7 +492,6 @@ function reviewCardNode(ctx: Ctx, view: ReviewView): HTMLDivElement {
   }
   if (counts.childElementCount) card.appendChild(counts);
 
-  // Per-model status.
   if (models.length) {
     const list = document.createElement("div");
     list.className = "v-models";
@@ -524,7 +515,6 @@ function reviewCardNode(ctx: Ctx, view: ReviewView): HTMLDivElement {
     card.appendChild(list);
   }
 
-  // The findings.
   if (findings.length) {
     const toolbar = document.createElement("div");
     toolbar.className = "v-toolbar";
@@ -564,14 +554,12 @@ function reviewCardNode(ctx: Ctx, view: ReviewView): HTMLDivElement {
     card.appendChild(list);
   }
 
-  // Actions.
   const actions = document.createElement("div");
   actions.className = "v-actions";
   const sendBtn = document.createElement("button");
   sendBtn.className = "btn small primary";
   const chosen = reviewSelectedIds(view);
-  // The label stays the same however many are chosen: the count lives in the
-  // accessible name, and the Select buttons already say what is picked.
+
   sendBtn.textContent = "Send findings to the agent";
   sendBtn.setAttribute(
     "aria-label",
@@ -599,7 +587,6 @@ function reviewCardNode(ctx: Ctx, view: ReviewView): HTMLDivElement {
   return card;
 }
 
-/* Pick the models a re-run should use. */
 export function askReviewModels(ctx: Ctx): void {
   const configured = (agentConfig?.review?.reviewers ?? []).filter(
     (r) => r.enabled,
@@ -650,16 +637,17 @@ export function askReviewModels(ctx: Ctx): void {
   };
 }
 
-/* Follow one review event. */
 export function showReview(ctx: Ctx, p: ReviewEventPayload): void {
   const view = reviewView(ctx);
   const stage = p.stage ?? "started";
-  // The stage a reviewer event carries is not the phase the card is in: a
-  // progress or a finding event still means the review is running.
+
   const phase: ReviewStage =
     stage === "offer"
       ? "offer"
-      : stage === "completed" || stage === "results" || stage === "stale" || stage === "updated"
+      : stage === "completed" ||
+          stage === "results" ||
+          stage === "stale" ||
+          stage === "updated"
         ? "results"
         : stage === "failed"
           ? "failed"
@@ -693,7 +681,8 @@ export function showReview(ctx: Ctx, p: ReviewEventPayload): void {
       current.rejected = p.rejected ?? current.rejected;
       current.seconds = p.seconds ?? current.seconds;
     }
-    if (current && p.state === "failed") current.error = p.error ?? current.error;
+    if (current && p.state === "failed")
+      current.error = p.error ?? current.error;
   }
   if (stage === "started" && p.reviewers) {
     view.models = p.reviewers.map((r) => ({
@@ -725,9 +714,6 @@ export function showReview(ctx: Ctx, p: ReviewEventPayload): void {
     else if (phase === "running") setActivity("reviewing the change…");
   }
 }
-
-/* Switching models after a failure: the session, its history and any unsaved
-   composer text stay exactly where they are. */
 
 export function openModelPicker(ctx: Ctx): void {
   const usable = providerGroups.filter(

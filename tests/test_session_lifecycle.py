@@ -75,8 +75,6 @@ class SessionCase(unittest.TestCase):
         self.calls.append([m for m in messages if m.get("role") == "user"])
         return reply("Hi! How can I help you today?"), USAGE
 
-    # ---- helpers -------------------------------------------------------
-
     def dispatch(self, **obj):
         obj.setdefault("req_id", time.time_ns() % 1000000)
         self.backend.dispatch(obj)
@@ -159,8 +157,6 @@ class SessionCase(unittest.TestCase):
             for m in self.transcript(name)
             if m.get("role") == "system" and "coding agent" in str(m.get("content"))
         ]
-
-    # ---- new session, first prompt -------------------------------------
 
     def test_opening_a_workspace_with_no_sessions_writes_nothing(self):
         """A tab opened before any prompt is a draft, not an empty session."""
@@ -326,7 +322,6 @@ class SessionCase(unittest.TestCase):
         self.assertTrue(self.done("t1"))
         before = len(self.calls)
 
-        # a replayed or duplicated frame for the same submission does nothing
         reply = self.dispatch_reply(
             op="submit",
             session="t1",
@@ -351,7 +346,6 @@ class SessionCase(unittest.TestCase):
         name = self.files()[0]
         self.assertEqual(self.user_messages(name), ["Hi"])
 
-        # sending the same words again is a different submission, and runs
         self.dispatch(
             op="submit",
             session="t1",
@@ -383,7 +377,7 @@ class SessionCase(unittest.TestCase):
         )
         session = self.backend.sessions["t1"]
         self.assertEqual(session.session_id, announced[0])
-        # a second submit attaches to that same session
+
         self.dispatch(
             op="submit", session="t1", root=str(self.root), text="more", mode="build"
         )
@@ -415,7 +409,7 @@ class SessionCase(unittest.TestCase):
         self.assertEqual(
             self.assistant_messages(name), [], "an abandoned turn is not stored"
         )
-        # the session still accepts a fresh turn, with no duplicate
+
         self.llm.side_effect = self.answer
         self.dispatch(
             op="submit", session="t1", root=str(self.root), text="again", mode="build"

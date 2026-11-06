@@ -37,19 +37,15 @@ DEFAULT_INTENSITY = "medium"
 DEFAULT_MAX_ROUNDS = 2
 MAX_ROUNDS_LIMIT = 6
 
-# How readily the model plans on its own: conservative plans only on real
-# ambiguity, eager plans at the first doubt. Balanced is the default.
+
 SENSITIVITIES = ("conservative", "balanced", "eager")
 DEFAULT_SENSITIVITY = "balanced"
-# Approval is required before an automatic plan hands off to build. A plan
-# review is the point of planning automatically; turning it off makes the
-# plan advisory (shown, then built without waiting).
+
+
 DEFAULT_PLAN_APPROVAL = True
 DEFAULT_AUTO_PLAN = True
 
-# Roles are keyed by name so callers can index config["plan"], config["build"]
-# and config["oversight"] uniformly, while oversight carries its own extra
-# fields for the review loop.
+
 _ROLE_FIELDS = ("enabled", "model_id", "instructions")
 
 DEFAULTS = {
@@ -69,11 +65,6 @@ DEFAULTS = {
         "intensity": DEFAULT_INTENSITY,
         "max_rounds": DEFAULT_MAX_ROUNDS,
     },
-    # The multi-model review role is not here: its defaults are the review
-    # module's own constants, so the numbers exist in exactly one place (see
-    # _clean_review). It differs from the other roles in one way: it holds a
-    # *list* of models, not one, because the whole point is that several
-    # independent reviewers look at the same change.
 }
 
 
@@ -85,10 +76,6 @@ def _clean_role(raw, plan=False):
         "instructions": as_text(raw.get("instructions")),
     }
     if plan:
-        # The plan role carries the automatic-planning settings. A stored
-        # value always wins; a missing one takes the current default, so an
-        # old agents.json keeps its explicit "approve": false and one that
-        # never set it starts gating now that the gate has a new job.
         clean["approve"] = as_bool(raw.get("approve"), default=DEFAULT_PLAN_APPROVAL)
         clean["auto"] = as_bool(raw.get("auto"), default=DEFAULT_AUTO_PLAN)
         sensitivity = as_text(raw.get("sensitivity")) or DEFAULT_SENSITIVITY
@@ -110,9 +97,7 @@ def normalise(raw) -> dict:
     """A full config with defaults filled, from whatever is on disk."""
     raw = raw if isinstance(raw, dict) else {}
     out = {"version": FORMAT_VERSION}
-    # The review role is not in DEFAULTS (its defaults live in
-    # review/config), so it is cleaned separately - it must still land in
-    # every normalised config.
+
     out["review"] = _clean_review(raw.get("review"))
     for role, default in DEFAULTS.items():
         merged = dict(default)
@@ -160,7 +145,7 @@ def save(config) -> dict:
     tmp = target.with_name(target.name + ".tmp")
     tmp.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(target)
-    _CACHE["stamp"] = _MISSING  # force a re-read on the next get()
+    _CACHE["stamp"] = _MISSING
     return copy.deepcopy(body)
 
 

@@ -73,8 +73,7 @@ class SafeBoundary(unittest.TestCase):
         self.messages.append({"role": "assistant", "content": "done"})
 
     def test_a_tool_result_and_its_asker_move_together(self):
-        # A cut may never land ON a tool result, nor leave one behind without
-        # the assistant message that asked for it.
+
         for start in range(1, len(self.messages) + 1):
             cut = safe_boundary(self.messages, start)
             self.assertGreaterEqual(cut, max(start, 1))
@@ -122,11 +121,10 @@ class CompactRebuilds(unittest.TestCase):
             "the handoff note is marked as compacted memory",
         )
         self.assertIn(SUMMARY_TEXT, result[1]["content"])
-        # The kept tail is a suffix of the original transcript.
+
         tail_len = len(result) - 2
         self.assertEqual(result[2:], messages[len(messages) - tail_len :])
-        # The final answer stays live in the tail, and the summariser read the
-        # older prefix instead of it.
+
         self.assertEqual(result[-1], messages[-1])
 
     def test_no_tool_result_is_orphaned_in_the_result(self):

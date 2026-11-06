@@ -153,8 +153,6 @@ class AttachHandler(BaseHTTPRequestHandler):
             self.state.count += 1
             index = self.state.count
 
-        # A probe step, when a test asks for one: the model looks at the file
-        # with a shell command before it reads it.
         probe = self.state.probe
         file_index = index - 1 - (1 if probe else 0)
         if probe and index == 1:
@@ -205,13 +203,13 @@ class AttachState:
         self.requests = []
         self.count = 0
         self.lock = threading.Lock()
-        self.probe = None  # optional: a shell probe of the file, before the read
+        self.probe = None
 
 
 class AttachE2E(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # The report is this run's, not the last one's.
+
         (Path(__file__).resolve().parent / "e2e-attachments-report.json").unlink(
             missing_ok=True
         )
@@ -226,9 +224,7 @@ class AttachE2E(unittest.TestCase):
         self.appdata.mkdir(parents=True)
         paths_mod.init(project_root=self.root, app_data_dir=self.appdata)
         self.addCleanup(paths_mod.reset)
-        # Auto-plan is off here: these tests pin the attachment pipeline, not
-        # the model's plan-or-proceed decision (test_intent owns that). Saved
-        # after paths.init, so it lands in this test's own app data dir.
+
         from harness import agent_roles
 
         agent_roles.save({"plan": {"auto": False}})
@@ -261,8 +257,6 @@ class AttachE2E(unittest.TestCase):
         providers.save_model({"id": "mdl-at", "name": "AT", "model": "at-model"}, "grp")
         providers.set_active("mdl-at")
         providers.set_key("grp", "sk-attach-test")
-
-    # ---- helpers ----
 
     def wait_until(self, cond, timeout=20):
         import time
@@ -398,8 +392,6 @@ class AttachE2E(unittest.TestCase):
         ]
         return answers[-1] if answers else ""
 
-    # ---- scenarios ----
-
     def test_attached_file_is_staged_read_and_delivered_in_the_same_turn(self):
         source = Path(self.tmp.name) / "outside.md"
         source.write_text("the notes the user attached\n", encoding="utf-8")
@@ -427,8 +419,7 @@ class AttachE2E(unittest.TestCase):
         self.assertIn("summarize this", manifest)
         self.assertIn("outside.md", manifest)
         self.assertIn("untrusted data", manifest)
-        # The file moved into the session's own directory when it was sent, so
-        # the manifest names where it lives now.
+
         staged = self.user_message()["attachments"][0]["path"]
         self.assertIn(staged, manifest)
         self.assertNotIn(meta["path"], manifest)
@@ -502,7 +493,6 @@ class AttachE2E(unittest.TestCase):
                 f"the probe did not read the attachment: {probes[0]}",
             )
 
-        # The file itself was read too, and its bytes reached the answer.
         answer = self.assistant_text()
         self.assertIn("attached body", answer)
 
@@ -549,8 +539,7 @@ class AttachE2E(unittest.TestCase):
         self.assertIn("weird.qqq", sent)
         staged = self.user_message()["attachments"][0]["path"]
         self.assertIn(staged, sent)
-        # A binary file has no text, and the agent is told so rather than
-        # being handed mojibake.
+
         self.assertIn("binary file", self.assistant_text())
 
     def test_an_oversize_file_is_refused_by_name_and_the_message_still_goes(self):
@@ -695,9 +684,7 @@ class AttachE2E(unittest.TestCase):
         self.assertEqual(user["attachments"][0]["name"], "secret.md")
         self.assertEqual(user["attachments"][0]["size"], len(secret))
         self.assertIn("path", user["attachments"][0])
-        # The attachment metadata is metadata: it names the file, it does not
-        # carry the bytes. (The tool result further down does carry them -
-        # the agent read the file, and that is its own doing.)
+
         self.assertNotIn(
             "THE SECRET BYTES",
             json.dumps(user["attachments"]),
@@ -773,7 +760,6 @@ class AttachE2E(unittest.TestCase):
         staged = Path(pending[0]["attachments"][0]["path"])
         self.assertTrue(staged.exists())
 
-        # The text can still be edited, and the file stays with it.
         self.dispatch(
             {
                 "op": "pending_edit",
@@ -910,8 +896,7 @@ class AttachmentUnit(unittest.TestCase):
         self.assertEqual(first.read_text(encoding="utf-8"), "one")
 
     def test_two_uploads_of_one_name_get_different_paths(self):
-        # Two files picked at the same time must not land on one path: the
-        # second upload learns the name is taken when it looks.
+
         first = att.begin("client", "same.md", 4, "text/markdown")
         second = att.begin("client", "same.md", 4, "text/markdown")
         self.assertNotEqual(first["path"], second["path"])

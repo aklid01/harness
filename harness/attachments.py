@@ -80,8 +80,8 @@ def max_files_per_message():
         return _DEFAULT_MAX_FILES_PER_MESSAGE
 
 
-CHUNK_BYTES = 192 * 1024  # raw bytes per upload chunk
-IMAGE_BYTES = 5 * 1024 * 1024  # biggest image sent to the provider as an image
+CHUNK_BYTES = 192 * 1024
+IMAGE_BYTES = 5 * 1024 * 1024
 
 IMAGE_TYPES = {
     "image/png",
@@ -93,7 +93,7 @@ IMAGE_TYPES = {
     "image/tiff",
 }
 
-# Characters Windows refuses in a file name, plus the control range.
+
 _ILLEGAL = re.compile(r'[<>:"|?*\x00-\x1f]')
 _RESERVED = {"CON", "PRN", "AUX", "NUL"} | {
     f"{kind}{n}" for kind in ("COM", "LPT") for n in range(1, 10)
@@ -115,9 +115,6 @@ class TooBig(Exception):
 
 class Missing(Exception):
     """The staged file is gone - deleted, or never finished uploading."""
-
-
-# --------------------------------------------------------------------- names
 
 
 def safe_name(name):
@@ -165,9 +162,6 @@ def unique_path(directory, name):
     return directory / f"{stem}-{uuid.uuid4().hex[:8]}{dot}{ext}"
 
 
-# ------------------------------------------------------------------ storage
-
-
 def root():
     """Where attachments live. Isolated for tests, like the session tree."""
     override = os.environ.get("HARNESS_SESSIONS_ROOT")
@@ -195,9 +189,6 @@ def cleanup_session(session_id, project_root=None):
     shutil.rmtree(session_dir(session_id, project_root), ignore_errors=True)
 
 
-# ------------------------------------------------------------------ uploads
-
-
 def begin(client_key, name, size, kind="application/octet-stream"):
     """Open an upload slot for one file.
 
@@ -213,9 +204,7 @@ def begin(client_key, name, size, kind="application/octet-stream"):
     directory = staging_dir(client_key)
     directory.mkdir(parents=True, exist_ok=True)
     target = unique_path(directory, safe_name(name))
-    # The name is reserved now, by creating the file. Two files with one name
-    # picked at the same time must not land on the same path, and the second
-    # one only learns the name is taken when it looks.
+
     target.touch()
     record = {
         "id": upload_id,
@@ -290,9 +279,6 @@ def abandon(upload_id):
     return True
 
 
-# ------------------------------------------------------------------- adopt
-
-
 def adopt(items, session_id, project_root=None) -> list[AdoptedAttachment]:
     """Move staged files into the session's own directory.
 
@@ -327,8 +313,6 @@ def adopt(items, session_id, project_root=None) -> list[AdoptedAttachment]:
         except (ValueError, OSError):
             already_here = False
         if already_here:
-            # A resend re-adopts a file this session already owns. Moving it
-            # again would rename it and pile up copies, so it stays put.
             meta["path"] = str(source)
             adopted.append(meta)
             continue
@@ -340,7 +324,7 @@ def adopt(items, session_id, project_root=None) -> list[AdoptedAttachment]:
             adopted.append(meta)
             continue
         meta["path"] = str(destination)
-        # Two files with one name both stay, under names that tell them apart.
+
         if destination.name != meta["name"]:
             meta["name"] = destination.name
         adopted.append(meta)
@@ -403,9 +387,6 @@ def bind(items):
 def current():
     """The attachments the running session can see."""
     return [dict(item) for item in _CURRENT.get()]
-
-
-# ----------------------------------------------------------------- manifest
 
 
 def _human(size):
@@ -495,9 +476,6 @@ def session_note(items):
     return "\n".join(lines)
 
 
-# --------------------------------------------------------------- extraction
-
-
 def _pdf_text(path):
     try:
         from pypdf import PdfReader
@@ -508,13 +486,13 @@ def _pdf_text(path):
         if reader.is_encrypted:
             try:
                 reader.decrypt("")
-            except Exception:  # noqa: BLE001 - an empty password is the only try
+            except Exception:  # noqa: BLE001
                 return None, "the PDF is password protected"
         pages = []
         for page in reader.pages:
             pages.append(page.extract_text() or "")
         text = "\n\n".join(pages).strip()
-    except Exception as failure:  # noqa: BLE001 - a broken PDF is not a crash
+    except Exception as failure:  # noqa: BLE001
         return None, f"the PDF could not be parsed: {failure}"
     if not text:
         return None, (
@@ -627,9 +605,6 @@ def readable_text(path):
         return _plain_text(target), None
     except OSError as failure:
         return None, f"the file could not be read: {failure}"
-
-
-# ------------------------------------------------------------------- images
 
 
 def image_data_url(path):

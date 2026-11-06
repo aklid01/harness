@@ -18,8 +18,7 @@ import re
 
 REDACTED = "[REDACTED]"
 
-# (name, pattern). Order matters: the first match wins, so the specific
-# key shapes come before the generic assignment rule.
+
 _PATTERNS = (
     (
         "private-key",
@@ -57,9 +56,7 @@ _PATTERNS = (
     ),
 )
 
-# A value that looks like plain code - a bare identifier or a dotted path -
-# is a variable, not a leaked credential. Redacting `response.token` would
-# cost the reviewer the very line it was asked to judge.
+
 _CODE_VALUE = re.compile(r"^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*$")
 
 
@@ -70,7 +67,6 @@ def _redact_value(name, match):
     if name == "url-credentials":
         return f"{match.group(1)}{REDACTED}{match.group(3)}"
     if name == "private-key":
-        # Keep the line count: one [REDACTED] per line of the block.
         lines = match.group(0).split("\n")
         return "\n".join(REDACTED for _ in lines)
     return REDACTED

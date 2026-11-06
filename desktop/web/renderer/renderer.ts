@@ -52,7 +52,6 @@ declare global {
   }
 }
 
-/* ---------------- icon set ---------------- */
 const stroke = (body: string): string =>
   `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 export const ICONS = {
@@ -118,7 +117,6 @@ export const ICONS = {
   ),
 };
 
-/* ---------------- preferences (global, localStorage) ---------------- */
 interface Prefs {
   theme: string;
   fontScale: "sm" | "base" | "lg";
@@ -150,17 +148,16 @@ const DEFAULT_PREFS: Prefs = {
   lastSessionByWs: {},
   tabsByWs: {},
 };
-/* Sessions whose old tab ref carried a mode from the removed selector: the
-   sticky equivalent is restored once, engine-side, when the session opens. */
+
 const legacyTabModes = new Map<string, Mode>();
 function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     if (!raw) return { ...DEFAULT_PREFS };
     const saved = JSON.parse(raw) as Record<string, unknown>;
-    // The old selector's per-workspace and default modes are gone; a saved
-    // tab's mode maps to the sticky equivalent (plan-build becomes build).
-    const tabs = (saved["tabsByWs"] as Record<string, TabRef[]> | undefined) ?? {};
+
+    const tabs =
+      (saved["tabsByWs"] as Record<string, TabRef[]> | undefined) ?? {};
     for (const refs of Object.values(tabs)) {
       for (const ref of Array.isArray(refs) ? refs : []) {
         const raw = ref as unknown as Record<string, unknown>;
@@ -180,7 +177,8 @@ function loadPrefs(): Prefs {
       ...(saved as Partial<Prefs>),
       effortByWs: (saved["effortByWs"] as Prefs["effortByWs"]) ?? {},
       providerByWs: (saved["providerByWs"] as Prefs["providerByWs"]) ?? {},
-      lastSessionByWs: (saved["lastSessionByWs"] as Prefs["lastSessionByWs"]) ?? {},
+      lastSessionByWs:
+        (saved["lastSessionByWs"] as Prefs["lastSessionByWs"]) ?? {},
       tabsByWs: tabs,
     };
   } catch {
@@ -190,12 +188,9 @@ function loadPrefs(): Prefs {
 function savePrefs(): void {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-  } catch {
-    /* storage unavailable */
-  }
+  } catch {}
 }
 
-/* ---------------- boot params + logging ---------------- */
 const logLines: string[] = [];
 function dlog(tag: string, ...parts: unknown[]): void {
   const stamp = new Date().toISOString().slice(11, 23);
@@ -225,7 +220,6 @@ function applyAppearance(): void {
 }
 applyAppearance();
 
-/* ---------------- DOM refs ---------------- */
 export const el = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
 const chat = el<HTMLDivElement>("chat");
@@ -346,7 +340,6 @@ if (missingIds.length > 0) {
   throw new Error(msg);
 }
 
-/* ---------------- per-tab context ---------------- */
 export interface Ctx {
   id: string;
   root: string;
@@ -362,8 +355,7 @@ export interface Ctx {
   planItems: TodoItem[];
   stickyMode: Mode;
   autoPlanReason: string | null;
-  /* A plan is ready and awaiting its one-action handoff: shown once the
-     plan's own turn has ended (the gate modal handles it mid-turn). */
+
   pendingPlan: boolean;
   pendingPlanAuto: boolean;
   providerId: string | null;
@@ -421,7 +413,6 @@ const ctxById = new Map<string, Ctx>();
 let tabSeq = 0;
 let reqSeq = 0;
 
-/* single shared backend connection (one WebSocket for every tab) */
 let sharedWs: WebSocket | null = null;
 let wsGen = 0;
 let connected = false;
@@ -429,18 +420,17 @@ let bootPort = location.search
   ? (new URLSearchParams(location.search).get("port") ?? "8765")
   : "8765";
 let bootRoot = new URLSearchParams(location.search).get("projectRoot") ?? "";
-/* Set by the shell config; a dev/test host booted from the URL has none, and
-   the sidecar it points at was started without --auth-token too. */
+
 let bootToken = "";
 
-/* shared (app-wide) */
 let recents: WorkspaceRef[] = [];
 let sessionsByRoot: Record<string, SessionListItem[]> = {};
 let collapsedWs = new Set<string>();
 export let providerGroups: ProviderGroup[] = [];
 let providerModels: ProviderEntry[] = [];
 let providerStatuses: Record<string, ProviderEntry> = {};
-export let providerOptions: Array<{ id: string; label: string; sub: string }> = [];
+export let providerOptions: Array<{ id: string; label: string; sub: string }> =
+  [];
 let providerActiveModelId: string | null = null;
 let providerActiveGroupId: string | null = null;
 let providerMigration: string[] = [];
@@ -485,16 +475,18 @@ const OVERSIGHT_INTENSITIES = [
   { value: "high", label: "High - nearly every action" },
 ];
 const PLAN_SENSITIVITIES = [
-  { value: "conservative", label: "Conservative - plan only on real ambiguity" },
+  {
+    value: "conservative",
+    label: "Conservative - plan only on real ambiguity",
+  },
   { value: "balanced", label: "Balanced - plan when rework is likely" },
   { value: "eager", label: "Eager - plan at the first material doubt" },
 ];
 let settingsRequested = false;
 let settingsLastTab = "models";
-/* Set by the model form while it is open, so a rejected save can re-enable it. */
+
 let providerFormFailure: ((message: string) => void) | null = null;
-/* The open model form consumes /models lookups through this hook; the save
-   reply carries what the engine's backstop auto-configured for the status line. */
+
 let modelInfoReply: ((data: ModelInfoResult) => void) | null = null;
 let pendingModelsStatus = "";
 let pendingModelsStatusOk = false;
@@ -503,18 +495,22 @@ let pendingRewindCount: number | null = null;
 let popHideTimer: number | null = null;
 
 const EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"];
-/* The mode chip: what a session's sticky mode reads as. Build is the default
-   and shows nothing; /plan, /ask and the engine's auto-plan show here. */
+
 const MODE_CHIP_TEXT: Record<Mode, string> = {
   build: "",
   ask: "Ask",
   plan: "Plan",
 };
-/* Slash commands, for the composer autocomplete. The engine owns the truth
-   (harness/commands.py); these one-liners mirror it for the popup. */
+
 const COMMAND_HELP: Array<{ cmd: string; help: string }> = [
-  { cmd: "/plan", help: "plan this turn, read-only (alone: plan until /build)" },
-  { cmd: "/ask", help: "answer this turn, read-only (alone: ask until /build)" },
+  {
+    cmd: "/plan",
+    help: "plan this turn, read-only (alone: plan until /build)",
+  },
+  {
+    cmd: "/ask",
+    help: "answer this turn, read-only (alone: ask until /build)",
+  },
   { cmd: "/build", help: "build now, the default (alone: leave plan or ask)" },
   { cmd: "/rewind", help: "jump back to an earlier point in this chat" },
   { cmd: "/sessions", help: "open a past chat" },
@@ -565,9 +561,7 @@ const PLAN_ICON: Record<string, string> = {
   completed: ICONS.done,
   done: ICONS.done,
 };
-/* The backend and the model speak "done" (todos.py); the UI historically looked
-   for "completed", so completed steps never crossed out. Normalise on ingest so
-   the two vocabularies never disagree downstream. */
+
 function normPlanStatus(s: unknown): string {
   return s === "done" ? "completed" : String(s ?? "pending");
 }
@@ -649,8 +643,6 @@ function makeCtx(
   return ctx;
 }
 
-/* A non-tab context used for app-level ops (providers, settings) so they work
-   even when no session tab is open (e.g. from the landing state). */
 let appCtx: Ctx | null = null;
 function ensureAppCtx(): Ctx {
   const root = activeCtx?.root ?? bootRoot ?? "";
@@ -663,7 +655,6 @@ function ensureAppCtx(): Ctx {
   return appCtx;
 }
 
-/* ---------------- generic helpers ---------------- */
 export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -890,7 +881,9 @@ function updateSendExtra(): void {
   const busy = !!activeCtx?.busy;
   const hasFiles =
     !!activeCtx && activeCtx.attachments.some((a) => a.status === "ready");
-  sendExtra.disabled = busy ? entry.value.trim().length === 0 && !hasFiles : true;
+  sendExtra.disabled = busy
+    ? entry.value.trim().length === 0 && !hasFiles
+    : true;
   const kind = midTurnKind();
   sendExtra.title =
     kind === "steer"
@@ -974,10 +967,7 @@ function toBase64(buffer: ArrayBuffer): string {
   const step = 0x8000;
   for (let i = 0; i < bytes.length; i += step) {
     const slice = bytes.subarray(i, i + step);
-    binary += String.fromCharCode.apply(
-      null,
-      Array.from(slice) as number[],
-    );
+    binary += String.fromCharCode.apply(null, Array.from(slice) as number[]);
   }
   return btoa(binary);
 }
@@ -1127,9 +1117,7 @@ async function uploadFile(ctx: Ctx, file: File): Promise<void> {
     if (ctx === activeCtx) setActivity(draft.error);
     return;
   }
-  const ticket = String(
-    (begin.data as { id?: string } | undefined)?.id ?? "",
-  );
+  const ticket = String((begin.data as { id?: string } | undefined)?.id ?? "");
   draft.uploadId = ticket;
 
   const chunkBytes = Number(
@@ -1159,7 +1147,11 @@ async function uploadFile(ctx: Ctx, file: File): Promise<void> {
   if (!file.size) {
     // A zero-byte file still has to be staged, so the engine knows it is
     // there and can say why it has nothing in it.
-    const part = await request(ctx, { op: "attach_part", id: ticket, data: "" });
+    const part = await request(ctx, {
+      op: "attach_part",
+      id: ticket,
+      data: "",
+    });
     if (!part.ok) {
       draft.status = "error";
       draft.error = String(part.error ?? "the file could not be uploaded");
@@ -1272,7 +1264,10 @@ function hideThinking(ctx: Ctx): void {
   ctx.thinking = null;
 }
 /* ---- real model thinking (reasoning tokens) ---- */
-function makeThinkBlock(text: string, open: boolean): {
+function makeThinkBlock(
+  text: string,
+  open: boolean,
+): {
   wrap: HTMLElement;
   body: HTMLDivElement;
 } {
@@ -1362,10 +1357,7 @@ function addPlanActions(ctx: Ctx, auto: boolean): void {
     `</div>`;
   for (const btn of Array.from(bar.querySelectorAll("button"))) {
     btn.onclick = () => {
-      const act = btn.getAttribute("data-act") as
-        | "approve"
-        | "skip"
-        | "cancel";
+      const act = btn.getAttribute("data-act") as "approve" | "skip" | "cancel";
       send(ctx, { op: "plan_action", action: act });
       removePlanActions(ctx);
     };
@@ -1450,7 +1442,10 @@ function failureCard(
       `<button class="btn small" data-switch="1">Switch model</button>`,
     );
   const discardedLines = (failure.discarded ?? [])
-    .map((t) => `<div class="e-discarded">${escapeHtml(trimOneLine(t, 200))}</div>`)
+    .map(
+      (t) =>
+        `<div class="e-discarded">${escapeHtml(trimOneLine(t, 200))}</div>`,
+    )
     .join("");
   div.innerHTML =
     `<b>${escapeHtml(failure.headline)}</b>` +
@@ -1923,7 +1918,9 @@ function renderTranscript(
     } else if (m["role"] === "assistant") {
       const content = String(m["content"] ?? "");
       const reasoning =
-        typeof m["reasoning"] === "string" ? (m["reasoning"] as string).trim() : "";
+        typeof m["reasoning"] === "string"
+          ? (m["reasoning"] as string).trim()
+          : "";
       if (reasoning)
         ctx.chatBody.appendChild(makeThinkBlock(reasoning, false).wrap);
       if (content.trim()) {
@@ -3244,7 +3241,6 @@ function submit(ctx: Ctx, text: string): void {
   doSubmit(ctx, trimmed);
 }
 
-/* ---------------- connection (single backend, all tabs share it) ---------------- */
 function connect(): void {
   wsGen += 1;
   const gen = wsGen;
@@ -3254,8 +3250,7 @@ function connect(): void {
   sharedWs = sock;
   sock.onopen = () => {
     if (gen !== wsGen) return;
-    // Frame one must be the auth token: the sidecar reads exactly one frame
-    // before it accepts anything else, so this goes out before any op can.
+
     if (bootToken) sock.send(JSON.stringify({ auth: bootToken }));
     connected = true;
     dlog("ws", "WS-OPEN");
@@ -3287,9 +3282,7 @@ function connect(): void {
   sock.onerror = () => {
     try {
       sock.close();
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   };
 }
 function dispatchFrame(msg: ServerEnvelope): void {
@@ -3298,17 +3291,14 @@ function dispatchFrame(msg: ServerEnvelope): void {
     return;
   }
   const ctx = msg.session ? ctxById.get(msg.session) : null;
-  // The session library is app-wide state, not one tab's: the tab that asked
-  // for a delete may already be closed (deleting a session closes its tab),
-  // and every workspace's list in the sidebar has to catch up.
+
   if (msg.event === "sessions_updated") {
     refreshAllWorkspaceSessions();
     return;
   }
   if (ctx) handleEnvelope(msg, ctx);
 }
-/* A reply to a request() that is waiting for it. Everything else falls
-   through to the normal handling. */
+
 function settleReply(msg: ServerEnvelope): boolean {
   if (msg.req_id === undefined) return false;
   const waiter = replyWaiters.get(msg.req_id);
@@ -3328,21 +3318,18 @@ function handleReady(msg: ServerEnvelope): void {
       "online",
     );
     if (!activeCtx.hadReady) issueOpen(activeCtx);
-    // Restored tabs share the same boot: bring each one up so none is left
-    // showing a title for a session it never opened.
+
     for (const t of tabs) if (!t.hadReady) issueOpen(t);
     primeContext(activeCtx);
   }
 }
 
-/* Prime a tab's data: sessions list, providers, and workspace/git context. */
 function primeContext(ctx: Ctx): void {
   send(ctx, { op: "list_sessions" });
   send(ctx, { op: "list_providers" });
   send(ctx, { op: "get_context" });
 }
 
-/* ---------------- envelope routing (to a tab's Session) ---------------- */
 function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
   if (msg.request === "approval" && msg.id) {
     dlog(ctx.id, "RECV approval", msg.id);
@@ -3436,9 +3423,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         ctx.planItems = normPlanItems(p["todos"]);
         if (ctx === activeCtx) renderPlan(ctx);
         break;
-      // A usage card means a request completed, so any retry in flight has
-      // recovered - clear it even during phases that emit no message (planning,
-      // review), which is where it used to linger across the turn.
+
       case "usage":
         clearRetryCard(ctx);
         for (const [k, v] of Object.entries(p))
@@ -3485,13 +3470,10 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
           prefs.lastSessionByWs[ctx.root] = id;
           savePrefs();
         }
-        // The tab just became a real session: remember it so a restart brings
-        // it back and nothing is left pointing at a session that exists only
-        // in memory.
+
         if (first) persistTabs(ctx.root);
         ctx.sessionTitle = "New Session";
-        // The session comes back in the mode it was left in; a tab saved by
-        // the old selector restores its equivalent once, engine-side.
+
         ctx.stickyMode = (p["mode"] as Mode) ?? "build";
         ctx.autoPlanReason = null;
         if (id && legacyTabModes.has(id)) {
@@ -3501,11 +3483,9 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
             send(ctx, { op: "set_mode", mode: restored });
           ctx.stickyMode = restored;
         }
-        // The pending strip rides along with the session payload, so a tab
-        // that reattaches mid-conversation still sees what it filed.
+
         ctx.pendingItems = normPendingItems(p["pending"]);
-        // The failure outlives the session that produced it: it is a message
-        // from the engine, and switching sessions keeps it on screen.
+
         clearRetryCard(ctx);
         renderTranscript(
           ctx,
@@ -3514,8 +3494,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         renderPendingStrip(ctx);
         if (ctx === activeCtx) refreshModeChip();
         primeContext(ctx);
-        // A saved review comes back with the session: reopening a chat
-        // restores the card, the report and the dismissed findings.
+
         const savedReview = p["review"] as ReviewReport | null;
         if (savedReview && savedReview.review_id) {
           const view = reviewView(ctx);
@@ -3530,8 +3509,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         } else {
           clearReviewCard(ctx);
         }
-        // Load this session's plan artifact so a reload shows the plan that was
-        // actually made (inspectable, and never a stale plan from another tab).
+
         if (id) send(ctx, { op: "get_plan", id });
         if (ctx === activeCtx) setActivity(String(p["label"] ?? ""));
         break;
@@ -3571,18 +3549,12 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
           hideThinking(ctx);
           if (ctx === activeCtx) setActivity("Plan ready");
           if (pl.inline) {
-            // The plan is the turn's own final message (an explicit /plan or
-            // an automatic plan). The one-action handoff appears when the
-            // turn ends - mid-turn, the approval modal is the affordance.
             ctx.pendingPlan = true;
             ctx.pendingPlanAuto = !!pl.auto;
           } else {
             addPlanCard(ctx, String(pl.plan ?? ""));
           }
         } else if (pl.status === "failed") {
-          // Recoverable: planning produced nothing usable and built nothing.
-          // A note, not a red error card, so it never contradicts a plan the
-          // user can see is actually there.
           hideThinking(ctx);
           if (ctx === activeCtx)
             setActivity("Planning could not produce a usable plan");
@@ -3603,9 +3575,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       }
       case "intent": {
         const it = p as unknown as IntentEventPayload;
-        // Only a session-mode change moves the chip; a one-turn /plan or
-        // /ask binds that turn alone, and the engine already said so in the
-        // transcript (mode notice, phase).
+
         if (it.sticky) {
           ctx.stickyMode = it.intent;
           ctx.autoPlanReason = null;
@@ -3640,8 +3610,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       case "phase": {
         const ph = p as unknown as PhaseEventPayload;
         showPhase(ctx, ph.phase);
-        // The plan is being built: its handoff was decided (approved, or not
-        // required), so no plan action bar when the turn ends.
+
         if (ph.phase === "handing_off") ctx.pendingPlan = false;
         if (ctx === activeCtx) {
           statusMode.textContent = ph.phase
@@ -3653,21 +3622,16 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       case "done":
         setBusy(ctx, false);
         showPhase(ctx, null);
-        // The turn is over: an open automatic plan is no longer pending (it
-        // was approved, skipped or cancelled during the turn), so the chip
-        // returns to whatever the sticky mode says. A plan that still awaits
-        // its handoff (an explicit /plan) gets its one-action bar now.
+
         ctx.autoPlanReason = null;
         if (ctx.pendingPlan) addPlanActions(ctx, ctx.pendingPlanAuto);
         if (ctx === activeCtx) refreshModeChip();
-        // The turn is over: a retry that succeeded leaves no active retry card,
-        // and a retry that failed has already shown its error card instead.
+
         clearRetryCard(ctx);
         if (ctx === activeCtx) setActivity("ready");
         send(ctx, { op: "list_sessions" });
         send(ctx, { op: "get_context" });
-        // A failed turn is already fully on screen and its error is not part
-        // of the transcript: re-fetching would rebuild the body and drop it.
+
         if (ctx.sessionId && !ctx.failure) {
           const sid = ctx.sessionId;
           send(ctx, { op: "get_transcript", id: sid });
@@ -3684,8 +3648,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       msg.data && typeof msg.data === "object"
         ? (msg.data as PlanRecord)
         : null;
-    // Only show it when the transcript itself does not already carry the plan,
-    // so a live <plan> handoff is never duplicated on a plain reload.
+
     if (
       rec &&
       (rec.plan ?? "").trim() &&
@@ -3693,8 +3656,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
     ) {
       addPlanCard(ctx, String(rec.plan));
     }
-    // A plan still waiting for its handoff (the session was closed mid-decision)
-    // comes back with its one-action bar.
+
     if (
       rec &&
       (rec.plan ?? "").trim() &&
@@ -3758,8 +3720,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       refreshThinkBtn();
       renderTabs();
     }
-    // Roles live alongside models in the composer button, so keep the agent
-    // config fresh for it (and Settings) whenever the provider list updates.
+
     if (!agentConfig) send(ctx, { op: "get_agents" });
     if (settingsRequested) {
       settingsRequested = false;
@@ -3772,8 +3733,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
   ) {
     agentConfig = msg.data as AgentConfig;
     refreshModelButton();
-    // If a settings panel is already open (from a settings load that raced the
-    // config), swap in the real values now instead of leaving defaults.
+
     if (document.getElementById("agSave")) {
       const [h, w] = settingsAgents();
       el<HTMLDivElement>("settingsBody").innerHTML =
@@ -3791,7 +3751,8 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       agentConfig = msg.data as AgentConfig;
     refreshModelButton();
     const status =
-      document.getElementById("agStatus") ?? document.getElementById("rvStatus");
+      document.getElementById("agStatus") ??
+      document.getElementById("rvStatus");
     if (status) {
       status.textContent = msg.ok
         ? "Saved."
@@ -3799,16 +3760,12 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       status.className = msg.ok ? "status-line ok" : "status-line fail";
     }
   } else if (msg.reply === "submit") {
-    /* A refused submit (duplicate, or a turn already running) never produces a
-       done event, so release the composer here or the tab stays "working". */
     if (!msg.ok) {
       setBusy(ctx, false);
       hideThinking(ctx);
       if (ctx === activeCtx) setActivity("that message was already sent");
     }
   } else if (msg.reply === "pending_edit" || msg.reply === "pending_remove") {
-    /* A refused edit means the message was already sent or removed; the
-       PENDING event that follows shows the engine's actual list. */
     if (!msg.ok && ctx === activeCtx)
       setActivity(
         msg.reply === "pending_edit"
@@ -3832,7 +3789,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
         savePrefs();
         syncEffortFromModel(ctx);
       }
-      // The form is done either way; the backstop note moves to the Models tab.
+
       modelInfoReply = null;
       if (msg.reply === "save_provider" && msg.info) {
         if (msg.info.applied?.length)
@@ -3842,8 +3799,6 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       }
       send(ctx, { op: "list_providers" });
     } else if (msg.reply === "save_provider") {
-      // The form stays open and usable: show why the save was refused rather
-      // than leaving a dead Save button and a Settings dialog on top of it.
       settingsRequested = false;
       const showFailure = providerFormFailure;
       providerFormFailure = null;
@@ -3852,11 +3807,11 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       else if (ctx === activeCtx)
         setActivity(`save failed: ${String(msg.error ?? "unknown")}`);
     } else {
-      // Any failed provider op disarms the pending auto-open: leaving it
-      // armed opened Settings out of nowhere on a later list_providers.
       settingsRequested = false;
       if (ctx === activeCtx)
-        setActivity(`provider change failed: ${String(msg.error ?? "unknown")}`);
+        setActivity(
+          `provider change failed: ${String(msg.error ?? "unknown")}`,
+        );
     }
   } else if (msg.reply === "retry") {
     if (msg.ok) {
@@ -3958,15 +3913,8 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
   }
 }
 
-/* ---------------- menus (operate on active tab) ---------------- */
 function closeAllMenus(): void {
-  for (const m of [
-    cmdMenu,
-    providerMenu,
-    effortMenu,
-    permsMenu,
-    sendExtraMenu,
-  ])
+  for (const m of [cmdMenu, providerMenu, effortMenu, permsMenu, sendExtraMenu])
     m.classList.add("hidden");
 }
 function renderMenu(
@@ -3997,12 +3945,7 @@ function wireMenu(button: HTMLButtonElement, menu: HTMLDivElement): void {
     if (was) menu.classList.remove("hidden");
   };
 }
-/* The mode chip beside the composer shows the active behaviour only when it
-   isn't the default build: the session's sticky mode, or the model's own
-   plan mode (tagged automatic, with its reason on hover). Clicking the chip
-   clears a sticky mode - engine-side, so it also works mid-turn. An
-   automatic plan clears itself when the plan is approved, skipped or
-   cancelled (the plan card carries those actions). */
+
 function refreshModeChip(): void {
   const ctx = activeCtx;
   if (!ctx) {
@@ -4037,7 +3980,7 @@ function refreshModeChip(): void {
 function pickModeChip(): void {
   const ctx = activeCtx;
   if (!ctx) return;
-  if (ctx.autoPlanReason !== null) return; // informational while a plan is open
+  if (ctx.autoPlanReason !== null) return;
   send(ctx, { op: "set_mode", mode: "build" });
 }
 function pickEffort(ctx: Ctx, value: string): void {
@@ -4069,7 +4012,7 @@ function pickPerms(ctx: Ctx, value: string): void {
   }
   send(ctx, { op: "set_permissions", mode: value });
 }
-/* ---------------- model selection ---------------- */
+
 function effortForModel(modelId: string | null): string {
   if (!modelId) return "default";
   const entry = providerById.get(modelId);
@@ -4094,16 +4037,12 @@ function pushEffort(ctx: Ctx): void {
   }
 }
 function syncEffortFromModel(ctx: Ctx): void {
-  /* No explicit choice for this workspace yet: the model's own setting wins,
-     falling back to the app-wide default. */
   if (prefs.effortByWs[ctx.root] !== undefined) return;
   const own = effortForModel(ctx.providerId);
   ctx.effortVal = own !== "default" ? own : prefs.effortGlobal;
   if (ctx === activeCtx) effortLabel.textContent = ctx.effortVal;
 }
-/* The composer model control shows the session's model; the plan/build roles
-   live in Settings > Agents. Decision Oversight is independent, so when it is
-   on it is flagged on the button. */
+
 function modelSummary(): {
   label: string;
   title: string;
@@ -4142,7 +4081,6 @@ export function selectModel(
   prefs.providerByWs[ctx.root] = modelId ?? "";
   savePrefs();
   if (options.adoptEffort) {
-    // A different model has different capabilities, so it brings its own.
     ctx.effortVal = effortForModel(modelId);
     prefs.effortByWs[ctx.root] = ctx.effortVal;
     savePrefs();
@@ -4213,7 +4151,6 @@ function refreshProviderMenu(): void {
   };
 }
 
-/* ---------------- providers / settings ---------------- */
 function keyTag(
   key: string | undefined,
   disabled: boolean | undefined,
@@ -4240,8 +4177,7 @@ function modelTags(entry: ProviderEntry, active: boolean): string {
     tags.push(
       `<span class="tag">${Math.round(Number(entry.context_window) / 1000)}k ctx</span>`,
     );
-  // Tool capability is a per-model fact, so it is always shown - not just when
-  // something is off - because "no chip" is indistinguishable from "unknown".
+
   if (entry.supports_tools === false) {
     tags.push(
       `<span class="tag" title="This model rejects the tools parameter">no tools</span>`,
@@ -4259,18 +4195,14 @@ function modelTags(entry: ProviderEntry, active: boolean): string {
   if (entry.disabled) tags.push(`<span class="tag disabled">disabled</span>`);
   return tags.filter(Boolean).join(" ");
 }
-/* The provider + model editor. One provider may hold many models, so adding
-   a model to an existing provider is the default path. Required fields are
-   marked with an asterisk and validated inline on submit; the key is never
-   required (a local endpoint needs none). */
+
 interface ProviderFormSnapshot {
   values: Record<string, string>;
   tools: boolean;
   reasoning: boolean;
   images: boolean;
 }
-/* What the provider's /models endpoint told us about one model, already
-   normalized engine-side; only the keys worth prefilling arrive. */
+
 interface ModelInfo {
   context_window?: number;
   max_output_tokens?: number;
@@ -4301,7 +4233,9 @@ function snapshotProviderForm(): ProviderFormSnapshot {
   const values: Record<string, string> = {};
   for (const id of PROVIDER_FORM_FIELDS) {
     const node = document.getElementById(id) as
-      HTMLInputElement | HTMLSelectElement | null;
+      | HTMLInputElement
+      | HTMLSelectElement
+      | null;
     if (node) values[id] = node.value;
   }
   const on = (id: string): boolean =>
@@ -4377,15 +4311,10 @@ function providerForm(
       : "omitted from requests";
   };
   wireSwitch(modalBox, "swTools", tools, describeTools);
-  wireSwitch(modalBox, "swReason", reasoning, () => {
-    /* no label needed */
-  });
-  wireSwitch(modalBox, "swImages", images, () => {
-    /* no label needed */
-  });
+  wireSwitch(modalBox, "swReason", reasoning, () => {});
+  wireSwitch(modalBox, "swImages", images, () => {});
   describeTools(tools);
-  // /models prefill: once a model id and a base url exist, ask the engine what
-  // that endpoint publishes about the model and fill the empty fields with it.
+
   const infoNote = el<HTMLDivElement>("fInfoNote");
   const modelInput = el<HTMLInputElement>("fModel");
   const baseInput = el<HTMLInputElement>("fBase");
@@ -4424,8 +4353,7 @@ function providerForm(
       nameInput.value = info.name;
       filled.push(`name "${info.name}"`);
     }
-    // Capability switches only move on a brand-new model, and only to off: an
-    // edit form holds the user's own overrides, which stay untouched.
+
     if (isNewModel) {
       if (info.supports_images === false && flipSwitchOff("swImages"))
         filled.push("images off");
@@ -4480,11 +4408,12 @@ function providerForm(
     send(ensureAppCtx(), { op: "list_providers" });
   };
 
-  /* "Keep editing" reopens the form as the user left it, switches included. */
   if (restore) {
     for (const [id, value] of Object.entries(restore.values)) {
       const node = document.getElementById(id) as
-        HTMLInputElement | HTMLSelectElement | null;
+        | HTMLInputElement
+        | HTMLSelectElement
+        | null;
       if (node) node.value = value;
     }
     toggleNewBlock();
@@ -4501,7 +4430,6 @@ function providerForm(
   }
   const initialForm = snapshotProviderForm();
 
-  /* --- validation: one path for Enter and the button --- */
   const showErr = (
     input: HTMLInputElement,
     errId: string,
@@ -4574,8 +4502,7 @@ function providerForm(
           "API endpoint must be a http(s) URL.",
         ]);
     }
-    // A model id has to be unique inside its provider: two identical rows are
-    // indistinguishable in the picker and in the request path.
+
     const targetGroupId = picked || base;
     if (model && targetGroupId) {
       const twin = providerModels.find(
@@ -4681,7 +4608,7 @@ function providerForm(
       temperature: temp || null,
       context_window: ctxWindow || null,
       max_output_tokens: maxOut || null,
-      // Read the switches now, not at render time, or a toggle would be lost.
+
       supports_tools: el<HTMLElement>("swTools").classList.contains("on"),
       supports_reasoning: el<HTMLElement>("swReason").classList.contains("on"),
       supports_images: el<HTMLElement>("swImages").classList.contains("on"),
@@ -4700,8 +4627,7 @@ function providerForm(
       key: key || undefined,
     });
   };
-  /* A rejected save (a duplicate the backend caught) comes back here instead of
-     leaving the form disabled forever. */
+
   providerFormFailure = (message: string) => {
     submitting = false;
     const saveBtn = el<HTMLButtonElement>("fSave");
@@ -4744,15 +4670,14 @@ const SETTINGS_TABS = [
 ];
 export function openSettings(tab = settingsLastTab): void {
   settingsLastTab = tab;
-  modelInfoReply = null; // the form that owned the hook is about to be replaced
-  // showModal resets the size and the backdrop behaviour, so a stale setting
-  // from a dialog that was just closed cannot leak into Settings.
+  modelInfoReply = null;
+
   showModal(
     `<div class="modal-head"><h3>Settings</h3><button class="icon-btn small" id="setClose" aria-label="Close">${ICONS.close}</button></div>` +
       `<div class="settings"><nav class="settings-nav">${SETTINGS_TABS.map((t) => `<button class="sn-item ${t.id === tab ? "active" : ""}" data-nav="${t.id}">${t.icon}<span>${t.label}</span></button>`).join("")}</nav>` +
       `<div class="settings-body" id="settingsBody"><div class="settings-panel"></div></div></div>`,
   );
-  modalBox.classList.add("settings-modal"); // width/height come from the CSS class
+  modalBox.classList.add("settings-modal");
   el<HTMLButtonElement>("setClose").onclick = hideModal;
   modalBox.querySelectorAll<HTMLElement>("[data-nav]").forEach((b) => {
     b.onclick = () => openSettings(b.dataset["nav"] ?? "models");
@@ -4968,7 +4893,6 @@ function settingsAgents(): [string, () => void] {
     key: "plan" | "build",
     r: AgentRole,
   ): string => {
-    // Only the plan role carries the automatic-planning settings.
     const planRows =
       key === "plan"
         ? `<div class="set-row"><div class="set-info"><div class="set-label">Automatic planning</div><div class="set-desc">The model may enter plan mode on its own when a request is ambiguous enough that a wrong guess would cost rework; you approve or skip the plan. Directive requests just build. /plan and /ask always work.</div></div><div class="set-ctl"><span id="sw_plan_auto"></span></div></div>` +
@@ -5015,7 +4939,10 @@ function settingsAgents(): [string, () => void] {
     const val = (id: string): string =>
       (
         document.getElementById(id) as
-          HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null
+          | HTMLInputElement
+          | HTMLSelectElement
+          | HTMLTextAreaElement
+          | null
       )?.value ?? "";
     const isOn = (id: string): boolean =>
       body.querySelector<HTMLElement>(`#${id}`)?.classList.contains("on") ??
@@ -5045,8 +4972,7 @@ function settingsAgents(): [string, () => void] {
             Math.min(6, parseInt(val("ag_oversight_rounds"), 10) || 2),
           ),
         },
-        // The review role has its own tab; saving the agents must not wipe
-        // it, so the loaded section rides along unchanged.
+
         review: cfg.review,
       };
       const status = document.getElementById("agStatus");
@@ -5157,8 +5083,7 @@ function settingsReview(): [string, () => void] {
       body.querySelector<HTMLElement>(`#${id}`)?.classList.contains("on") ??
       false;
     const segValue = (hook: string): string =>
-      body
-        .querySelector<HTMLElement>(`[data-seg="${hook}"] button.sel`)
+      body.querySelector<HTMLElement>(`[data-seg="${hook}"] button.sel`)
         ?.dataset["v"] ?? "";
     const num = (id: string, fallback: number): number => {
       const parsed = parseInt(val(id), 10);
@@ -5168,14 +5093,16 @@ function settingsReview(): [string, () => void] {
       const picked: ReviewerConfig[] = [];
       list.querySelectorAll<HTMLElement>(".rv-row").forEach((row, i) => {
         const model_id =
-          row.querySelector<HTMLSelectElement>('[data-rv="model"]')?.value ?? "";
+          row.querySelector<HTMLSelectElement>('[data-rv="model"]')?.value ??
+          "";
         if (!model_id) return;
         picked.push({
           model_id,
           label: "",
           enabled: isOn(`rv_en_${i}`),
-          focus: row.querySelector<HTMLSelectElement>('[data-rv="focus"]')
-            ?.value ?? "",
+          focus:
+            row.querySelector<HTMLSelectElement>('[data-rv="focus"]')?.value ??
+            "",
         });
       });
       const next: AgentConfig = {
@@ -5424,7 +5351,6 @@ function settingsInterface(): [string, () => void] {
   return [html, wire];
 }
 
-/* ---------------- workspace opener ---------------- */
 function openFolder(): void {
   if (!window.harness?.selectWorkspace) {
     setActivity("workspace select unavailable");
@@ -5438,7 +5364,7 @@ function openFolder(): void {
     } else setActivity("ready");
   });
 }
-/* ---------------- wiring ---------------- */
+
 el<HTMLButtonElement>("btnNew").onclick = () => newSessionTab();
 el<HTMLButtonElement>("newTab").onclick = () => newSessionTab();
 el<HTMLButtonElement>("landingNew").onclick = () => newSessionTab();
@@ -5450,10 +5376,7 @@ el<HTMLButtonElement>("btnSettings").onclick = () => {
   dlog("boot", "CLICK settings");
   settingsRequested = true;
   settingsLastTab = settingsLastTab || "models";
-  // Open immediately: the Storage tab is pure shell IPC and works even while
-  // the backend is down, and a dead send used to make this click do nothing
-  // at all. Backend-backed tabs render from whatever is cached and refresh
-  // when (and if) the list_providers reply arrives.
+
   openSettings(settingsLastTab);
   if (!send(ensureAppCtx(), { op: "list_providers" }))
     settingsRequested = false;
@@ -5465,7 +5388,7 @@ sendstop.onclick = () => {
   if (activeCtx.busy) send(activeCtx, { op: "stop" });
   else submit(activeCtx, entry.value);
 };
-/* Attach files: the picker and a drop on the composer. */
+
 attachBtn.onclick = () => {
   if (!activeCtx) return;
   fileInput.click();
@@ -5473,7 +5396,7 @@ attachBtn.onclick = () => {
 fileInput.onchange = () => {
   const ctx = activeCtx;
   if (ctx) pickFiles(ctx, fileInput.files);
-  // Clear it, so picking the same file again still fires a change event.
+
   fileInput.value = "";
 };
 let dragDepth = 0;
@@ -5529,8 +5452,7 @@ thinkBtn.onclick = () => {
   savePrefs();
   refreshThinkBtn();
 };
-/* The thinking control only exists for models that actually stream
-   reasoning; the pref still hides anything already on screen. */
+
 function refreshThinkBtn(): void {
   const model = activeCtx?.providerId
     ? providerById.get(activeCtx.providerId)
@@ -5572,11 +5494,7 @@ function renderSendExtraMenu(): void {
     sendExtraMenu.appendChild(btn);
   }
 }
-/* ---------------- slash-command autocomplete ---------------- */
-/* Typing "/" at the start of the composer lists the known commands with
-   their one-line descriptions, filtered as you type. Enter or Tab completes,
-   ArrowUp/Down move, Escape closes, a click completes. The engine still
-   parses whatever is sent - this is discovery, not a gate. */
+
 let cmdIndex = 0;
 let cmdMatches: Array<{ cmd: string; help: string }> = [];
 
@@ -5590,7 +5508,9 @@ function updateCmdMenu(): void {
     cmdMatches = [];
     return;
   }
-  cmdMatches = COMMAND_HELP.filter((c) => c.cmd.startsWith(value.toLowerCase()));
+  cmdMatches = COMMAND_HELP.filter((c) =>
+    c.cmd.startsWith(value.toLowerCase()),
+  );
   if (!cmdMatches.length) {
     cmdMenu.classList.add("hidden");
     cmdMenu.replaceChildren();
@@ -5640,7 +5560,10 @@ entry.addEventListener("keydown", (e) => {
       updateCmdMenu();
       return;
     }
-    if (e.key === "Tab" || (e.key === "Enter" && cmdMatches[cmdIndex].cmd !== entry.value.trim())) {
+    if (
+      e.key === "Tab" ||
+      (e.key === "Enter" && cmdMatches[cmdIndex].cmd !== entry.value.trim())
+    ) {
       e.preventDefault();
       completeCmd(cmdMatches[cmdIndex].cmd);
       return;
@@ -5714,10 +5637,7 @@ document.addEventListener("keydown", (e) => {
     }
     closeAllMenus();
     hideContextMenu();
-    // dismissModal, not hideModal: Escape must ANSWER the dialog (a pick
-    // replies null, a dirty form confirms first), not silently drop it -
-    // the backdrop path was fixed for exactly this and Escape was the
-    // surviving sibling that left the engine's pick gate waiting 300s.
+
     dismissModal();
     for (const t of tabs) t.pendingText = null;
     return;
@@ -5781,13 +5701,9 @@ document
     };
   });
 
-/* ---------------- boot ---------------- */
 renderTabs();
 let booted = false;
 function restoreTabs(root: string): void {
-  /* Bring back the tabs this workspace had, newest last, and drop any that no
-     longer point at a live session. A workspace with no tabs starts on its
-     most recent session, exactly as before. */
   const stored = prefs.tabsByWs[root] ?? [];
   const usable = stored.filter((ref) => ref.session_id || ref.dirty);
   if (!usable.length) {
@@ -5824,8 +5740,7 @@ function boot(source: string): void {
     "hasIPC=",
     Boolean(window.harness?.onConfig),
   );
-  // The plan/context panel starts closed: the transcript is the point of the
-  // window, the panel is something you open on purpose and it stays open.
+
   if (prefs.rightPanel) {
     shell.classList.remove("hide-right");
     el<HTMLButtonElement>("toggleRight").classList.add("active");
@@ -5845,16 +5760,12 @@ window.harness?.onConfig((cfg) => {
 });
 setTimeout(() => {
   if (booted) return;
-  // Only boots with a port in the URL (test/dev hosts) or no bridge at all
-  // may use the 8765 default: a Tauri boot dialing a guessed port would
-  // attach to whatever else answers there - another instance, or the user's
-  // real sidecar. Wait for the bridge instead.
+
   if (location.search || !window.harness?.onConfig) boot("query");
 }, 2500);
 document.addEventListener("harness:config-failed", () => {
   if (booted) return;
-  // The bridge could not read the shell config at all: park on a port
-  // nothing can listen on so the failure is visible instead of silent.
+
   bootPort = "1";
   boot("ipc-failed");
 });

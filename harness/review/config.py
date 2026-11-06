@@ -18,7 +18,7 @@ from . import findings as findings_mod
 
 MODES = ("parallel", "sequential")
 
-# How a review may start after a run that edited files.
+
 AUTO_RUN = ("off", "offer", "start")
 
 
@@ -37,7 +37,7 @@ DEFAULT_MAX_DIFF_BYTES = 200_000
 DEFAULT_MAX_FILE_BYTES = 60_000
 DEFAULT_MAX_TOKENS = 150_000
 
-# Statuses a reviewer model can be in, from the settings' point of view.
+
 OK = "ok"
 MISSING = "missing"
 DISABLED = "disabled"
@@ -162,7 +162,7 @@ def model_state(model_id):
     """How usable a reviewer model is right now."""
     try:
         status = providers.provider_status(model_id)
-    except Exception:  # noqa: BLE001 - a broken registry must not crash settings
+    except Exception:  # noqa: BLE001
         status = None
     if status is None:
         try:

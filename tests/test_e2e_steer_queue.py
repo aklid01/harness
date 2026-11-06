@@ -92,8 +92,7 @@ class SteerHandler(BaseHTTPRequestHandler):
                     "messages": body.get("messages") or [],
                 }
             )
-        # A scripted delay stalls the response, giving the test a window to
-        # file steer/queue messages while the turn is genuinely running.
+
         delay = float(step.get("delay") or 0)
         if delay:
             time.sleep(delay)
@@ -161,8 +160,7 @@ class SteerQueueE2E(unittest.TestCase):
         handler = type("Bound", (SteerHandler,), {"state": state})
         srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        # shutdown BEFORE server_close, as in test_e2e_workflow, or Windows
-        # raises WinError 10038 and buries real failures in noise.
+
         self.addCleanup(srv.shutdown)
         self.addCleanup(srv.server_close)
         base = f"http://127.0.0.1:{srv.server_address[1]}/v1"
@@ -214,8 +212,7 @@ class SteerQueueE2E(unittest.TestCase):
         for m in self.sent:
             if m.get("event") == events.SESSION and m["payload"].get("id"):
                 sid = m["payload"]["id"]
-        # The session file is a log of one message per line (plus rewind and
-        # compaction markers); replay it the way session.load does.
+
         messages = []
         path = paths_mod.session_dir() / f"{sid}.jsonl"
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -250,8 +247,6 @@ class SteerQueueE2E(unittest.TestCase):
         self.sent.clear()
         self.dispatch({"op": "submit", "text": text, "mode": mode})
 
-    # ---- scenarios ----
-
     def test_steer_joins_the_running_turn(self):
         self.boot(
             [
@@ -281,8 +276,7 @@ class SteerQueueE2E(unittest.TestCase):
             any(m.get("content") == "use library Y" for m in flow[0]["messages"]),
             "the first request went out before the steer existed",
         )
-        # The steer sits between the tool result and the next request's
-        # injected context: the model sees it before acting further.
+
         self.assertEqual(flow[1]["messages"][-2]["content"], "use library Y")
 
         via = [
@@ -339,7 +333,6 @@ class SteerQueueE2E(unittest.TestCase):
         self.boot(
             [
                 {"kind": "text", "content": "part one", "delay": 1.2},
-                # auth failures are not retried, so the second turn fails fast
                 {"kind": "error", "status": 401},
             ]
         )
@@ -366,8 +359,7 @@ class SteerQueueE2E(unittest.TestCase):
             ),
             "the discarded queue text is never sent into a request",
         )
-        # "queued one" became the failed turn's opener: it ran, failed, and
-        # stays in the transcript so Retry can resend it.
+
         transcript = self.transcript_messages()
         self.assertTrue(
             any(
@@ -375,8 +367,7 @@ class SteerQueueE2E(unittest.TestCase):
                 for m in transcript
             )
         )
-        # The steer drains at the chained turn's first loop head, so the model
-        # saw it on the very request that then failed; nothing stays pending.
+
         flow = self.flow_requests()
         self.assertTrue(
             any(
@@ -401,8 +392,7 @@ class SteerQueueE2E(unittest.TestCase):
         )
         self.dispatch({"op": "enqueue", "text": "steer survives", "kind": "steer"})
         self.assertTrue(self.done())
-        # The turn died before any loop head past the opener, so the steer was
-        # never drained: it stays pending for the user to send (or retry into).
+
         items = self.last_pending()
         self.assertEqual(
             [i["text"] for i in items],
@@ -471,9 +461,7 @@ class SteerQueueE2E(unittest.TestCase):
             ]
         )
         self.open_and_submit("long task")
-        # Wait until the model request actually reached the endpoint: the mock
-        # stalls before answering, so enqueue + stop land inside the request.
-        # Waiting on STATUS alone could race the stop ahead of the first byte.
+
         self.assertTrue(
             self.wait_until(lambda: len(self.state.requests) >= 1),
             "the first model request reached the endpoint",

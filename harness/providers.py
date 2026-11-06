@@ -61,8 +61,6 @@ class ModelPayload(TypedDict):
     disabled: bool
 
 
-# The fields a caller may set on a model payload, single-sourced from the
-# contract above (every key except the id, which the registry owns).
 MODEL_FIELDS = tuple(key for key in ModelPayload.__annotations__ if key != "id")
 
 
@@ -102,7 +100,7 @@ MODEL_DEFAULTS = {
     "extra_params": {},
     "disabled": False,
 }
-# Group-level keys a model payload may carry alongside its own fields.
+
 GROUP_ALIASES = ("provider_id", "group_id", "provider_name", "base_url", "headers")
 RESERVED_PARAMS = ("model", "messages", "tools", "stream", "stream_options")
 
@@ -152,9 +150,6 @@ def use(target_id) -> contextlib.AbstractContextManager:
             _ACTIVE_ID.reset(token)
         except ValueError:
             pass
-
-
-# ------------------------------------------------------------- small helpers
 
 
 def _file():
@@ -272,9 +267,6 @@ def _clean_model(payload):
         elif key == "disabled":
             clean[key] = _as_bool(value, default=False)
     return clean
-
-
-# --------------------------------------------------------------- file access
 
 
 def _read_raw():
@@ -423,7 +415,7 @@ def _cached():
     try:
         stamp = _file().stat().st_mtime_ns
     except OSError:
-        stamp = None  # no file yet: still cache it, but never confuse it with "read"
+        stamp = None
     if _CACHE.get("stamp", _MISSING) != stamp:
         _CACHE.clear()
         _CACHE["stamp"] = stamp
@@ -455,9 +447,6 @@ def _save(data):
     return _write(data)
 
 
-# Every tab's settings are written from one server process, and the WebSocket
-# handler is threaded, so read-modify-write runs stay serialised. Without this,
-# two saves a moment apart would let the second discard the first.
 _WRITE_LOCK = threading.RLock()
 
 
@@ -468,9 +457,6 @@ def _transaction(function):
             return function(*args, **kwargs)
 
     return wrapper
-
-
-# ------------------------------------------------------------------ lookups
 
 
 def _find_group(data, group_id):
@@ -551,9 +537,6 @@ def active_pair():
     return tuple(copy.deepcopy(part) for part in _active(_cached()))
 
 
-# ------------------------------------------------------------------- writes
-
-
 @_transaction
 def save_group(group):
     """Create or replace a provider. Never put secrets here."""
@@ -617,8 +600,6 @@ def save_model(model, group_id=None) -> ModelPayload:
             or _text(model.get("group_id"))
         )
         if not explicit:
-            # A caller that talks in flat provider ids gets one provider whose
-            # id matches the model id, exactly like the old format.
             explicit = (
                 model_id
                 if _find_group(data, model_id) is None
@@ -641,9 +622,6 @@ def save_model(model, group_id=None) -> ModelPayload:
             target_group = _find_group(data, target_group["id"])
         target = None
 
-    # Two models with the same model id inside one provider are the same
-    # configuration twice: the second would be indistinguishable in the
-    # picker and in the request path. Refuse it instead of creating it.
     wanted_model = _text(model.get("model"))
     if wanted_model:
         self_id = target["id"] if target is not None else model_id
@@ -668,8 +646,6 @@ def save_model(model, group_id=None) -> ModelPayload:
     if not target["name"]:
         target["name"] = target["model"] or model_id
 
-    # Provider-level settings are only touched when the caller sent them, so
-    # editing one model never rewrites the provider it belongs to.
     patch = {}
     if "provider_name" in model:
         patch["name"] = _text(model["provider_name"]) or "Provider"
@@ -697,7 +673,7 @@ def _forget_key(group_id):
         import keyring
 
         keyring.delete_password(SERVICE, group_id)
-    except Exception:  # noqa: BLE001 - a missing secret is not an error
+    except Exception:  # noqa: BLE001
         pass
 
 
@@ -788,9 +764,6 @@ def set_effort(target_id, effort):
     return True
 
 
-# -------------------------------------------------------------- credentials
-
-
 def _group_id_for(target_id):
     group = _resolve(_cached(), target_id)[0]
     return group["id"] if group else None
@@ -812,7 +785,7 @@ def _key_for_group(group_id):
         import keyring
 
         return keyring.get_password(SERVICE, group_id)
-    except Exception:  # noqa: BLE001 - no backend means no key
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -841,9 +814,6 @@ def _legacy_env():
             key, value = line.split("=", 1)
             values.setdefault(key.strip(), value.strip().strip('"').strip("'"))
     return values
-
-
-# ------------------------------------------------------------- the flat view
 
 
 def _flat(group, model):
@@ -958,8 +928,7 @@ def _credential_state(group):
     if secret:
         return "keyring", secret
     legacy = _legacy_env()
-    # Borrow the plaintext .env key only when it points at this same host,
-    # otherwise the request would fail with a confusing authentication error.
+
     if legacy.get("API_KEY") and _same_host(
         legacy.get("BASE_URL"), group.get("base_url")
     ):
@@ -1002,7 +971,7 @@ def active_config_for(target_id) -> tuple[str | None, str | None, str, str]:
 def provider_status(target_id):
     """renderer-safe summary: masked key state, never the secret."""
     data = _cached()
-    # An exact model id wins, so a disabled model still reports its own state.
+
     group, model = _find_model(data, target_id)
     if model is None:
         group, model = _resolve(data, target_id)
@@ -1012,9 +981,6 @@ def provider_status(target_id):
     state, _ = _credential_state(group)
     flat.update({"key": state, "active": model["id"] == get_active_model_id()})
     return flat
-
-
-# -------------------------------------------------------------- migrations
 
 
 def _migration_marker():
@@ -1041,8 +1007,7 @@ def migration_report():
     entries = raw.get("providers") if isinstance(raw.get("providers"), list) else []
     if not entries:
         return []
-    # Each legacy entry became one model; entries that shared an id became
-    # siblings under one provider, so providers are the distinct group ids.
+
     group_ids = {
         (_text(entry.get("id")) or _text(entry.get("base_url")))
         for entry in entries
@@ -1111,8 +1076,7 @@ def migrate_from_settings():
         base_url = _text(entry.get("base_url"))
         if not (base_url and key):
             continue
-        # One entry per group, keyed by name too, so two endpoints that share
-        # a base URL but not a key never overwrite one another.
+
         group = _import_target(base_url, _text(entry.get("model")))
         if group and not _key_for_group(group["id"]):
             set_key(group["id"], key)
@@ -1133,11 +1097,6 @@ def migrate_from_settings():
     return imported
 
 
-# -------------------------------------------------------------------- probes
-
-
-# A synthetic, side-effect-free tool: the probe asks the model to call it and
-# only reads whether a call came back. Nothing is executed anywhere.
 PROBE_TOOL = {
     "type": "function",
     "function": {
@@ -1175,7 +1134,7 @@ def _tool_probe(client, model):
             .choices[0]
             .message
         )
-    except Exception as failure:  # noqa: BLE001 - reported, never fatal here
+    except Exception as failure:  # noqa: BLE001
         from . import errors as errors_mod
 
         return False, errors_mod.explain(failure, model=model)
@@ -1218,9 +1177,7 @@ def test_provider(target_id, timeout=20):
         if "harness-ok" not in content:
             return False, f"{model}: unexpected reply in {elapsed:.1f}s"
         detail = f"{model}: ok in {elapsed:.1f}s via {source}"
-        # Only probe tools for a model that is not explicitly marked as
-        # rejecting them; a model that answers in text instead of calling is
-        # reported as a fact, not as a failure of the endpoint.
+
         group, entry = _resolve(_cached(), target_id)
         if entry is None or entry.get("supports_tools", True):
             tools_ok, note = _tool_probe(client, model)
@@ -1228,12 +1185,9 @@ def test_provider(target_id, timeout=20):
             if tools_ok:
                 detail += " (native tool calling works)"
         return True, detail
-    except Exception as failure:  # noqa: BLE001 - the renderer shows this string
+    except Exception as failure:  # noqa: BLE001
         detail = errors_mod.explain(failure, model=model)
         return False, detail
-
-
-# --------------------------------------------------------------- /models info
 
 
 def _first_int(*values):
@@ -1346,9 +1300,6 @@ def _models_entries(base_url, api_key, timeout):
     """The raw /models data list. Raises on transport and auth errors."""
     from openai import OpenAI
 
-    # The SDK refuses an empty api_key at construction time, so a keyless
-    # endpoint (vLLM, Ollama, the fixture) gets a placeholder instead; the
-    # header is ignored where no auth is required.
     client = OpenAI(
         base_url=base_url, api_key=api_key or "missing-key", timeout=timeout
     )
@@ -1373,7 +1324,7 @@ def fetch_model_config(model, provider_id=None, base_url=None, key=None, timeout
         return {"found": False, "info": None, "note": "no base url to query"}
     try:
         entries = _models_entries(resolved_base, resolved_key, timeout)
-    except Exception as failure:  # noqa: BLE001 - the renderer shows the note
+    except Exception as failure:  # noqa: BLE001
         from . import errors as errors_mod
 
         return {
@@ -1421,7 +1372,7 @@ def autoconfigure_from_models(target_id, timeout=6):
         return {"found": False, "applied": [], "note": "no base url to query"}
     try:
         entries = _models_entries(base_url, api_key, timeout)
-    except Exception as failure:  # noqa: BLE001 - reported, never fatal here
+    except Exception as failure:  # noqa: BLE001
         from . import errors as errors_mod
 
         return {

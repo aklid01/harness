@@ -71,8 +71,7 @@ class LlmCase(unittest.TestCase):
         )
         self.addCleanup(paths.reset)
         mock.patch.dict("sys.modules", {"keyring": FakeKeyring()}).start()
-        # The fixed schedule is the policy under test in test_retry.py; here a
-        # retry is just plumbing, so its wait costs milliseconds, not seconds.
+
         mock.patch.object(
             retry, "RETRY_SCHEDULE", (0.01,) * len(retry.RETRY_SCHEDULE)
         ).start()
@@ -240,7 +239,7 @@ class LlmCase(unittest.TestCase):
                             )
                         ],
                     )
-                release.wait(2)  # < join timeout: the worker must unblock first
+                release.wait(2)
                 raise ConnectionResetError("should have been abandoned")
 
         completions = FakeCompletions([Hanging()])
@@ -255,15 +254,12 @@ class LlmCase(unittest.TestCase):
                     on_delta=seen.append,
                     cancel=cancel,
                 )
-            except Exception as failure:  # noqa: BLE001 - recorded for the assertion
+            except Exception as failure:  # noqa: BLE001
                 self.outcome = failure
 
         thread = threading.Thread(target=worker)
         thread.start()
-        # Wait for the first DELTA, not a blind sleep: the 0.1s window assumed
-        # thread start + request build + create + chunk 1 all fit inside it,
-        # which a cold cache on a loaded machine does not - the cancel then
-        # fired before the attempt and the test failed with seen == [].
+
         deadline = time.monotonic() + 5
         while not seen and time.monotonic() < deadline:
             time.sleep(0.005)
@@ -452,7 +448,7 @@ class RunnerContextCase(unittest.TestCase):
         runner, count, seen = self.run_turn("mdl-small")
         notes = [payload["text"] for kind, payload in seen if kind == "note"]
         self.assertTrue(any("trimmed the request" in n for n in notes), notes)
-        # the stored history keeps every message: only the copy sent shrank
+
         self.assertNotIn("left out of this request", json.dumps(runner.messages))
         self.assertEqual(len(runner.messages), count + 1)
 

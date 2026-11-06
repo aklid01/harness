@@ -75,9 +75,7 @@ ASK_NOTICE = (
     "</system-reminder>"
 )
 
-# The handoff that carries a plan into the build phase. It is stored in the
-# transcript (so it is inspectable and survives compaction) and lands as real
-# context for the build agent - it is the plan, not a finished result.
+
 PLAN_HANDOFF = (
     "<plan>\n"
     "A planning agent produced the plan below for the task you were given. Treat "
@@ -89,8 +87,7 @@ PLAN_HANDOFF = (
     "</plan>"
 )
 
-# The sticky-mode notes: what a bare /plan, /ask or /build (or the mode chip)
-# changed, in the user's words.
+
 STICKY_NOTES = {
     "build": "Back to build: messages run as usual again.",
     "plan": "Plan mode is on for this session - messages are planned read-only "
@@ -99,12 +96,7 @@ STICKY_NOTES = {
     "until /build or the mode chip clears it.",
 }
 
-# The model's own plan-or-proceed decision, made inside the build turn's first
-# model call. This text is the one documented, editable place for the
-# behaviour: it is injected as a per-turn reminder only while the decision is
-# pending, together with the plan_decision schema itself. No separate model
-# call is added, and a model that never answers the decision proceeds as
-# build - never silently read-only.
+
 AUTO_PLAN_RULES = """\
 <plan-decision>
 Before acting on this request, dissect it once: what is asked, what is
@@ -130,7 +122,7 @@ decision on their own. If you do not call plan_decision, the turn proceeds
 as build.
 </plan-decision>"""
 
-# One extra line per sensitivity, appended to AUTO_PLAN_RULES.
+
 AUTO_PLAN_SENSITIVITY = {
     "conservative": "Lean toward planning: when you are unsure, plan first.",
     "balanced": "",
@@ -166,18 +158,11 @@ PLAN_DECISION_TOOL = {
     },
 }
 
-# The planner (and Ask mode) is read-only by construction: these tools are
-# simply not offered, so the workspace cannot be changed. `task` is withheld
-# too: a subagent has its own toolset and would open a second path around this
-# fence. This is stronger than the read-only instruction in a prompt, mirroring
-# how subagent.py fences a guest. The same set fences a build turn until the
-# model's plan-or-proceed decision has been made.
+
 READONLY_WITHHELD = {"write_file", "str_replace", "write_todos", "task"}
-BUILD_MAX_TOOLS = 200  # bound a runaway build; a healthy build stops on its own
+BUILD_MAX_TOOLS = 200
 
 
-# Every Runner gets its own request-id space, so a tool call made by one
-# conversation can never collide with an identical call made by another.
 TURN_KEYS = itertools.count(1)
 
 
@@ -190,45 +175,40 @@ class Runner:
         self.debug = debug
         self.stream = stream
         self.cancel_event = cancel_event
-        # `mode` is the active turn's mode, stamped fresh for every turn;
-        # `sticky_mode` is what a plain message runs as (None = build default).
+
         self.mode = mode
         self.sticky_mode = mode if mode in ("plan", "ask") else None
-        # Session hook: persist a sticky-mode change the engine made itself
-        # (a bare /plan or /build). None in a bare engine - nothing to persist.
+
         self.on_sticky_change = None
         self._announced_mode = None
-        self._announce_pending = False  # notice deferred past the tool batch
-        self._pending_one_turn = None  # a steered /plan or /ask awaiting its turn
-        self._intent_commanded = False  # this turn was bound by an explicit command
-        self._auto_plan_pending = False  # the model's plan-or-proceed decision is open
-        self._plan_converted = False  # this submission became a plan turn
-        self._suppress_auto_plan_once = False  # one free build after a plan
-        self._turn_model_override = None  # plan role model once a turn converts
+        self._announce_pending = False
+        self._pending_one_turn = None
+        self._intent_commanded = False
+        self._auto_plan_pending = False
+        self._plan_converted = False
+        self._suppress_auto_plan_once = False
+        self._turn_model_override = None
         self._turn_index = 0
         self._turn_text = ""
         self._step = 0
         self._text_retries = 0
         self._text_calls: set = set()
         self._role_instructions = ""
-        self._oversight = None  # oversight config dict, or None when off
+        self._oversight = None
         self._checker_model_id = None
-        self._plan_text = None  # plan handed to the build phase, if any
-        self._build_started = False  # idempotent: build runs at most once per task
-        self._review_log: dict = {}  # decision fingerprint -> prior verdicts
-        self._stop_turn = False  # set when oversight escalates: stop safely
-        self._touched: set = set()  # files this session has edited (resolved)
-        self._turn_touched: set = set()  # files this turn edited (resolved)
-        self._reviewed_files: set = (
-            set()
-        )  # files whose first edit this turn was approved
-        self._user_approved: set = set()  # fingerprints a human approved this turn
+        self._plan_text = None
+        self._build_started = False
+        self._review_log: dict = {}
+        self._stop_turn = False
+        self._touched: set = set()
+        self._turn_touched: set = set()
+        self._reviewed_files: set = set()
+        self._user_approved: set = set()
         self._request_prefix = f"r{next(TURN_KEYS)}"
-        self._file_state = None  # git state snapshot taken at each turn start
-        self.mailbox = None  # Session-owned pending steer/queue messages
-        self.turn_failed = False  # the current turn ended in a provider error
-        # Set by the session: how to start a multi-model review of this run.
-        # None means there is nobody to run it (a bare engine, a test).
+        self._file_state = None
+        self.mailbox = None
+        self.turn_failed = False
+
         self.review_hook = None
         self.messages = [{"role": "system", "content": system_prompt(mode)}]
         if resume:
@@ -258,8 +238,6 @@ class Runner:
             return
 
         if self._pending_one_turn:
-            # A steered /plan or /ask that could not convert in time: it binds
-            # the next turn, which is this one.
             intent, source = self._pending_one_turn, "command"
             self._pending_one_turn = None
         else:
@@ -311,12 +289,10 @@ class Runner:
         if self.on_sticky_change is not None:
             try:
                 self.on_sticky_change(mode)
-            except Exception:  # noqa: BLE001 - persistence is best-effort
+            except Exception:  # noqa: BLE001
                 pass
         label = mode or "build"
-        events.emit(
-            events.INTENT, {"intent": label, "source": source, "sticky": True}
-        )
+        events.emit(events.INTENT, {"intent": label, "source": source, "sticky": True})
         events.emit(events.NOTE, {"text": STICKY_NOTES[label]})
         log.info("sticky mode set to %s (source: %s)", label, source)
 
@@ -340,7 +316,7 @@ class Runner:
             return False
         try:
             return bool(self.review_hook(args))
-        except Exception as failure:  # noqa: BLE001 - a review must not break a turn
+        except Exception as failure:  # noqa: BLE001
             events.emit(
                 events.NOTE,
                 {
@@ -390,7 +366,7 @@ class Runner:
         if metas:
             message["attachments"] = metas
         self.messages.append(message)
-        # Saved before the call, so a failed request never loses what was asked.
+
         session.save(self.messages)
         payload = {"role": "user", "content": text}
         if via:
@@ -509,13 +485,10 @@ class Runner:
         task = (task or user_text).strip() or user_text
         config = agent_roles.get()
         default_model = providers.get_active_model_id()
-        self._build_started = False  # one submission = one task: reset the guard
+        self._build_started = False
         build_cfg = config["build"]
         plan_cfg = config["plan"]
 
-        # Decision Oversight is an independent feature: it applies to any turn
-        # that implements. It is live only when enabled and its reviewer model
-        # still resolves.
         ov = config["oversight"]
         checker_id = ov.get("model_id") if ov.get("enabled") else None
         self._checker_model_id = checker_id or None
@@ -545,16 +518,11 @@ class Runner:
                     return
                 self._phase("planning")
                 plan_id = agent_roles.resolve_model(plan_cfg, default_model)
-                with (
-                    providers.use(plan_id) if plan_id else contextlib.nullcontext()
-                ):
+                with providers.use(plan_id) if plan_id else contextlib.nullcontext():
                     self._turn()
                 self._plan_turn_tail(task)
                 return
 
-            # Build. Arm the model's own plan-or-proceed decision unless an
-            # explicit command bound this turn or a plan already covered the
-            # request (the anti-loop suppression).
             self._role_instructions = ""
             self._auto_plan_pending = (
                 agent_roles.auto_plan_enabled(config)
@@ -579,7 +547,10 @@ class Runner:
         role is on with a model chosen. A disabled or unset role falls back to
         the session model as intended.
         """
-        labelled = {"build": ("Build", config["build"]), "plan": ("Plan", config["plan"])}
+        labelled = {
+            "build": ("Build", config["build"]),
+            "plan": ("Plan", config["plan"]),
+        }
         missing = [
             f"{labelled[role][0]} agent model '{labelled[role][1].get('model_id')}'"
             for role in roles
@@ -606,7 +577,7 @@ class Runner:
         fields.update(extra)
         try:
             plan_mod.current_save(**fields)
-        except Exception:  # noqa: BLE001 - persistence is best-effort, never fatal
+        except Exception:  # noqa: BLE001
             pass
 
     def _run_build_phase(
@@ -632,8 +603,7 @@ class Runner:
             if use_agent and build_cfg.get("enabled")
             else ""
         )
-        # A build runs on the build role's model or the session model, never
-        # on whatever model a converted plan turn was using.
+
         self._turn_model_override = None
         build_id = (
             agent_roles.resolve_model(build_cfg, default_model) if use_agent else None
@@ -650,9 +620,7 @@ class Runner:
         plan_cfg = config["plan"]
         if not plan_cfg.get("enabled"):
             return None
-        return agent_roles.resolve_model(
-            plan_cfg, providers.get_active_model_id()
-        )
+        return agent_roles.resolve_model(plan_cfg, providers.get_active_model_id())
 
     def _convert_turn_to_plan(self, reason=None, command=False):
         """Turn the running build turn into a read-only planning turn.
@@ -664,10 +632,9 @@ class Runner:
         """
         self.mode = "plan"
         self._plan_converted = True
-        self._build_started = False  # no build ran: the handoff may start one
+        self._build_started = False
         self._announce_pending = True
-        # A conversion settles the plan-or-proceed question: no decision gate
-        # on the next call, whoever triggered the conversion.
+
         self._auto_plan_pending = False
         self._turn_model_override = self._plan_role_model_id()
         plan_cfg = agent_roles.get()["plan"]
@@ -708,7 +675,9 @@ class Runner:
         events.emit(events.INTENT, {"intent": "ask", "source": "command"})
         events.emit(
             events.NOTE,
-            {"text": "Switched to ask mode - the rest of this turn answers, read-only."},
+            {
+                "text": "Switched to ask mode - the rest of this turn answers, read-only."
+            },
         )
 
     def _final_assistant_text(self):
@@ -731,7 +700,11 @@ class Runner:
             self._persist_plan(task, "", plan_mod.UNUSABLE, "failed")
             events.emit(
                 events.PLAN,
-                {"status": "failed", "reason": "the turn ended without a plan", "role": "plan"},
+                {
+                    "status": "failed",
+                    "reason": "the turn ended without a plan",
+                    "role": "plan",
+                },
             )
             return
         self._persist_plan(task, plan_text, plan_mod.COMPLETE, "planned")
@@ -745,9 +718,7 @@ class Runner:
                 "inline": True,
             },
         )
-        # The message right after a plan is a follow-up to it, never a fresh
-        # ambiguous request: one build turn without re-planning, then the
-        # model may decide on its own again.
+
         self._suppress_auto_plan_once = True
 
     def _auto_plan_tail(self, task, config, default_model):
@@ -765,7 +736,11 @@ class Runner:
             self._persist_plan(task, "", plan_mod.UNUSABLE, "failed")
             events.emit(
                 events.PLAN,
-                {"status": "failed", "reason": "the turn ended without a plan", "role": "plan"},
+                {
+                    "status": "failed",
+                    "reason": "the turn ended without a plan",
+                    "role": "plan",
+                },
             )
             self._phase("failed")
             return
@@ -786,8 +761,6 @@ class Runner:
             self._handoff_and_build(plan_text, config, default_model)
             return
         if not tools.approval_channel_ready():
-            # Nobody can answer: return the plan and stop. It stays readable
-            # and approvable, and nothing is built unasked.
             self._persist_plan(task, plan_text, plan_mod.COMPLETE, "awaiting_user")
             events.emit(
                 events.NOTE,
@@ -811,8 +784,7 @@ class Runner:
                     "kind": "plan_skipped",
                 },
             )
-            # The build-now turn is a build turn again: the plan turn's
-            # read-only mode ends here, and the build notice says so.
+
             self._begin_turn("build", "skip")
             self._run_build_phase(
                 task,
@@ -859,7 +831,7 @@ class Runner:
                     "choices": ["build", "skip", "cancel"],
                 },
             )
-        except Exception:  # noqa: BLE001 - never wedge the turn on the prompt
+        except Exception:  # noqa: BLE001
             return "cancel"
         if answer == "skip":
             return "skip"
@@ -874,8 +846,7 @@ class Runner:
                 events.ERROR, {"text": problem, "kind": "config", "role": "system"}
             )
             return
-        # The approved build is a build turn again: the plan turn's read-only
-        # mode ends here, and the build notice says so in the transcript.
+
         self._begin_turn("build", "approved")
         self._phase("handing_off")
         self._handoff_to_build(plan_text)
@@ -952,8 +923,7 @@ class Runner:
             log.info("auto-plan decision: none; proceeding as build")
             return
         result = (
-            "Entering plan mode: read-only planning. Produce the plan for the "
-            "user."
+            "Entering plan mode: read-only planning. Produce the plan for the user."
             if decision == "plan"
             else "Proceeding as build."
         )
@@ -984,8 +954,6 @@ class Runner:
         events.emit(events.INTENT, {"intent": "build", "source": "model"})
         log.info("auto-plan decision: build")
 
-    # --- decision oversight -------------------------------------------------
-
     def _reconcile_todos(self, name, args, result):
         """Cross out plan steps whose work just happened, from tool evidence.
 
@@ -1000,7 +968,7 @@ class Runner:
 
             if todos_mod.reconcile(name, args, result):
                 events.emit(events.TODOS, {"todos": todos_mod.current()})
-        except Exception:  # noqa: BLE001 - reconciliation is best-effort
+        except Exception:  # noqa: BLE001
             pass
 
     def _needs_review(self, name, args):
@@ -1008,8 +976,6 @@ class Runner:
             return False
         probe = args
         if name in ("write_file", "str_replace") and isinstance(args, dict):
-            # Grade against the resolved path: the touched set holds what
-            # execute() actually wrote, and the model may have used a relative one.
             probe = {**args, "path": tools.resolve_path(args.get("path") or "")}
         return oversight.wants_review(
             name,
@@ -1044,10 +1010,7 @@ class Runner:
             return None
 
         fp = oversight.fingerprint(name, args)
-        # Two ways a judgment already happened and the reviewer need not run
-        # again: a human approved this exact call through the permission
-        # dialog this turn, or this file's first edit this turn was approved
-        # and this is another small change to it.
+
         if fp in self._user_approved or (
             name in ("write_file", "str_replace")
             and tools.resolve_path(args.get("path") or "") in self._reviewed_files
@@ -1140,9 +1103,6 @@ class Runner:
         }
 
         if verdict.verdict == "error":
-            # The reviewer failed. A low/medium action proceeds under the normal
-            # permission layer (still fully in force); a destructive/config shell
-            # action is held rather than run unseen.
             if oversight.block_on_error(name, args):
                 events.emit(events.DECISION, {**payload, "status": "error"})
                 events.emit(
@@ -1181,7 +1141,6 @@ class Runner:
                 self._reviewed_files.add(tools.resolve_path(args.get("path") or ""))
             return None
 
-        # revise / clarify / escalate -> hold and hand back the reviewer's guidance
         risks = ", ".join(verdict.risks) or "none stated"
         if verdict.verdict == "revise":
             body = (
@@ -1279,8 +1238,6 @@ class Runner:
         if error.kind != "stream_interrupted":
             payload["retry"] = self._retry_info()
         if self.mailbox is not None:
-            # A dead conversation cannot run what was queued for after it:
-            # hand the texts back so the UI can name them and restore them.
             discarded = self.mailbox.discard_queues()
             if discarded:
                 payload["discarded_queue"] = [item["text"] for item in discarded]
@@ -1342,8 +1299,7 @@ class Runner:
         actually running. Returns the synthetic call id.
         """
         call_id = f"{name}_{len(self.messages)}"
-        # The same shape the engine stores for a real assistant tool call, so
-        # the provider sees a valid transcript.
+
         self.messages.append(
             {
                 "role": "assistant",
@@ -1416,9 +1372,6 @@ class Runner:
                 "and this turn will be wasted.\n</mode>"
             )
         if self._auto_plan_pending:
-            # The decision is still open: tell the model how to make it. The
-            # write tools are withheld from this call's schema and the
-            # plan_decision tool is offered beside them.
             rules = AUTO_PLAN_RULES
             extra = AUTO_PLAN_SENSITIVITY.get(
                 agent_roles.plan_sensitivity(agent_roles.get())
@@ -1436,14 +1389,11 @@ class Runner:
                 "</task-instructions>"
             )
         self._tools_honesty(injection)
-        # The manifest is repeated here every turn, so a transcript that
-        # was trimmed or compacted still says which files exist and where
-        # they are. The agent never loses track of an attachment.
+
         note = attachments_mod.session_note(self._session_attachments())
         if note:
             injection["content"] += f"\n{note}"
-        # The subagent the agent spawns reads the same list, so it can open
-        # the files the user attached without being told about them twice.
+
         attachments_mod.bind(self._session_attachments())
         events.emit(events.INJECTION, {"content": injection["content"]})
         return injection
@@ -1476,7 +1426,7 @@ class Runner:
                 self._convert_turn_to_ask()
             self._receive_user_text(text, via="steer", attachments=attachments)
             return
-        # Too late to convert: this turn is already planning or answering.
+
         self._pending_one_turn = kind
         state = "planning" if self.mode == "plan" else "answering"
         events.emit(
@@ -1508,8 +1458,7 @@ class Runner:
 
     def _turn(self):
         self._announce_mode()
-        # The user message that opened this turn, so a retry resumes from it
-        # instead of appending a second copy.
+
         self._turn_index = len(self.messages) - 1
         self._text_retries = 0
         self._text_calls = set()
@@ -1518,10 +1467,9 @@ class Runner:
         self._user_approved = set()
         self._stop_turn = False
         self.turn_failed = False
-        # What THIS turn changed. A run that changed nothing must not
-        # trigger a review that has nothing to look at.
+
         self._turn_touched = set()
-        # Build's own budget, independent of the plan and review phases.
+
         self._build_budget = budget.Budget(tool_calls=BUILD_MAX_TOOLS)
         self._build_progress = budget.Progress(limit=4)
         for message in reversed(self.messages[: self._turn_index + 1]):
@@ -1530,20 +1478,15 @@ class Runner:
             ).startswith("<"):
                 self._turn_text = str(message.get("content") or "")
                 break
-        usage = None  # bound by every call_llm that returns; None on early stop
-        history.begin_turn()  # this turn owns its spill files and no others
-        # Baseline for "changed since your last turn": the state at turn start.
-        # Fixed for the whole turn, so the note is stable across requests and
-        # edits the agent makes this turn surface on the next one.
+        usage = None
+        history.begin_turn()
+
         self._file_state = context_mod.git_state()
         while True:
             if self.cancelled():
                 events.emit(events.NOTE, {"text": "stopped"})
                 break
             if self._stop_turn:
-                # Oversight escalated and already told the coding agent to hand
-                # the decision to the user. Stop the turn safely rather than
-                # letting it grind through the same disagreement.
                 events.emit(
                     events.NOTE,
                     {
@@ -1554,29 +1497,21 @@ class Runner:
                 )
                 break
             if self.mailbox is not None:
-                # Steers wait for the current step to finish, then join the
-                # conversation here, before the next request is assembled.
                 for steer in self.mailbox.take_steers():
                     self._handle_steered_text(steer)
             if self._announce_pending:
-                # A mid-turn mode change appends its notice here, after the
-                # previous response's tool results, so the transcript stays
-                # valid for the provider.
                 self._announce_pending = False
                 self._announce_mode()
-            # The role this turn reports on its events. A mid-turn conversion
-            # relabels everything from here on - the UI shows it verbatim on
-            # tool entries and the activity line.
+
             role = (
                 "plan"
                 if self.mode == "plan"
-                else "ask" if self.mode == "ask" else "build"
+                else "ask"
+                if self.mode == "ask"
+                else "build"
             )
             injection = self._build_injection()
 
-            # Assemble the request separately from the stored history, so a
-            # model with a smaller context window gets a trimmed copy and the
-            # transcript on disk stays exactly as it was.
             request, trimmed = history.prepare(
                 self._with_images(self._with_manifests(self.messages + [injection])),
                 providers.active_context_window(),
@@ -1587,12 +1522,7 @@ class Runner:
             events.emit(events.STATUS, {"active": active_form(), "role": role})
             self._step += 1
             request_id = f"{self._request_prefix}:{self._step}"
-            # Plan and Ask get the same chokepoint the planner has: the withheld
-            # tools are not offered at all, so read-only does not depend on the
-            # model's cooperation. The post-hoc intercept below stays as the
-            # second fence for a model that emits one anyway. A build turn with
-            # its plan-or-proceed decision still open is fenced the same way,
-            # with the decision tool offered beside the read-only set.
+
             turn_tools = None
             if self.mode in ("plan", "ask"):
                 turn_tools = [
@@ -1630,10 +1560,6 @@ class Runner:
                         on_reasoning if self.stream else None,
                     )
                 except Exception as failure:
-                    # A provider that will not take an image part must not cost
-                    # the user their message: the file stays attached, the
-                    # request goes again without the picture, and the agent is
-                    # told why it cannot see it.
                     fallback = self._without_images(failure, request, injection)
                     if fallback is None:
                         raise
@@ -1644,15 +1570,14 @@ class Runner:
                         on_delta,
                         on_reasoning if self.stream else None,
                     )
-            except Exception as failure:  # noqa: BLE001 - report, don't kill the session
+            except Exception as failure:  # noqa: BLE001
                 if self.cancelled():
                     events.emit(events.NOTE, {"text": "stopped"})
                     break
                 self._fail(failure)
                 break
             events.emit(events.STATUS, {"active": None})
-            # A generation the user has moved on from (stop, model switch) is
-            # abandoned here: its answer is not appended and its turn is over.
+
             if self.cancelled():
                 events.emit(events.NOTE, {"text": "stopped"})
                 break
@@ -1661,9 +1586,6 @@ class Runner:
             if not message.tool_calls:
                 text_call, narration = self._text_call(message)
                 if text_call is not None and text_call.ok:
-                    # The same call text again means the model is looping, not
-                    # working: it already got this exact result. Tell it so and
-                    # stop - never execute the same text call twice.
                     fingerprint = f"{text_call.name}:{text_call.arguments}"
                     if fingerprint in self._text_calls:
                         self.messages.append(message.model_dump(exclude_none=True))
@@ -1692,15 +1614,12 @@ class Runner:
                         session.save(self.messages)
                         break
                     self._text_calls.add(fingerprint)
-                    # The narration is real output: show it, keep it in the
-                    # transcript, then run the call exactly like a native one.
+
                     if narration:
                         events.emit(
                             events.MESSAGE, {"role": "assistant", "content": narration}
                         )
                 elif text_call is not None:
-                    # Unusable markup. Say so plainly, and give the model one
-                    # bounded chance to redo it as a real call. Never silently.
                     if narration:
                         events.emit(
                             events.MESSAGE, {"role": "assistant", "content": narration}
@@ -1759,8 +1678,6 @@ class Runner:
                 )
 
             if self._auto_plan_pending:
-                # The first response decides: plan, build, or (no signal at
-                # all) build. Nothing below has run a tool yet.
                 self._resolve_auto_plan(message)
 
             if not message.tool_calls:
@@ -1768,7 +1685,6 @@ class Runner:
 
             for index, tool_call in enumerate(message.tool_calls):
                 if tool_call.function.name == "plan_decision":
-                    # Answered by the decision gate above; nothing to run.
                     continue
                 if self.cancelled():
                     events.emit(events.NOTE, {"text": "stopped"})
@@ -1780,24 +1696,19 @@ class Runner:
                     break
 
                 if self._stop_turn:
-                    # A escalation in this message stops the rest of the batch and
-                    # the turn; the remaining calls were never run.
                     self._answer_pending_calls(
                         message, index + 1, "The turn was stopped before this call ran."
                     )
                     break
 
-        history.sweep()  # the turn is over: bin its temp files
-        history.strip(self.messages)  # ...and shrink the tool output it produced
+        history.sweep()
+        history.strip(self.messages)
 
         if usage and compact.needed(usage, providers.active_context_window()):
             self.messages = commands.compact(
                 self.messages, providers.active_context_window()
             )
 
-        # The agent's own message is already out, so a review started here
-        # cannot delay it. The review runs in the background and reports
-        # itself through the card.
         self._maybe_auto_review()
 
     def _run_tool_call(self, message, tool_call, index, request_id, role):
@@ -1813,8 +1724,7 @@ class Runner:
             args = json.loads(tool_call.function.arguments)
         except (ValueError, TypeError):
             args = {}
-        # Build's independent budget and no-progress guard: a runaway or
-        # stuck build stops with a clear status instead of grinding.
+
         over_budget = self._build_budget.tool()
         looping = self._build_progress.repeat(
             f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
@@ -1845,8 +1755,7 @@ class Runner:
             self._stop_turn = True
             return False
         review_marker = None
-        # Fingerprinted before execute() resolves paths, so a re-proposed
-        # identical call fingerprints the same way it did at review time.
+
         decision_fp = oversight.fingerprint(name, args)
         if self.mode in ("plan", "ask") and name in (
             "write_file",
@@ -1872,17 +1781,10 @@ class Runner:
                 "read instead."
             )
         else:
-            # Decision oversight runs before, never after: it can hold a
-            # significant action and hand the coding agent the reviewer's
-            # guidance, but it never runs the tool itself and never
-            # bypasses the permission layer an approved call still passes
-            # through below.
             hold = self._review_gate(name, args, message)
             if hold is not None:
                 result, review_marker = hold
             else:
-                # One call, one request, one execution: a replayed frame or
-                # a re-entered stream replays the recorded result.
                 args, result = execute(
                     tool_call,
                     note=(message.content or ""),
@@ -1894,8 +1796,6 @@ class Runner:
                 if name in ("write_file", "str_replace") and not str(result).startswith(
                     ("Error:", "Blocked by policy:", "The user denied")
                 ):
-                    # A landed edit: later small edits to this file are
-                    # follow-up work on a decision already reviewed.
                     self._touched.add(str(args.get("path") or ""))
                     self._turn_touched.add(str(args.get("path") or ""))
                 self._reconcile_todos(name, args, result)

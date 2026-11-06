@@ -20,10 +20,7 @@ from harness import (
 class SessionCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(os.path.abspath("tmp-session-test"))
-        # A prior run whose tearDown could not delete its scratch (a lingering
-        # thread or a scanner holding a handle) must not leak its session file
-        # or titles sidecar into this one: save() appends, so a stale
-        # 20260101-000000.jsonl would poison every assertion below.
+
         shutil.rmtree(self.tmp, ignore_errors=True)
         self.tmp.mkdir(parents=True, exist_ok=True)
         os.environ["HARNESS_SESSIONS_ROOT"] = str(self.tmp / "sessions")

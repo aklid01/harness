@@ -1,5 +1,3 @@
-/* Compiles the renderer TypeScript and stages the static assets in dist/,
-   which is what Tauri serves as the frontend. */
 import { copyFileSync, mkdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";

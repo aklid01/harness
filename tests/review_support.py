@@ -161,8 +161,7 @@ class ReviewCase(unittest.TestCase):
 
         os.environ["HARNESS_SESSIONS_ROOT"] = str(Path(self.tmp.name) / "sessions")
         self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
-        # Stop git from walking up past the temp dir: a workspace that must
-        # not be a repository stays that one, whatever the machine looks like.
+
         os.environ["GIT_CEILING_DIRECTORIES"] = str(Path(self.tmp.name))
         self.addCleanup(lambda: os.environ.pop("GIT_CEILING_DIRECTORIES", None))
 

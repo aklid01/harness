@@ -40,7 +40,7 @@ class ModelOutcome:
 
     model_id: str
     label: str = ""
-    status: str = "ran"  # ran / skipped / failed / cancelled
+    status: str = "ran"
     error: str = ""
     note: str = ""
     findings: list = dataclasses.field(default_factory=list)
@@ -133,8 +133,6 @@ def merge(outcomes, threshold="low"):
     for index, finding in enumerate(suppressed, start=len(shown) + 1):
         finding.id = f"R{index}"
 
-    # A disagreement is two findings that point at the same place but read it
-    # differently. Both stay; each is labelled with the other.
     for index, finding in enumerate(shown):
         for other in shown[index + 1 :]:
             if finding.file != other.file or finding.category == other.category:

@@ -1,10 +1,5 @@
-/* The session's sticky mode: what a plain message runs as. "build" is the
-   default and shows nothing in the UI; /plan, /ask and the mode chip change
-   it, /build (or clicking the chip) clears it. A one-turn /plan or /ask
-   never lands here - the engine binds that turn only. */
 export type Mode = "build" | "ask" | "plan";
 
-/* Workflow phase indicator (planning, handoff, build, ...). */
 export type WorkflowPhase =
   | "planning"
   | "replanning"
@@ -22,7 +17,6 @@ export interface PhaseEventPayload {
   phase: WorkflowPhase;
 }
 
-/* Session-scoped plan artifact (harness/plan.py). */
 export type PlanCompletion = "complete" | "partial" | "unusable" | "cancelled";
 export interface PlanRecord {
   session_id?: string;
@@ -131,18 +125,15 @@ export interface SessionListItem {
   title: string;
 }
 
-/* Optional role agents and decision oversight (harness/agent_roles.py). Each
-   role names a model by the id it already has in Settings; no credential is
-   stored here. A disabled or unset role keeps the existing default agent. */
 export interface AgentRole {
   enabled: boolean;
   model_id: string;
   instructions: string;
-  /* The plan role: require approval before an automatic plan builds. */
+
   approve?: boolean;
-  /* The plan role: the model may enter plan mode on its own. */
+
   auto?: boolean;
-  /* The plan role: conservative | balanced | eager. */
+
   sensitivity?: string;
 }
 export interface AgentOversight extends AgentRole {
@@ -150,17 +141,13 @@ export interface AgentOversight extends AgentRole {
   max_rounds: number;
 }
 
-/* The multi-model review role (harness/review/). It holds a LIST of models,
-   not one: several reviewers look at the same change independently. Each
-   names a model by the id it already has in Settings, so no credential is
-   ever stored here. */
 export interface ReviewerConfig {
   model_id: string;
   label: string;
   enabled: boolean;
-  /* The category this reviewer concentrates on, or "" for every target. */
+
   focus: string;
-  /* Set by the engine when the model behind this reviewer is unusable. */
+
   state?: string;
   usable?: boolean;
   reason?: string;
@@ -168,9 +155,9 @@ export interface ReviewerConfig {
 
 export interface ReviewConfig {
   enabled: boolean;
-  /* "off" | "offer" | "start" - what happens after a run that edited files. */
+
   auto_run: string;
-  /* "parallel" | "sequential" */
+
   mode: string;
   reviewers: ReviewerConfig[];
   max_reviewers: number;
@@ -205,9 +192,9 @@ export interface ReviewFinding {
   why: string;
   fix: string;
   confidence: string;
-  /* The models that raised this finding. More than one means they agree. */
+
   models: string[];
-  /* The ids of findings other models read differently at the same place. */
+
   conflict_with: string[];
 }
 
@@ -264,8 +251,6 @@ export interface ReviewReport {
   message?: string;
 }
 
-/* One event carries every stage of a review, so a frontend follows a whole
-   review with a single case in its switch. */
 export type ReviewStage =
   | "offer"
   | "started"
@@ -280,8 +265,6 @@ export type ReviewStage =
   | "stale"
   | "updated";
 
-/* What the review is about to cost, in tokens. There is no pricing table in
-   the engine, so the budget is counted in the unit it is enforced in. */
 export interface ReviewEstimate {
   tokens_per_model: number;
   tokens_total: number;
@@ -319,15 +302,12 @@ export interface PlanEventPayload {
   plan?: string;
   model?: string;
   reason?: string;
-  /* The plan is the turn's own final message: show actions, not a card. */
+
   inline?: boolean;
-  /* The model entered plan mode on its own; reason says why. */
+
   auto?: boolean;
 }
 
-/* How this turn was chosen to run, and where the choice came from. `sticky`
-   marks a session-mode change (a bare command or the mode chip), as opposed
-   to a one-turn binding. */
 export interface IntentEventPayload {
   intent: Mode;
   source:
@@ -343,7 +323,6 @@ export interface IntentEventPayload {
   sticky?: boolean;
 }
 
-/* The model entered plan mode on its own. */
 export interface AutoPlanEventPayload {
   reason: string;
 }
@@ -366,8 +345,6 @@ export interface DecisionEventPayload {
   question?: string;
 }
 
-/* A workspace's open tabs, persisted so a restart brings them back. The
-   session's sticky mode is not here: it lives with the session, engine-side. */
 export interface TabRef {
   session_id: string | null;
   title: string;
@@ -380,8 +357,6 @@ export interface TodoItem {
   activeForm?: string;
 }
 
-/* A message filed against a running turn: "steer" joins the conversation at
-   the next model-call boundary, "queue" auto-runs after the turn ends well. */
 export type PendingKind = "steer" | "queue";
 export interface PendingItem {
   id: string;
@@ -390,9 +365,6 @@ export interface PendingItem {
   attachments?: AttachmentMeta[];
 }
 
-/* A file the user attached to a message. The bytes live in session-scoped
-   storage under the app data area; only this metadata travels with the
-   message, and the transcript keeps no more than this. */
 export interface AttachmentMeta {
   id: string;
   name: string;
@@ -403,12 +375,11 @@ export interface AttachmentMeta {
   missing?: boolean;
 }
 
-/* One file the user picked, from picking it to the engine having it. */
 export interface AttachmentDraft extends AttachmentMeta {
   status: "uploading" | "ready" | "error";
   progress: number;
   detail?: string;
-  /* The engine's handle for the upload in flight, so it can be discarded. */
+
   uploadId?: string;
 }
 
@@ -482,8 +453,7 @@ export type OpPayload =
       op: "approval_reply";
       id: string;
       allow: boolean;
-      /* A plan review answers three ways: allow, choice "skip" (build
-         without the plan), or a plain deny (cancel). */
+
       choice?: "skip";
     }
   | { op: "pick_reply"; id: string; index: number | null }
@@ -503,7 +473,7 @@ export type OpPayload =
       review_id: string;
       finding_id?: string;
       finding_ids?: string[];
-      /* "apply" asks the agent to apply that one suggested fix. */
+
       apply?: boolean;
     }
   | { op: "review_report" };
@@ -530,7 +500,7 @@ export interface ServerEnvelope {
   ok?: boolean;
   data?: unknown;
   error?: string;
-  /* save_provider only: what the /models backstop auto-configured. */
+
   info?: { found: boolean; applied: string[]; note?: string };
   ready?: { project: string; project_root: string };
 }

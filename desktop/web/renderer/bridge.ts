@@ -1,8 +1,3 @@
-/* Tauri replacement for the Electron preload bridge.
-
-   The renderer only ever talks to `window.harness`; this module supplies the
-   same object on top of Tauri IPC, so the UI code stays untouched. The sidecar
-   port and the workspace root come from the Rust side (it owns the process). */
 import type {
   PreloadHarness,
   SidecarConfig,
@@ -63,15 +58,12 @@ const readConfig = async (tries: number): Promise<void> => {
       await readConfig(tries - 1);
       return;
     }
-    // No silent fallback: the renderer listens for this and parks visibly.
+
     document.dispatchEvent(new Event("harness:config-failed"));
   }
 };
 void readConfig(5);
 
-/* The window is frameless-less but the topbar acts as a title bar. Tauri's
-   drag-region attribute handles the empty areas; this covers the rest so a
-   press anywhere on the bar that is not a control moves the window. */
 const WINDOW_API = "plugin:window|start_dragging";
 
 document.addEventListener("mousedown", (event) => {

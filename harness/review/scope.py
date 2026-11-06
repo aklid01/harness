@@ -23,8 +23,6 @@ from pathlib import Path
 
 from . import findings as findings_mod
 
-# Files that are never worth a reviewer's time: they are generated, vendored,
-# or they are a lockfile whose churn is noise.
 DEFAULT_EXCLUSIONS = (
     "*.lock",
     "package-lock.json",
@@ -133,9 +131,6 @@ class Scope:
         return [f.path for f in self.files]
 
 
-# --------------------------------------------------------------------- git
-
-
 def _git(root, args, timeout=20):
     """Run git in ``root`` and return (returncode, stdout).
 
@@ -191,7 +186,6 @@ def _porcelain(root):
         status = entry[:2].strip() or "?"
         path = entry[3:]
         if status[0] in ("R", "C"):
-            # A rename carries the old path in the next field.
             index += 1
         rows.append((status, path))
     return rows
@@ -208,9 +202,6 @@ def _relative(root, path):
     except (OSError, ValueError):
         return str(path).replace("\\", "/")
     return relative.as_posix()
-
-
-# -------------------------------------------------------------- exclusions
 
 
 def _matches(path, pattern):
@@ -265,9 +256,6 @@ def is_binary(path):
         return True
 
 
-# ------------------------------------------------------------ diff building
-
-
 def _synthetic_new_file(path, text):
     """A unified diff for a file git does not know about yet."""
     lines = text.split("\n")
@@ -308,9 +296,6 @@ def _decode(blob):
         return base64.b64decode(blob).decode("utf-8", errors="replace")
     except (ValueError, TypeError):
         return None
-
-
-# ------------------------------------------------------------------ scopes
 
 
 def _diff_commands(root, mode, base):
@@ -365,8 +350,6 @@ def _git_scope(root, mode, base, only_paths, exclusions, max_files):
 
     wanted = None
     if only_paths is not None:
-        # An empty list means "this run changed nothing", which is different
-        # from "no run context", which is None.
         wanted = {_relative(top, p) for p in only_paths}
 
     commands = _diff_commands(top, mode, base)
@@ -452,8 +435,6 @@ def _journal_scope(root, session_id, mode, only_paths, exclusions, max_files):
     scope = Scope(mode=mode, is_repo=False)
     entries = checkpoints.all_changes(session_id or "")
     if only_paths is not None:
-        # An empty list means "this run changed nothing", which is different
-        # from "no run context", which is None.
         wanted = {_relative(root, p) for p in only_paths}
         entries = [e for e in entries if _relative(root, e.get("path", "")) in wanted]
 

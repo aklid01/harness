@@ -85,14 +85,14 @@ class ProtocolCase(unittest.TestCase):
         self.assertIsNone(oversight.decision_risk("write_todos", {"todos": []}))
 
     def test_intensity_sets_the_minimum_reviewed_risk(self):
-        # edits (high) are reviewed at every intensity
+
         for intensity in ("low", "medium", "high"):
             self.assertTrue(oversight.wants_review("write_file", {}, intensity))
-        # a read-only shell command is only reviewed at high intensity
+
         self.assertFalse(oversight.wants_review("bash", {"command": "ls"}, "low"))
         self.assertFalse(oversight.wants_review("bash", {"command": "ls"}, "medium"))
         self.assertTrue(oversight.wants_review("bash", {"command": "ls"}, "high"))
-        # a build/test command is reviewed from medium up
+
         self.assertFalse(
             oversight.wants_review("bash", {"command": "npm run build"}, "low")
         )
@@ -113,7 +113,7 @@ class ProtocolCase(unittest.TestCase):
         fenced = oversight.parse_verdict('```json\n{"verdict":"approve"}\n```')
         self.assertEqual(fenced.verdict, "approve")
         broken = oversight.parse_verdict("I think this is fine, approve it.")
-        self.assertEqual(broken.verdict, "clarify")  # never silently approve
+        self.assertEqual(broken.verdict, "clarify")
         self.assertTrue(broken.error)
         bad = oversight.parse_verdict('{"verdict":"banana"}')
         self.assertEqual(bad.verdict, "clarify")
@@ -182,14 +182,14 @@ class ReviewerContextCase(unittest.TestCase):
         )
         self.assertEqual(captured["tools"], [], "the reviewer holds no tools")
         body = captured["messages"][1]["content"]
-        self.assertIn("Refactor the parser", body)  # task
-        self.assertIn("1. touch parser.py", body)  # plan
-        self.assertIn("Project rule: single quotes", body)  # project instructions
-        self.assertIn("be strict about security", body)  # reviewer-specific notes
-        self.assertIn("parser.py", body)  # the action
-        self.assertIn("OLD_MARKER", body)  # what changes
-        self.assertIn("NEW_MARKER", body)  # what it becomes
-        self.assertIn("because it is cleaner", body)  # the agent's stated reason
+        self.assertIn("Refactor the parser", body)
+        self.assertIn("1. touch parser.py", body)
+        self.assertIn("Project rule: single quotes", body)
+        self.assertIn("be strict about security", body)
+        self.assertIn("parser.py", body)
+        self.assertIn("OLD_MARKER", body)
+        self.assertIn("NEW_MARKER", body)
+        self.assertIn("because it is cleaner", body)
         self.assertEqual(verdict.verdict, "approve")
 
     def test_prior_rounds_travel_with_a_challenge(self):
@@ -268,9 +268,9 @@ class GateCase(unittest.TestCase):
         self.backend.attach(self.sent.append)
         self.addCleanup(self.quiesce)
 
-        self.coding = []  # queued coding-agent replies
-        self.reviews = []  # queued reviewer verdicts (dicts or ("error", msg))
-        self.review_calls = []  # history kwarg of each review()
+        self.coding = []
+        self.reviews = []
+        self.review_calls = []
         self._ci = 0
         self._ri = 0
         self.coder_patch = mock.patch("harness.agent.call_llm", side_effect=self._code)
@@ -280,8 +280,7 @@ class GateCase(unittest.TestCase):
         self.coder_patch.start()
         self.rev_patch.start()
         self.addCleanup(mock.patch.stopall)
-        # Answer approval/pick requests the way a frontend would, so a call that
-        # needs the human never blocks the test. Denied by default.
+
         import threading
 
         self._stop_responder = threading.Event()
@@ -346,8 +345,7 @@ class GateCase(unittest.TestCase):
         ), USAGE
 
     def enable(self, **over_cfg):
-        # Oversight is independent of the workflow, so a plain Build-mode session
-        # is all it needs; the coder is the session default model.
+
         cfg = {
             "plan": {"enabled": False},
             "build": {"enabled": False},
@@ -411,8 +409,6 @@ class GateCase(unittest.TestCase):
     def target(self, name="foo.txt"):
         return self.root / name
 
-    # ---- approve --------------------------------------------------------
-
     def test_approve_runs_the_action_once(self):
         self.enable()
         self.coding = [
@@ -427,8 +423,6 @@ class GateCase(unittest.TestCase):
         self.assertEqual(self.target("a.txt").read_text(), "X")
         self.assertIn("approved", self.decision_statuses())
         self.assertEqual(len(self.review_calls), 1)
-
-    # ---- revise then adapt ---------------------------------------------
 
     def test_revise_holds_the_action_and_a_fresh_approach_runs(self):
         self.enable()
@@ -465,13 +459,11 @@ class GateCase(unittest.TestCase):
         self.assertTrue(self.target("good.txt").exists(), "the adapted action runs")
         self.assertIn("revised", self.decision_statuses())
         self.assertIn("approved", self.decision_statuses())
-        # the held feedback carried the correction back to the coding agent
+
         transcript = (paths_mod.session_dir() / f"{self.sid()}.jsonl").read_text(
             encoding="utf-8"
         )
         self.assertIn("write good.txt", transcript)
-
-    # ---- challenge, resolved --------------------------------------------
 
     def test_coding_agent_can_challenge_and_the_reviewer_reconsiders(self):
         self.enable()
@@ -509,10 +501,8 @@ class GateCase(unittest.TestCase):
         self.assertEqual(
             len(self.review_calls), 2, "two review rounds on the same decision"
         )
-        # the second review saw the first revision as history
-        self.assertEqual(self.review_calls[1]["history"][0]["verdict"], "revise")
 
-    # ---- bounded escalation ---------------------------------------------
+        self.assertEqual(self.review_calls[1]["history"][0]["verdict"], "revise")
 
     def test_repeated_disagreement_is_bounded_and_escalated(self):
         self.enable(max_rounds=2)
@@ -577,8 +567,6 @@ class GateCase(unittest.TestCase):
             )
         )
 
-    # ---- failure policy --------------------------------------------------
-
     def test_reviewer_failure_holds_high_risk_shell(self):
         self.enable()
         self.coding = [reply("", [("bash", {"command": "rm -rf build"})]), reply("ok")]
@@ -612,8 +600,6 @@ class GateCase(unittest.TestCase):
             )
         )
 
-    # ---- approvals and permissions are never bypassed --------------------
-
     def test_an_approved_edit_outside_the_project_is_still_denied(self):
         self.enable()
         outside = Path(self.tmp.name) / "elsewhere" / "secret.txt"
@@ -622,15 +608,13 @@ class GateCase(unittest.TestCase):
             reply("", [("write_file", {"path": str(outside), "content": "z"})]),
             reply("ok"),
         ]
-        self.reviews = [{"verdict": "approve"}]  # reviewer says yes...
+        self.reviews = [{"verdict": "approve"}]
         self.run_submit()
-        # ...but the permission layer still owns the final word, and with no
-        # approver connected the write is refused. Oversight cannot override it.
+
         self.assertFalse(outside.exists(), "approval is not bypassed by the reviewer")
 
     def test_oversight_without_a_configured_model_is_inert(self):
-        # Independent feature: enabled with no reviewer model => inert; the write
-        # proceeds unreviewed (in a normal Build session).
+
         agent_roles.save({"oversight": {"enabled": True, "model_id": ""}})
         self.coding = [
             reply(
@@ -659,8 +643,7 @@ class GateCase(unittest.TestCase):
         self.assertTrue(self.target("h.txt").exists())
 
     def test_readonly_shell_is_not_reviewed_but_still_runs(self):
-        # A stderr redirect and a plain echo are read-only: not a decision, so no
-        # review - but they still execute under the permission layer.
+
         self.enable()
         self.coding = [reply("", [("bash", {"command": "echo hello"})]), reply("ok")]
         self.reviews = [{"verdict": "approve"}]
@@ -694,9 +677,7 @@ class GateCase(unittest.TestCase):
         )
 
     def test_a_held_revision_is_not_re_reviewed_as_a_new_decision(self):
-        # The reviewer's own correction comes back as a tool result, not as a
-        # tool call, so it must not recursively trigger another review; only the
-        # coding agent re-proposing the same action does.
+
         self.enable()
         self.coding = [
             reply(
@@ -710,8 +691,6 @@ class GateCase(unittest.TestCase):
         self.assertEqual(
             len(self.review_calls), 1, "the checker does not review its own verdict"
         )
-
-    # ---- the review budget: one decision per file per turn ---------------
 
     def test_a_second_small_edit_to_a_reviewed_file_rides_the_verdict(self):
         self.enable()

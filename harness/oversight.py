@@ -26,24 +26,19 @@ from . import instructions, providers
 from . import shellrisk as shellrisk_mod
 from .llm import call_llm
 
-# What the reviewer model may answer. "error" is engine-generated (a reviewer
-# that never answered) and deliberately absent: parse_verdict rejects it from a
-# model exactly like any other word it was not offered.
 MODEL_VERDICTS = ("approve", "revise", "clarify", "escalate")
-# Every verdict a Verdict object can carry, engine-generated ones included.
+
 VERDICTS = MODEL_VERDICTS + ("error",)
 
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
-# Only these tool calls are ever treated as decisions worth reviewing; a read
-# (read_file, read_skill) or a todo bookkeeping call is not a decision.
+
 REVIEWABLE = ("write_file", "str_replace", "bash")
 
-# A focused follow-up edit: combined old+new text under this many chars on a
-# file the session has already edited is routine work, not a fresh decision.
+
 SMALL_EDIT_CHARS = 2000
 
-# How much gets reviewed at each intensity, as the minimum command risk.
+
 _MIN_RISK_BY_INTENSITY = {"low": "high", "medium": "medium", "high": "low"}
 
 
@@ -331,7 +326,7 @@ def review(
     try:
         with providers.use(checker_model_id):
             message, usage = call_llm(messages, tools=[], cancel=cancel)
-    except Exception as failure:  # noqa: BLE001 - a failed review is a verdict, not a crash
+    except Exception as failure:  # noqa: BLE001
         return Verdict("error", error=f"{type(failure).__name__}: {failure}"), zero
     return parse_verdict(message.content), dict(usage)
 

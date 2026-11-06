@@ -85,9 +85,7 @@ class SwitchCase(unittest.TestCase):
         self.backend = server.Harness()
         self.sent = []
         self.backend.attach(self.sent.append)
-        # Set by note_session() when a SESSION event carries an id. Initialised
-        # so a missing id fails with the message below instead of an
-        # AttributeError before the intended assertion can even run.
+
         self.sid = None
 
     def dispatch(self, **obj):
@@ -153,8 +151,7 @@ class SwitchCase(unittest.TestCase):
             self.assertTrue(self.done(kind="session"))
             self.note_session()
             self.submit("fix the bug")
-            # The real id is emitted by the submit's materialise (a draft open
-            # carries id=None since empty tabs no longer materialise).
+
             self.note_session()
 
         failures = self.events_of(events.ERROR)
@@ -202,11 +199,10 @@ class SwitchCase(unittest.TestCase):
             self.dispatch(op="submit", session="s", text="long task", mode="build")
             self.assertTrue(started.wait(5))
 
-            # The user switches models while the first request is in flight.
             self.dispatch(op="set_active", session="s", id="mdl-b")
             release.set()
             self.assertTrue(self.done())
-            self.note_session()  # the id from this submit's materialise
+            self.note_session()
 
         assistant = [m for m in self.session_messages() if m.get("role") == "assistant"]
         self.assertEqual(assistant, [], "an abandoned generation is not appended")
@@ -214,7 +210,6 @@ class SwitchCase(unittest.TestCase):
             self.backend.sessions["s"].running, "the session must not stay stuck busy"
         )
 
-        # a fresh turn then uses the model the user chose
         self.clear_sent()
         with mock.patch(
             "harness.agent.call_llm", return_value=(message("fresh"), USAGE)

@@ -1,5 +1,5 @@
-/* Python sidecar: picks a port, runs `harness.server`, keeps its output in a
-log file and kills the whole process tree on exit. */
+
+
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -25,7 +25,7 @@ impl Sidecar {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            // The interpreter is a grandchild of `uv`, so kill the tree.
+
             let _ = Command::new("taskkill")
                 .args(["/PID", &self.child.id().to_string(), "/T", "/F"])
                 .stdout(Stdio::null())
@@ -109,9 +109,9 @@ fn backend_args(port: u16, project_root: &Path, data_dir: &Path, auth_token: &st
     ]
 }
 
-/* One-time token for the loopback socket: 128 bits from the OS. A browser
-page can open a websocket to 127.0.0.1 but cannot know this, so the sidecar
-only talks to the shell that spawned it. */
+
+
+
 pub fn new_token() -> String {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("OS entropy for the sidecar auth token");

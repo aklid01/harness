@@ -58,24 +58,19 @@ class Session:
         self._seq = 0
         self._submissions: dict = {}
         self._workers: list = []
-        # The session's sticky mode: what a plain message runs as. "build" is
-        # the default; /plan, /ask and the mode chip change it, /build clears
-        # it. A per-turn /plan or /ask never lands here.
+
         self.mode = "build"
-        self.perms = "default"  # permission policy: default/strict/...
-        self._mode_ref = permissions_mod.mode_ref(
-            self.perms
-        )  # live, changeable mid-turn
+        self.perms = "default"
+        self._mode_ref = permissions_mod.mode_ref(self.perms)
         self.effort = "default"
         self.active_provider: str | None = None
         self.mailbox = Mailbox()
         self.mailbox.on_change = self._notify_pending
-        self.review_cancel = None  # set while a review is running
+        self.review_cancel = None
 
     def _notify_pending(self, items):
         self.on_event(events.PENDING, {"items": items})
 
-    # ---- transport ----
     def _send(self, body):
         body = dict(body)
         body["session"] = self.key
@@ -83,8 +78,6 @@ class Session:
             self.backend.send(body)
             self._send_failures = 0
         except Exception as failure:
-            # The socket is the only channel, so a failing send cannot be
-            # reported on it; the sidecar log is where this stays visible.
             self._send_failures += 1
             if self._send_failures == 1 or self._send_failures % 100 == 0:
                 log.warning(
@@ -123,7 +116,6 @@ class Session:
         gate.set()
         return True
 
-    # ---- per-session context for worker threads ----
     @contextlib.contextmanager
     def bound(self):
         with contextlib.ExitStack() as stack:
@@ -135,8 +127,7 @@ class Session:
             stack.enter_context(
                 session_mod.scoped(self.root, self.session_id, self.written)
             )
-            # The plan list is per session: inherit the ambient list at bind
-            # time, then diverge, so concurrent tabs never cross writes.
+
             stack.enter_context(todos_mod.scoped())
             yield
 
@@ -151,8 +142,6 @@ class Session:
     def ensure_runner(self):
         from .agent import Runner
 
-        # The runner's sticky mode follows the session; its per-turn mode is
-        # stamped by handle_input (a command, the sticky, or the default).
         sticky = self.mode if self.mode in ("plan", "ask") else None
         if self.runner is None:
             self.runner = Runner(stream=True, cancel_event=self.cancel, mode=self.mode)
@@ -180,8 +169,7 @@ class Session:
                     )
             if self.runner is not None:
                 self.runner.sticky_mode = None if mode == "build" else mode
-                # A draft tab has no history yet: its identity prompt should
-                # follow the mode it will start in.
+
                 if (
                     len(self.runner.messages) == 1
                     and self.runner.messages[0].get("role") == "system"
@@ -232,7 +220,6 @@ class Session:
             except RuntimeError:
                 continue
 
-    # ---- actions ----
     def stop(self):
         self.cancel.set()
 
@@ -264,7 +251,7 @@ class Session:
                 return False
             self.running = True
         self.cancel.clear()
-        # A new run supersedes a review that is still going: the card says so.
+
         self.cancel_review()
         self._thread(self._turn, text, None, self._keep_attachments(attachments))
         return True
@@ -371,15 +358,9 @@ class Session:
     def _turn(self, text, via=None, attachments=None):
         crashed = None
         try:
-            # Materialise INSIDE the try: a failing first prompt (read-only
-            # sessions dir, full disk, AV lock) must surface as an error card
-            # and a done event, not a thread that dies before `running` is ever
-            # cleared - that wedged the tab on "already running" forever.
             new_id = self._materialise()
             with self.bound():
                 if new_id:
-                    # Tell the frontend which session this tab now owns, so the
-                    # tab, the sidebar and the stored metadata all agree.
                     self.on_event(
                         events.SESSION,
                         {
@@ -394,11 +375,9 @@ class Session:
                 self.ensure_runner()
                 self.runner.mailbox = self.mailbox
                 self.runner.handle_input(text, via=via, attachments=attachments)
-                # Keep the append cursor in step with what was just written.
-                # Losing it made the next turn re-save the whole prefix, which
-                # is how a transcript ended up holding its opening turn twice.
+
                 self.written = session_mod.written()
-        except Exception as failure:  # noqa: BLE001 - report, don't kill the session
+        except Exception as failure:  # noqa: BLE001
             crashed = failure
             self.on_event(
                 events.ERROR, {"text": f"{type(failure).__name__}: {failure}"}
@@ -447,8 +426,6 @@ class Session:
     def open_chat(self, session_id):
         with self.lock:
             if self.running:
-                # Opening swaps session_id/written/runner; doing that under a
-                # running turn desynced the append cursor and dropped turns.
                 self.on_event(
                     events.NOTE,
                     {"text": "a turn is running - open the session after it finishes"},
@@ -465,19 +442,12 @@ class Session:
                 history.strip(messages)
                 self.session_id = session_mod.current_id()
                 self.written = session_mod.written()
-                # The session comes back in the mode it was left in.
+
                 self.mode = session_mod.sticky_mode(self.session_id) or "build"
                 self.runner = self._new_runner()
                 self.runner.messages = messages
                 label = "opened"
             else:
-                # Nothing to open: no id at all (a workspace with no sessions
-                # yet), or an id whose file is gone (a session deleted while a
-                # tab still remembered it). Stay a draft and write nothing - a
-                # session file belongs to the first prompt. This branch used to
-                # materialise an empty session, which is how unused "New
-                # Session" rows appeared in the sidebar and came back on every
-                # restart.
                 self.session_id = None
                 self.written = 0
                 self.runner = self._new_runner()
@@ -526,9 +496,7 @@ class Session:
                     count = max(0, min(int(count), len(self.runner.messages)))
                 except (TypeError, ValueError):
                     count = len(self.runner.messages)
-                # The message being replaced keeps its files: a resend of a
-                # message that carried attachments carries them again. Files
-                # attached to the resend itself join them.
+
                 carried = []
                 if 0 <= count < len(self.runner.messages):
                     carried = self.runner.messages[count].get("attachments") or []
@@ -616,7 +584,7 @@ class Session:
                 self.runner.mailbox = self.mailbox
                 self.runner.run_plan_handoff(plan_text, task)
                 self.written = session_mod.written()
-        except Exception as failure:  # noqa: BLE001 - report, don't kill the session
+        except Exception as failure:  # noqa: BLE001
             crashed = failure
             self.on_event(
                 events.ERROR, {"text": f"{type(failure).__name__}: {failure}"}
@@ -628,13 +596,8 @@ class Session:
             if self.running:
                 return False, None
             if not self.session_id:
-                # A tab that never opened a session has nothing to rewind, and
-                # the code below would otherwise touch path_for(None) and kill
-                # the shared socket.
                 return False, None
-            # Claim the running flag for the whole mutation: a submit slipping
-            # in between the old check and the rewind ran a turn concurrently
-            # with the truncation.
+
             self.running = True
         try:
             count = max(0, int(count))
@@ -679,8 +642,6 @@ class Session:
     def list_sessions(self):
         with self.bound():
             return session_mod.all_sessions()
-
-    # ---- multi-model review ----
 
     def _review_request(self, args):
         """The hook the agent calls to start, or offer, a review."""
@@ -744,20 +705,16 @@ class Session:
         if mode == "base" and not base:
             mode, base = review_scope.parse_scope("base:main")
 
-        # A new review supersedes the one that is running: the card says so.
         self.cancel_review()
 
         cancel = threading.Event()
         self.review_cancel = cancel
-        # A brand-new tab has no session until something is sent. A review
-        # needs one to save its report against, so create it now.
+
         if not self.session_id:
             self._materialise()
         session_id = self.session_id or ""
         root = self.root
-        # The caller may name the files to review: the automatic review names
-        # the files THIS turn changed, while a review the user asked for
-        # covers everything the agent has changed in this session.
+
         named = args.get("paths")
         if named is not None:
             only_paths = [str(item) for item in named]
@@ -797,13 +754,12 @@ class Session:
                         triggered_by=triggered_by,
                     )
                     if want_json and document:
-                        # The script mode: the structured report, as JSON.
                         from .review import report as review_report
 
                         self.on_event(
                             events.NOTE, {"text": review_report.as_json(document)}
                         )
-            except Exception as failure:  # noqa: BLE001 - the agent must not see this
+            except Exception as failure:  # noqa: BLE001
                 self.on_event(
                     events.REVIEW,
                     {
@@ -925,9 +881,7 @@ class Session:
                     if name and not session_mod.get_title(self.session_id):
                         session_mod.set_title(self.session_id, name)
                         self.on_event("sessions_updated", {})
-            except Exception as failure:  # noqa: BLE001 - titles are best effort
-                # Best effort does not mean invisible: the failure goes to the
-                # transcript as a note, like the other background paths report.
+            except Exception as failure:  # noqa: BLE001
                 self.on_event(
                     events.NOTE,
                     {
@@ -983,8 +937,6 @@ class Harness:
         if op in ("approval_reply", "pick_reply"):
             s = self.sessions.get(key) if key else None
             if op == "approval_reply":
-                # A plan review answers three ways: allow, or choice "skip"
-                # (build without the plan), or a plain deny (cancel).
                 result = obj.get("choice") or obj.get("allow")
             else:
                 result = obj.get("index")
@@ -1076,9 +1028,7 @@ class Harness:
         if op == "set_mode":
             return _reply({"reply": op, "ok": s.set_mode(obj.get("mode", "build"))})
         if op == "plan_action":
-            return _reply(
-                {"reply": op, "ok": s.plan_action(obj.get("action", ""))}
-            )
+            return _reply({"reply": op, "ok": s.plan_action(obj.get("action", ""))})
         if op == "list_sessions":
             return _reply({"reply": op, "ok": True, "data": s.list_sessions()})
         if op == "get_transcript":
@@ -1106,8 +1056,7 @@ class Harness:
             with s.workspace():
                 session_mod.delete_session(sid)
             checkpoints.delete(sid)
-            # The staged files go with the session: they are its files, and
-            # nothing else may reach them.
+
             attachments_mod.cleanup_session(sid, s.root)
             s.on_event("sessions_updated", {})
             return _reply({"reply": op, "ok": True})
@@ -1189,16 +1138,13 @@ class Harness:
                     }
                 )
             s.perms = mode
-            # Live: a turn already running will honour this on its next
-            # permission check, so the user can relax or tighten mid-work.
+
             s._mode_ref.value = mode
             return _reply({"reply": op, "ok": True})
         if op == "set_active":
             ok = providers_mod.set_active(obj.get("id"))
             if ok:
                 if s.running:
-                    # Abandon the generation in flight instead of letting the
-                    # rest of the turn keep writing on a model the user left.
                     s.stop()
                     s.on_event(
                         events.NOTE,
@@ -1250,9 +1196,6 @@ class Harness:
         if op == "review_start":
             from .review import command as review_command
 
-            # The card sends its own preset plus top-level overrides; only
-            # keys of the shared request shape survive, anything else the
-            # renderer adds is dropped rather than passed on blind.
             preset = obj.get("args") or {}
             args = review_command.new_args(
                 scope=preset.get("scope") or "run",
@@ -1329,15 +1272,13 @@ class Harness:
         if op == "set_agents":
             try:
                 stored = agents_mod.save(obj.get("config") or {})
-            except Exception as failure:  # noqa: BLE001 - report, never crash the UI
+            except Exception as failure:  # noqa: BLE001
                 return {
                     "reply": op,
                     "ok": False,
                     "error": f"{type(failure).__name__}: {failure}",
                 }
-            # Saved config is ambient: every session reads it fresh at its next
-            # turn, so nothing needs to be pushed here. A running turn is left
-            # alone - switching an agent mid-response would desync its plan.
+
             return {"reply": op, "ok": True, "data": stored}
         return {"reply": op, "ok": False, "error": "unknown op"}
 
@@ -1364,15 +1305,12 @@ class Harness:
             try:
                 stored = providers_mod.save_provider(entry)
             except ValueError as conflict:
-                # A duplicate model id is a user mistake, not a crash: report it
-                # so the form can point at the field instead of dying.
                 return {"reply": op, "ok": False, "error": str(conflict)}
             if obj.get("key"):
                 providers_mod.set_key(stored["id"], obj["key"])
             if not providers_mod.get_active_model_id():
                 providers_mod.set_active(stored["id"])
-            # Backstop auto-config: fill whatever the form left empty from the
-            # provider's /models endpoint. Best effort; never blocks the save.
+
             info = providers_mod.autoconfigure_from_models(stored["id"])
             return {
                 "reply": op,
@@ -1428,12 +1366,6 @@ async def serve(host="127.0.0.1", port=8765, auth_token=None):
         send_failures = 0
 
         if auth_token:
-            # The loopback socket would otherwise answer any local process -
-            # or any web page, which may open websockets to 127.0.0.1. The
-            # shell that spawned us knows a one-time token; until a connection
-            # presents it, nothing is sent and no op is dispatched. A wrong
-            # token is closed silently: with 128 bits there is nothing to
-            # guess and no oracle to help a guesser.
             try:
                 first = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
             except (asyncio.TimeoutError, ValueError, OSError):
@@ -1453,10 +1385,7 @@ async def serve(host="127.0.0.1", port=8765, auth_token=None):
                     send_failures = 0
                     return
                 send_failures += 1
-                # The socket is the only channel, so a broken send cannot be
-                # reported on itself. The sidecar log is the one place a dead
-                # transport is still visible; log the first failure and then
-                # every hundredth so a dead socket cannot flood it.
+
                 if send_failures == 1 or send_failures % 100 == 0:
                     log.warning(
                         "transport send failed (%s in a row): %s",
@@ -1484,9 +1413,7 @@ async def serve(host="127.0.0.1", port=8765, auth_token=None):
                 continue
             try:
                 await loop.run_in_executor(None, backend.dispatch, obj)
-            except Exception as failure:  # noqa: BLE001 - one bad op must
-                # never take down the shared socket: every tab loses its
-                # stream and any running turn's output with it.
+            except Exception as failure:  # noqa: BLE001
                 try:
                     await ws.send(
                         json.dumps(
@@ -1538,8 +1465,7 @@ def main(argv=None):
     paths_mod.migrate_sessions()
     config_mod.reload()
     session_mod.migrate_root_sessions()
-    # A half-finished upload from the last run is worthless: nobody can send
-    # it any more, and it must not outlive the process that owned it.
+
     attachments_mod.clear_staging()
     get_backend()
     asyncio.run(serve(args.host, args.port, auth_token=args.auth_token))

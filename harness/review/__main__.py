@@ -140,9 +140,7 @@ def main(argv=None):
     from . import scope as scope_mod
 
     root = Path(args.root).resolve() if args.root else paths.project_root()
-    # Only initialise when nothing is set up yet: re-initialising would
-    # point the app data dir back at the default and lose the saved role
-    # configuration - including the reviewers this run is about to use.
+
     if paths.is_initialized():
         scope_context = paths.rooted(root)
     else:

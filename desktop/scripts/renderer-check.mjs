@@ -1,14 +1,3 @@
-/* End-to-end checks for the failure card, the session library, the
-   workspace list, and the mid-turn steer/queue composer, against two
-   providers: a dead endpoint so the retry backoff and the error card come
-   from the real engine, and a live scripted SSE endpoint so a real turn can
-   run (steer drain, queue chain, reasoning stream).
-
-   Drives the real Tauri renderer over the DevTools Protocol (WebView2 remote
-   debugging). Builds the web assets first, and the debug exe when missing.
-   Writes a pass/fail report to REPORT. WS_ROOT / APP_DATA / CDP_PORT /
-   APP_PORT / REPORT override the defaults.
-*/
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -25,15 +14,6 @@ const APP_PORT = Number(process.env.APP_PORT ?? 8901);
 const REPORT =
   process.env.REPORT ?? path.join(ROOT, "tests", "renderer-check.txt");
 
-/* One scripted endpoint plays every provider, so a single .env key is borrowed
-   by every group (the engine only borrows the plaintext key for an exact
-   base_url match). Requests for the dead model get their socket destroyed,
-   which is exactly the connection error the retry card and error card need.
-   The script is keyed off the model and a per-model counter: the reviewers
-   make blocking calls of their own, and they must not shift the agent's
-   script. For the live model, request 1 reasons then calls read_file, request
-   2 streams slowly (the window where pending strips are edited), request 3+
-   answer fast (the queued turn and the title call). */
 const liveState = {
   requests: [],
   counters: {},
@@ -42,14 +22,10 @@ const liveState = {
   builds: 0,
   server: null,
 };
-/* The content of PLAN-RESULT.md for the approved-plan build: names the plan it
-   implemented, so the transcript and the file can be cross-checked. */
+
 const writePlanResult = (n) =>
   `implemented the approved plan (build ${n}): measured, cached, verified\n`;
 
-/* What each reviewer answers with. Two of them raise the same security
-   finding, so the merged report can show that they agree; the third answers
-   with prose, which is what a model that failed looks like. */
 const REVIEW_REPLIES = {
   "review-model-a": {
     findings: [
@@ -72,7 +48,8 @@ const REVIEW_REPLIES = {
         severity: "high",
         file: "README.md",
         line: 2,
-        summary: "The second line of the readme leaks what looks like an internal token.",
+        summary:
+          "The second line of the readme leaks what looks like an internal token.",
         why: "The line is world-readable and reads like a credential.",
         fix: "Take the token out of README.md and rotate it.",
         confidence: "high",
@@ -92,9 +69,6 @@ const REVIEW_REPLIES = {
   "review-model-broken": "I could not do that.",
 };
 
-/* The two files the writer model edits, so a review has a diff to read. The
-   revision keeps every write a real change: a file written with the same
-   bytes would leave an empty diff and the review would find nothing. */
 const writeFixture = (revision) => ({
   "README.md":
     "Throwaway workspace for the renderer check.\n" +
@@ -106,8 +80,6 @@ const writeFixture = (revision) => ({
 });
 function startLiveFixture() {
   const server = http.createServer((req, res) => {
-    /* The /models lookup for the auto-configuration scenarios: live-model gets
-       OpenRouter-style metadata, writer-model the Groq-style context_window. */
     if (req.method === "GET" && (req.url ?? "").endsWith("/models")) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
@@ -159,11 +131,8 @@ function startLiveFixture() {
       const n = (liveState.counters[model] =
         (liveState.counters[model] || 0) + 1);
       if (!payload.stream) {
-        // A blocking call: every reviewer, and the title helper.
         let content = REVIEW_REPLIES[model];
         if (!content && model === "writer-model") {
-          // Name the session after what it was asked, so the sidebar can
-          // tell the review sessions apart.
           const ask = (payload.messages || []).find((m) => m.role === "user");
           const raw = String(ask?.content ?? "");
           content = raw.includes(": ")
@@ -199,21 +168,19 @@ function startLiveFixture() {
       const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
       const usage = { prompt_tokens: 10, completion_tokens: 20 };
       if (model === "live-model") {
-        // The plan-or-proceed stages, keyed on what the conversation already
-        // contains so they never disturb the counter-based stages below.
         const messages = payload.messages || [];
         const history = messages.map((m) => String(m.content ?? "")).join("\n");
         const ask = messages
           .filter((m) => m.role === "user")
           .map((m) => String(m.content ?? ""))
           .join("\n");
-        const lastContent = String(messages[messages.length - 1]?.content ?? "");
+        const lastContent = String(
+          messages[messages.length - 1]?.content ?? "",
+        );
         const toolNames = messages.flatMap((m) =>
           (m.tool_calls ?? []).map((c) => c.function?.name ?? ""),
         );
         if (lastContent.includes("Plan mode:")) {
-          // A read-only plan turn (explicit /plan, or a converted one):
-          // answer with the plan itself.
           send({
             choices: [
               {
@@ -232,8 +199,11 @@ function startLiveFixture() {
           res.end();
           return;
         }
-        if (ask.includes("make the app faster") && !toolNames.includes("plan_decision") && !history.includes("<plan>")) {
-          // Ambiguous: the model enters plan mode with a reason.
+        if (
+          ask.includes("make the app faster") &&
+          !toolNames.includes("plan_decision") &&
+          !history.includes("<plan>")
+        ) {
           send({
             choices: [
               {
@@ -272,13 +242,18 @@ function startLiveFixture() {
               },
             ],
           });
-          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({
+            choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+          });
           send({ choices: [], usage });
           res.write("data: [DONE]\n\n");
           res.end();
           return;
         }
-        if (history.includes("Entering plan mode") && !history.includes("PLAN:")) {
+        if (
+          history.includes("Entering plan mode") &&
+          !history.includes("PLAN:")
+        ) {
           send({
             choices: [
               {
@@ -298,7 +273,6 @@ function startLiveFixture() {
           return;
         }
         if (history.includes("<plan>") && history.includes("PLAN-RESULT.md")) {
-          // The plan build already wrote its file: finish in words.
           send({
             choices: [
               {
@@ -317,7 +291,6 @@ function startLiveFixture() {
           return;
         }
         if (history.includes("<plan>")) {
-          // The approved handoff: exactly one build with the plan as context.
           liveState.planBuilds += 1;
           const files = writePlanResult(liveState.planBuilds);
           send({
@@ -358,14 +331,15 @@ function startLiveFixture() {
               },
             ],
           });
-          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({
+            choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+          });
           send({ choices: [], usage });
           res.write("data: [DONE]\n\n");
           res.end();
           return;
         }
         if (ask.includes("make the app faster") && history.includes("PLAN:")) {
-          // Skip planning and build now: no handoff message, answer in words.
           send({
             choices: [
               {
@@ -383,8 +357,10 @@ function startLiveFixture() {
           res.end();
           return;
         }
-        if (ask.includes("rename the foo function to bar everywhere") && !toolNames.includes("plan_decision")) {
-          // Directive: the model answers the decision gate with build.
+        if (
+          ask.includes("rename the foo function to bar everywhere") &&
+          !toolNames.includes("plan_decision")
+        ) {
           send({
             choices: [
               {
@@ -420,14 +396,18 @@ function startLiveFixture() {
               },
             ],
           });
-          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({
+            choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+          });
           send({ choices: [], usage });
           res.write("data: [DONE]\n\n");
           res.end();
           return;
         }
-        if (history.includes("Proceeding as build.") && history.includes("FACTS.md")) {
-          // The build already wrote its file: finish in words.
+        if (
+          history.includes("Proceeding as build.") &&
+          history.includes("FACTS.md")
+        ) {
           send({
             choices: [
               {
@@ -446,7 +426,6 @@ function startLiveFixture() {
           return;
         }
         if (history.includes("Proceeding as build.")) {
-          // The build decision: one write lands.
           liveState.builds += 1;
           send({
             choices: [
@@ -486,7 +465,9 @@ function startLiveFixture() {
               },
             ],
           });
-          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({
+            choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+          });
           send({ choices: [], usage });
           res.write("data: [DONE]\n\n");
           res.end();
@@ -494,10 +475,6 @@ function startLiveFixture() {
         }
       }
       if (model === "writer-model") {
-        // The writer edits the workspace once per turn: the tool result ends
-        // the turn, so the model only answers in words after that. The last
-        // message of a request is the engine's own injection, so the ask is
-        // looked for in the whole history.
         const messages = payload.messages || [];
         const alreadyWrote = messages.some((m) =>
           (m.tool_calls ?? []).some((c) => c.function?.name === "write_file"),
@@ -561,7 +538,9 @@ function startLiveFixture() {
               },
             ],
           });
-          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({
+            choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+          });
           send({ choices: [], usage });
           res.write("data: [DONE]\n\n");
           res.end();
@@ -571,7 +550,10 @@ function startLiveFixture() {
           choices: [
             {
               index: 0,
-              delta: { role: "assistant", content: "The fixture files are written." },
+              delta: {
+                role: "assistant",
+                content: "The fixture files are written.",
+              },
             },
           ],
         });
@@ -588,7 +570,8 @@ function startLiveFixture() {
               index: 0,
               delta: {
                 role: "assistant",
-                reasoning_content: "Let me look at the workspace before acting.",
+                reasoning_content:
+                  "Let me look at the workspace before acting.",
               },
             },
           ],
@@ -630,7 +613,9 @@ function startLiveFixture() {
               },
             ],
           });
-          send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({
+            choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+          });
           send({ choices: [], usage });
           res.write("data: [DONE]\n\n");
           res.end();
@@ -657,7 +642,10 @@ function startLiveFixture() {
       } else {
         send({
           choices: [
-            { index: 0, delta: { role: "assistant", content: "queued turn complete" } },
+            {
+              index: 0,
+              delta: { role: "assistant", content: "queued turn complete" },
+            },
           ],
         });
         send({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
@@ -676,8 +664,7 @@ function startLiveFixture() {
 }
 
 const lines = [];
-/* The report is read wherever it lands, so keep it ASCII: the card text uses
-   typographic characters that survive a console but not a plain-text diff. */
+
 const plain = (text) =>
   text
     .replace(/·/g, "-")
@@ -895,9 +882,7 @@ async function pageTarget() {
         (t) => t.type === "page" && t.webSocketDebuggerUrl,
       );
       if (page) return page;
-    } catch {
-      /* not listening yet */
-    }
+    } catch {}
     await sleep(500);
   }
   return null;
@@ -916,13 +901,16 @@ const EXE = path.join(
 );
 
 function buildIfNeeded() {
-  const web = spawnSync(process.execPath, [path.join(ROOT, "desktop", "scripts", "build-web.mjs")], {
-    cwd: path.join(ROOT, "desktop"),
-    stdio: "inherit",
-  });
+  const web = spawnSync(
+    process.execPath,
+    [path.join(ROOT, "desktop", "scripts", "build-web.mjs")],
+    {
+      cwd: path.join(ROOT, "desktop"),
+      stdio: "inherit",
+    },
+  );
   if (web.status !== 0) throw new Error("build:web failed");
-  // frontendDist is embedded into the exe at build time, so an existing exe
-  // can be stale. cargo build is incremental, so always run it.
+
   const built = spawnSync("cargo", ["build"], {
     cwd: path.join(ROOT, "desktop", "src-tauri"),
     stdio: "inherit",
@@ -937,17 +925,15 @@ const child = spawn(EXE, [], {
   env: (() => {
     const env = { ...process.env };
     env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${CDP_PORT}`;
-    // A dedicated WebView2 profile: the real one carries the user's panel
-    // prefs and localStorage, which leaked straight into the verdicts.
+
     env.WEBVIEW2_USER_DATA_FOLDER = path.join(TMP, "webview2");
-    // Shell state (recents, last workspace) and engine data both isolated.
+
     env.HARNESS_DATA_ROOT = APP_DATA;
     env.HARNESS_PORT = String(APP_PORT);
     env.HARNESS_PROJECT_ROOT = WS_ROOT;
     env.HARNESS_APP_DATA = APP_DATA;
     env.HARNESS_SESSIONS_ROOT = path.join(TMP, "sessions");
-    // A small per-file limit, so the check can drive a refused upload
-    // without moving megabytes around.
+
     env.HARNESS_MAX_ATTACHMENT_BYTES = "2048";
     return env;
   })(),
@@ -959,8 +945,7 @@ const verdict = (name, ok, detail = "") => {
   results.push({ name, ok });
   say(`VERDICT ${name}: ${ok}${detail ? ` (${detail})` : ""}`);
 };
-/* Type into the composer without sending: fires the input event so drafts,
-   autogrow and the slash-command autocomplete all react. */
+
 const typeEntry = (ws, text) =>
   evaluate(
     ws,
@@ -982,7 +967,7 @@ const submit = (ws, text) =>
   return true;
 })()`,
   );
-/* Every transcript the engine saved, as messages. */
+
 const transcriptMessages = () => {
   const out = [];
   const walk = (dir) => {
@@ -1009,9 +994,7 @@ const transcriptMessages = () => {
         if (!line.trim()) continue;
         try {
           out.push(JSON.parse(line));
-        } catch {
-          /* a half-written line */
-        }
+        } catch {}
       }
     }
   };
@@ -1057,8 +1040,6 @@ try {
     });
   });
 
-  // Capture page exceptions so a runtime error shows up in the report
-  // instead of leaving a verdict whose only symptom is a missing element.
   const jsErrors = [];
   await rpc(ws, "Runtime.enable");
   ws.addEventListener("message", (raw) => {
@@ -1082,14 +1063,11 @@ try {
       ws,
       `document.getElementById("connText")?.textContent ?? ""`,
     );
-    // startsWith, not includes: "disconnected - retrying..." contains the
-    // substring "connected" and broke the wait on the first poll, so the
-    // first submit fired before the socket was up and was dropped silently.
+
     if (String(state).startsWith("connected")) break;
     await sleep(500);
   }
 
-  /* Item 6: the plan/context panel is closed by default. */
   const panel = await evaluate(
     ws,
     `({
@@ -1103,8 +1081,6 @@ try {
     JSON.stringify(panel),
   );
 
-  /* Item 7: the workflow selector is gone; the composer offers the slash
-     commands instead, with /plan, /ask and /build in the autocomplete. */
   const selectorState = await evaluate(
     ws,
     `(() => ({
@@ -1115,7 +1091,9 @@ try {
   );
   verdict(
     "no-mode-selector-in-the-ui",
-    selectorState.selectorGone && selectorState.chipHidden && selectorState.statusModeEmpty,
+    selectorState.selectorGone &&
+      selectorState.chipHidden &&
+      selectorState.statusModeEmpty,
     JSON.stringify(selectorState),
   );
   await typeEntry(ws, "/");
@@ -1150,7 +1128,10 @@ try {
     `document.getElementById("entry").dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }))`,
   );
   await sleep(200);
-  const completed = await evaluate(ws, `document.getElementById("entry").value`);
+  const completed = await evaluate(
+    ws,
+    `document.getElementById("entry").value`,
+  );
   verdict(
     "slash-autocomplete-filters-and-completes",
     cmdFiltered.names.length === 1 &&
@@ -1160,9 +1141,6 @@ try {
   );
   await typeEntry(ws, "");
 
-  /* The Storage tab is driven entirely by the Tauri shell's IPC commands, so
-     it is checked before the turns: it must pass even when the engine never
-     starts. */
   await evaluate(ws, `document.getElementById("btnSettings")?.click()`);
   await sleep(400);
   await evaluate(
@@ -1203,10 +1181,6 @@ try {
   );
   await sleep(300);
 
-  /* Two turns against the dead endpoint: the first one fails hard, the second
-     runs in a second session, so there is something to switch between. The
-     final error card lands only after the retry schedule is spent (3+5+15+
-     20+30s), so the poll has to span all of it. */
   await submit(ws, "first turn");
 
   let ticks = [];
@@ -1223,8 +1197,7 @@ try {
   }
   const ticked = new Set(ticks).size >= 2;
   verdict("retry-card-ticks", ticked, JSON.stringify(ticks.slice(-2)));
-  // Isolation guard: the error card must name the fixture's dead provider.
-  // Anything else means the renderer dialed a sidecar that is not ours.
+
   verdict(
     "engine-is-the-fixture",
     final.errors.some((e) => e.includes("Dead Local")),
@@ -1241,8 +1214,6 @@ try {
     JSON.stringify(final.hints),
   );
 
-  /* Shared helpers: the sidebar rows, the tab labels, a new session in a new
-     tab, and a right-click row that can be renamed or deleted. */
   const tabLabels = () =>
     evaluate(
       ws,
@@ -1289,8 +1260,6 @@ try {
 
   await newSession("second turn");
 
-  /* Item 2: the failure outlives switching sessions. Switch to the other tab
-     and back to the one that failed. */
   const firstLabel = (await tabLabels())[0] ?? "";
   const secondLabel = (await tabLabels()).find((l) => l !== firstLabel) ?? "";
   await evaluate(
@@ -1321,7 +1290,6 @@ try {
     `other=${awayFrom.errors.length} back=${afterSwitch.errors.length}`,
   );
 
-  /* ---- steer / queue / thinking against the live scripted endpoint ---- */
   const waitFor = async (expr, timeout = 30000, poll = 200) => {
     const limit = Date.now() + timeout;
     let last;
@@ -1346,7 +1314,7 @@ try {
 
   await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
   await sleep(500);
-  // The live model exposes reasoning, so the thinking control appears for it.
+
   await evaluate(ws, `document.getElementById("providerBtn")?.click()`);
   await sleep(200);
   const pickedLive = await evaluate(
@@ -1374,9 +1342,6 @@ try {
     JSON.stringify({ pickedLive, ...thinkVisible }),
   );
 
-  // The turn reasons, reads a file, then streams slowly: the window in which
-  // steer/queue are filed and edited. The wait returns only once the reasoning
-  // block exists - an object result is always truthy, so gating matters.
   await submit(ws, "summarize the readme");
   const busyUI = await waitFor(
     `(() => {
@@ -1401,7 +1366,6 @@ try {
     JSON.stringify(busyUI),
   );
 
-  // Steer via the caret menu (explicit per-message choice).
   await typeEntry(ws, "steer mid-turn");
   await evaluate(ws, `document.getElementById("sendExtraCaret")?.click()`);
   await sleep(200);
@@ -1420,11 +1384,12 @@ try {
   const strip1 = await stripState();
   verdict(
     "steer-files-with-a-badge",
-    menuSteer && strip1.visible && strip1.items.some((i) => i.badge === "STEER"),
+    menuSteer &&
+      strip1.visible &&
+      strip1.items.some((i) => i.badge === "STEER"),
     JSON.stringify({ menuSteer, ...strip1 }),
   );
 
-  // Queue via the default action (the extra button itself).
   await typeEntry(ws, "queued work");
   await evaluate(ws, `document.getElementById("sendExtra")?.click()`);
   await sleep(300);
@@ -1436,7 +1401,6 @@ try {
     JSON.stringify(strip2),
   );
 
-  // Edit the queued message before it is sent.
   await evaluate(
     ws,
     `(() => {
@@ -1481,7 +1445,6 @@ try {
   const editLanded = Array.isArray(strip3);
   verdict("pending-edit-updates-the-strip", editLanded, JSON.stringify(strip3));
 
-  // File a third message and remove it again.
   await typeEntry(ws, "remove me");
   await evaluate(ws, `document.getElementById("sendExtra")?.click()`);
   const strip4 = await waitFor(
@@ -1507,16 +1470,13 @@ try {
     return !items.includes("remove me") ? items : false;
   })()`,
   );
-  // The steer may already have drained by now (it lands at the tool boundary),
-  // so only the removal itself is asserted: the item is gone, the rest stays.
+
   verdict(
     "pending-remove-drops-the-message",
     Array.isArray(strip5) && strip5.includes("edited queue work"),
     JSON.stringify({ afterFile: strip4, afterRemove: strip5 }),
   );
 
-  // The steer drains at the tool boundary: a user bubble with a steered chip
-  // appears mid-turn and the strip item is gone.
   const steerDrained = await waitFor(
     `(() => {
     const chip = document.querySelector("#chat .via-chip.steer");
@@ -1532,7 +1492,6 @@ try {
     JSON.stringify({ steerDrained, strip: stripAfterDrain }),
   );
 
-  // The thinking toggle hides and restores reasoning blocks in place.
   await evaluate(ws, `document.getElementById("thinkBtn")?.click()`);
   await sleep(200);
   const hiddenNow = await evaluate(
@@ -1557,19 +1516,16 @@ try {
     JSON.stringify({ hiddenNow, shownAgain }),
   );
 
-  // The queued message auto-runs when the turn ends: a user bubble with a
-  // queued chip, then the chain goes idle again.
   const chainIdle = await waitFor(
     `!document.getElementById("promptZone").classList.contains("busy")`,
     30000,
   );
-  // The via chip is wiped by the post-turn transcript re-render, so the
-  // auto-run is judged from the transcript on disk: the queued message, then
-  // its answer.
+
   const queueDisk = (() => {
     const messages = transcriptMessages();
     const at = messages.findIndex(
-      (m) => m.role === "user" && String(m.content ?? "") === "edited queue work",
+      (m) =>
+        m.role === "user" && String(m.content ?? "") === "edited queue work",
     );
     return {
       at,
@@ -1577,7 +1533,9 @@ try {
         at >= 0 &&
         messages
           .slice(at)
-          .some((m) => String(m.content ?? "").includes("queued turn complete")),
+          .some((m) =>
+            String(m.content ?? "").includes("queued turn complete"),
+          ),
     };
   })();
   verdict(
@@ -1586,7 +1544,6 @@ try {
     JSON.stringify({ ...queueDisk, chainIdle }),
   );
 
-  /* ---- attachments: pick, remove, send, and a refused file ---- */
   const attachFiles = (files) =>
     evaluate(
       ws,
@@ -1625,8 +1582,16 @@ try {
     );
 
   await attachFiles([
-    { name: "notes.md", body: "notes the user attached\n", type: "text/markdown" },
-    { name: "data.bin", body: "second file\n", type: "application/octet-stream" },
+    {
+      name: "notes.md",
+      body: "notes the user attached\n",
+      type: "text/markdown",
+    },
+    {
+      name: "data.bin",
+      body: "second file\n",
+      type: "application/octet-stream",
+    },
   ]);
   const picked = await waitFor(
     `(() => {
@@ -1639,12 +1604,15 @@ try {
   verdict(
     "attachment-chips-show-name-type-and-size",
     picked === 2 &&
-      pickedState.bar.some((c) => c.name === "notes.md" && c.meta.includes("md")) &&
-      pickedState.bar.some((c) => c.name === "data.bin" && c.meta.includes("B")),
+      pickedState.bar.some(
+        (c) => c.name === "notes.md" && c.meta.includes("md"),
+      ) &&
+      pickedState.bar.some(
+        (c) => c.name === "data.bin" && c.meta.includes("B"),
+      ),
     JSON.stringify(pickedState.bar),
   );
 
-  // A file can be taken back before it is sent.
   await evaluate(
     ws,
     `(() => {
@@ -1665,10 +1633,12 @@ try {
     JSON.stringify(afterRemove.bar),
   );
 
-  // A file over the per-file limit is refused by name, with the limit. The
-  // file that was fine stays where it is.
   await attachFiles([
-    { name: "huge.bin", body: "x".repeat(4096), type: "application/octet-stream" },
+    {
+      name: "huge.bin",
+      body: "x".repeat(4096),
+      type: "application/octet-stream",
+    },
   ]);
   const refused = await waitFor(
     `(() => {
@@ -1689,7 +1659,6 @@ try {
     JSON.stringify({ refused, bar: refusedState.bar }),
   );
 
-  // The message still goes, with the file that was accepted.
   const beforeSend = liveState.requests.length;
   await typeEntry(ws, "summarize the attached file");
   await evaluate(ws, `document.getElementById("sendstop").click()`);
@@ -1703,18 +1672,18 @@ try {
     20000,
   );
   const overTheWire = await (async () => {
-    // The user bubble lands before the request does, so give the engine a
-    // moment to put the manifest on the wire.
     await sleep(1500);
-    return liveState.requests.slice(beforeSend).some((r) =>
-      (r.messages || []).some(
-        (m) =>
-          m.role === "user" &&
-          typeof m.content === "string" &&
-          m.content.includes("<attachments>") &&
-          m.content.includes("notes.md"),
-      ),
-    );
+    return liveState.requests
+      .slice(beforeSend)
+      .some((r) =>
+        (r.messages || []).some(
+          (m) =>
+            m.role === "user" &&
+            typeof m.content === "string" &&
+            m.content.includes("<attachments>") &&
+            m.content.includes("notes.md"),
+        ),
+      );
   })();
   verdict(
     "attachment-travels-with-the-message",
@@ -1725,8 +1694,6 @@ try {
     JSON.stringify({ sentChip, overTheWire }),
   );
 
-  /* A renamed session takes the new name on its tab at once - the one you
-     renamed from, and any other tab that has it open. */
   const labelsBefore = await tabLabels();
   const activeRow = await evaluate(
     ws,
@@ -1761,8 +1728,6 @@ try {
     verdict("rename-updates-any-open-tab", false, "no second tab to rename");
   }
 
-  /* Item 5: the deleted session leaves the list immediately. It runs after the
-     rename checks because deleting a session closes its tab. */
   const rowsBefore = await sessionRows(ws);
   if (rowsBefore.length >= 2) {
     await renameRow(rowsBefore[rowsBefore.length - 1]);
@@ -1799,8 +1764,7 @@ try {
       "no session rows to delete",
     );
   }
-  /* Items 1 + 4: with every tab closed, sessions are still deletable, and the
-     workspace itself can be removed from the list. */
+
   for (let i = 0; i < 5; i++) {
     const closed = await evaluate(
       ws,
@@ -1842,10 +1806,6 @@ try {
     );
   }
 
-  /* ---- the multi-model review: the card, the settings and the auto-run ---- */
-
-  /* ---- intent: mode chip, slash commands, automatic planning ---- */
-
   const freshTab = async () => {
     await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
     await sleep(500);
@@ -1886,10 +1846,12 @@ try {
     );
     return true;
   };
-  // The composer's busy class is the real turn marker: the activity line
-  // returns to "ready" after every message, busy or not.
+
   const idle = () =>
-    waitFor(`!document.getElementById("promptZone").classList.contains("busy")`, 60000);
+    waitFor(
+      `!document.getElementById("promptZone").classList.contains("busy")`,
+      60000,
+    );
 
   const latestPlanArtifact = () => {
     const plansDir = path.join(TMP, "sessions");
@@ -1909,7 +1871,8 @@ try {
         }
         if (!entry.name.endsWith(".json") || !full.includes("_plans")) continue;
         const stat = fs.statSync(full);
-        if (!newest || stat.mtimeMs > newest.mtime) newest = { full, mtime: stat.mtimeMs };
+        if (!newest || stat.mtimeMs > newest.mtime)
+          newest = { full, mtime: stat.mtimeMs };
       }
     };
     walk(plansDir);
@@ -1920,7 +1883,6 @@ try {
     }
   };
 
-  // A bare /ask is sticky: the chip appears and stays until cleared.
   await freshTab();
   await submit(ws, "/ask");
   await waitFor(
@@ -1950,7 +1912,6 @@ try {
     JSON.stringify(clearedChip),
   );
 
-  // A bare /plan is sticky too, and /build leaves it.
   await freshTab();
   await submit(ws, "/plan");
   await waitFor(
@@ -1972,7 +1933,6 @@ try {
     JSON.stringify(buildChip),
   );
 
-  // A one-turn /ask answers read-only and never sticks.
   await freshTab();
   await submit(ws, "/ask what does the readme say?");
   const researching = await waitFor(
@@ -2012,9 +1972,7 @@ try {
           for (const line of fs.readFileSync(full, "utf-8").split("\n")) {
             if (line.trim()) out.push(JSON.parse(line));
           }
-        } catch {
-          /* a half-written line */
-        }
+        } catch {}
       }
     };
     walk(path.join(TMP, "sessions"));
@@ -2029,8 +1987,7 @@ try {
   verdict(
     "one-turn-ask-runs-read-only-without-sticking",
     oneTurnChip.hidden && askTurns >= 1 && askNotices >= 2,
-    // The live phase pill is wiped by the post-turn transcript re-render, so
-    // the disk evidence (one ask turn, two ask notices) carries the verdict.
+
     JSON.stringify({
       researching: Boolean(researching),
       ...oneTurnChip,
@@ -2040,8 +1997,6 @@ try {
     }),
   );
 
-  // Automatic planning: the model enters plan mode on its own, the chip says
-  // so with its reason, and the gate asks before anything builds.
   await freshTab();
   await submit(ws, "make the app faster");
   const autoChipUp = await waitFor(
@@ -2051,7 +2006,8 @@ try {
   const autoChip = await chip();
   verdict(
     "auto-plan-chip-shows-with-reason",
-    Boolean(autoChipUp) && autoChip.title.includes("several parts could be the bottleneck"),
+    Boolean(autoChipUp) &&
+      autoChip.title.includes("several parts could be the bottleneck"),
     JSON.stringify(autoChip),
   );
   const planShown = await waitFor(
@@ -2063,7 +2019,11 @@ try {
   verdict(
     "auto-plan-gate-asks-before-building",
     Boolean(planShown) && Boolean(gateShown) && !resultBefore,
-    JSON.stringify({ planShown: Boolean(planShown), gateShown: Boolean(gateShown), resultBefore }),
+    JSON.stringify({
+      planShown: Boolean(planShown),
+      gateShown: Boolean(gateShown),
+      resultBefore,
+    }),
   );
   await clickModal("mAllow");
   await idle();
@@ -2071,10 +2031,13 @@ try {
   verdict(
     "auto-plan-approve-builds-exactly-once",
     !resultBefore && resultAfter && liveState.planBuilds === 1,
-    JSON.stringify({ resultBefore, resultAfter, planBuilds: liveState.planBuilds }),
+    JSON.stringify({
+      resultBefore,
+      resultAfter,
+      planBuilds: liveState.planBuilds,
+    }),
   );
 
-  // Skip planning and build now: no handoff, an immediate plain build.
   await freshTab();
   await submit(ws, "make the app faster");
   const skipModal = await waitFor(
@@ -2123,7 +2086,8 @@ try {
         }
         if (!entry.name.endsWith(".jsonl")) continue;
         const stat = fs.statSync(full);
-        if (!newest || stat.mtimeMs > newest.mtime) newest = { full, mtime: stat.mtimeMs };
+        if (!newest || stat.mtimeMs > newest.mtime)
+          newest = { full, mtime: stat.mtimeMs };
       }
     };
     walk(path.join(TMP, "sessions"));
@@ -2143,25 +2107,30 @@ try {
   verdict(
     "auto-plan-skip-builds-now-without-the-plan",
     Boolean(skippedText) && liveState.planBuilds === 1,
-    JSON.stringify({ skippedText: Boolean(skippedText), planBuilds: liveState.planBuilds, ...skipAfter, lastTranscript: lastTranscript.slice(-6) }),
+    JSON.stringify({
+      skippedText: Boolean(skippedText),
+      planBuilds: liveState.planBuilds,
+      ...skipAfter,
+      lastTranscript: lastTranscript.slice(-6),
+    }),
   );
 
-  // Cancel: the plan stays, nothing is built.
   await freshTab();
   await submit(ws, "make the app faster");
   await waitFor(modalUp("mDeny"), 30000);
   await clickModal("mDeny");
   await sleep(1500);
-  // The note is wiped by the transcript re-render; the durable evidence is
-  // the plan artifact (awaiting_user) and the untouched workspace.
+
   const cancelledArtifact = latestPlanArtifact();
   verdict(
     "auto-plan-cancel-builds-nothing",
     cancelledArtifact.phase === "awaiting_user" && liveState.planBuilds === 1,
-    JSON.stringify({ artifact: cancelledArtifact, planBuilds: liveState.planBuilds }),
+    JSON.stringify({
+      artifact: cancelledArtifact,
+      planBuilds: liveState.planBuilds,
+    }),
   );
 
-  // A directive request answers the gate with build and never pauses.
   await freshTab();
   await submit(ws, "rename the foo function to bar everywhere");
   let factsWritten = false;
@@ -2188,8 +2157,6 @@ try {
     }),
   );
 
-  // An explicit /plan runs read-only (no chip: one turn), then offers the
-  // one-action handoff, and approving it builds exactly once.
   await freshTab();
   await submit(ws, "/plan make the app faster");
   await idle();
@@ -2225,11 +2192,14 @@ try {
   verdict(
     "explicit-plan-approve-builds-once",
     explicitBuilt && barGone === null,
-    JSON.stringify({ explicitBuilt, planBuilds: liveState.planBuilds, barGone, before: explicitBarState }),
+    JSON.stringify({
+      explicitBuilt,
+      planBuilds: liveState.planBuilds,
+      barGone,
+      before: explicitBarState,
+    }),
   );
 
-  /* The review card, read in one call: the badge, the per-model rows, the
-     findings and the group headings. */
   const reviewCard = () =>
     evaluate(
       ws,
@@ -2269,7 +2239,6 @@ try {
 })()`,
     );
 
-  /* Wait until the card reaches a state, then read it once. */
   const waitForCard = async (ready, timeout = 60000) => {
     const limit = Date.now() + timeout;
     let card = null;
@@ -2282,12 +2251,8 @@ try {
   };
 
   const toolResults = (messages, want) =>
-    messages.filter(
-      (m) =>
-        m.role === "tool" && want(String(m.content ?? "")),
-    );
+    messages.filter((m) => m.role === "tool" && want(String(m.content ?? "")));
 
-  /* The review settings the engine stored, read from the file it wrote. */
   const savedReview = () => {
     try {
       const raw = JSON.parse(
@@ -2309,7 +2274,6 @@ try {
     return review;
   };
 
-  /* Open Settings on the Review tab. */
   const openReviewTab = async () => {
     await evaluate(
       ws,
@@ -2331,8 +2295,6 @@ try {
     return opened;
   };
 
-  /* Save the review settings from the panel: one row per reviewer, the role
-     switch on, and the auto-run control where the check needs it. */
   const saveReviewSettings = async (modelIds, autoRun = "off") => {
     await openReviewTab();
     const picked = await evaluate(
@@ -2367,8 +2329,7 @@ try {
   return Boolean(sw);
 })()`,
     );
-    /* The auto-run control is not wired to the panel, so the click is made to
-       do what the panel should do: move the selection the save reads. */
+
     const auto = await evaluate(
       ws,
       `(() => {
@@ -2390,8 +2351,6 @@ try {
     return { picked, auto };
   };
 
-  /* A session with the writer model: it edits the workspace, so a review has
-     a diff to read. */
   const writerSession = async (firstMessage) => {
     await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
     await sleep(800);
@@ -2424,7 +2383,6 @@ try {
     return { picked, wrote, idle };
   };
 
-  /* The settings screen: the Review tab has to be there and has to save. */
   const reviewTabOpened = await openReviewTab();
   const reviewPanel = await evaluate(
     ws,
@@ -2492,8 +2450,6 @@ try {
     JSON.stringify(roleSwitch),
   );
 
-  /* A manual review: the card follows the review and merges what the two
-     reviewers said. */
   const sessionA = await writerSession("write the review fixture A");
   verdict(
     "review-session-edits-the-workspace",
@@ -2560,7 +2516,6 @@ try {
     ),
   );
 
-  /* The grouping switch: the same findings, grouped another way. */
   const byCategoryClick = await evaluate(
     ws,
     `(() => {
@@ -2601,7 +2556,6 @@ try {
     JSON.stringify(byFile?.groups),
   );
 
-  /* Dismiss one finding: the engine remembers it and the card says so. */
   const dismissClick = await evaluate(
     ws,
     `(() => {
@@ -2626,8 +2580,6 @@ try {
     ),
   );
 
-  /* Send the findings to the agent: the engine hands them over as a tool
-     result named review_findings. */
   const sendClick = await evaluate(
     ws,
     `(() => {
@@ -2638,7 +2590,10 @@ try {
     return Boolean(btn);
   })()`,
   );
-  await waitFor(`!document.getElementById("promptZone").classList.contains("busy")`, 30000);
+  await waitFor(
+    `!document.getElementById("promptZone").classList.contains("busy")`,
+    30000,
+  );
   const sentTools = await waitFor(
     `(() => {
     const names = [...document.querySelectorAll("#chat .tool .t-name")].map((n) => n.textContent ?? "");
@@ -2669,7 +2624,6 @@ try {
     JSON.stringify(sentTools ?? []),
   );
 
-  /* Apply one finding: a second handover, with that finding only. */
   const applyClick = await evaluate(
     ws,
     `(() => {
@@ -2681,7 +2635,10 @@ try {
     return Boolean(btn);
   })()`,
   );
-  await waitFor(`!document.getElementById("promptZone").classList.contains("busy")`, 30000);
+  await waitFor(
+    `!document.getElementById("promptZone").classList.contains("busy")`,
+    30000,
+  );
   await sleep(1500);
   const applyBodies = toolResults(
     transcriptMessages(),
@@ -2702,7 +2659,6 @@ try {
     JSON.stringify(applyTools),
   );
 
-  /* A reviewer that cannot answer leaves the others' findings in place. */
   await saveReviewSettings(["mdl-ra", "mdl-rbroke"]);
   const partialRerun = await evaluate(
     ws,
@@ -2738,7 +2694,6 @@ try {
     JSON.stringify(partial?.findings),
   );
 
-  /* Only the broken reviewer: the review fails as a whole. */
   await saveReviewSettings(["mdl-rbroke"]);
   const failedRerun = await evaluate(
     ws,
@@ -2759,7 +2714,6 @@ try {
     JSON.stringify({ badge: failed?.badge, detail: failed?.detail }),
   );
 
-  /* Nothing to review: a session that changed no file. */
   await saveReviewSettings(["mdl-ra", "mdl-rb"]);
   await evaluate(ws, `document.querySelector(".tree-new")?.click()`);
   await sleep(800);
@@ -2777,7 +2731,10 @@ try {
   );
   await sleep(400);
   await submit(ws, "nothing to review here");
-  await waitFor(`!document.getElementById("promptZone").classList.contains("busy")`, 30000);
+  await waitFor(
+    `!document.getElementById("promptZone").classList.contains("busy")`,
+    30000,
+  );
   await submit(ws, "/multi-model-review");
   const nothing = await waitForCard((c) => c.badge === "nothing to review");
   verdict(
@@ -2789,7 +2746,6 @@ try {
     }),
   );
 
-  /* Auto-run: the review starts by itself after a run that edited files. */
   const autoSave = await saveReviewSettings(["mdl-ra", "mdl-rb"], "start");
   const sessionB = await writerSession("write the review fixture B");
   const auto = await waitForCard(
@@ -2809,7 +2765,6 @@ try {
     }),
   );
 
-  /* Reopening the session from the sidebar brings the card back with it. */
   const closedTab = await evaluate(
     ws,
     `(() => {
@@ -2893,7 +2848,6 @@ try {
     );
   }
 
-  /* The composer effort menu must offer the new max level. */
   await evaluate(ws, `document.getElementById("effortBtn")?.click()`);
   await sleep(200);
   const effortItems = await evaluate(
@@ -2905,15 +2859,12 @@ try {
     effortItems.includes("max"),
     JSON.stringify(effortItems),
   );
-  await evaluate(ws, `document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))`);
+  await evaluate(
+    ws,
+    `document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))`,
+  );
   await sleep(300);
 
-  /* Settings > Models: /models auto-configuration against the scripted
-     endpoint. First the form prefill (metadata fills the empty fields while
-     the model id is typed), then the save backstop (a model saved without
-     waiting still gets its empty fields filled engine-side). Neither scenario
-     types a key: the fixture's /models needs none, and the engine's .env
-     borrow covers the backstop, so no keyring residue is left behind. */
   await evaluate(ws, `document.getElementById("btnSettings")?.click()`);
   await sleep(400);
   await evaluate(
@@ -2970,8 +2921,7 @@ try {
       /auto-filled from \/models/.test(prefill.note),
     JSON.stringify(prefill),
   );
-  // The user can override the prefill before saving: nothing re-fetches while
-  // the fields keep their values, so an edited window stays as typed.
+
   await evaluate(
     ws,
     `(() => {
@@ -2987,9 +2937,12 @@ try {
     ws,
     `document.getElementById("fCtx")?.value ?? ""`,
   );
-  verdict("models-prefill-is-overridable", overridden === "999", `ctx=${overridden}`);
-  // Back to Settings > Models, then add a second model and save it without
-  // waiting for the prefill: the engine backstop must fill the rest.
+  verdict(
+    "models-prefill-is-overridable",
+    overridden === "999",
+    `ctx=${overridden}`,
+  );
+
   await evaluate(ws, `document.getElementById("fBack")?.click()`);
   await sleep(800);
   await evaluate(ws, `document.getElementById("mAdd")?.click()`);
@@ -3040,7 +2993,9 @@ try {
     "models-backstop-fills-on-save",
     backstop.rowTags.includes("8k ctx") &&
       backstop.statusOk &&
-      /auto-configured from \/models: context window 8192/.test(backstop.status),
+      /auto-configured from \/models: context window 8192/.test(
+        backstop.status,
+      ),
     JSON.stringify(backstop),
   );
 
@@ -3051,14 +3006,12 @@ try {
 } finally {
   try {
     liveState.server?.close();
-  } catch {
-    /* already gone */
-  }
+  } catch {}
   try {
-    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-  } catch {
-    /* already gone */
-  }
+    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+    });
+  } catch {}
   cleanupMine();
   await sleep(300);
 }

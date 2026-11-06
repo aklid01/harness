@@ -129,9 +129,6 @@ def _run_reviewer(reviewer, scope, contexts, redactions, settings, cancel, emit,
     )
 
     try:
-        # A reviewer runs on its own thread, and a thread does not inherit
-        # the workspace root the session bound. Without this, a reviewer
-        # would look for files in the wrong place.
         with paths_mod.rooted(root), providers.use(model_id):
             note(
                 "progress",
@@ -146,10 +143,7 @@ def _run_reviewer(reviewer, scope, contexts, redactions, settings, cancel, emit,
                     return outcome
                 try:
                     message, usage = call_llm(messages, tools=[], cancel=cancel)
-                except Exception as failure:  # noqa: BLE001 - one model's problem
-                    # The transport already retried inside call_llm; a
-                    # failure here is that model being unreachable, not
-                    # a bad reply.
+                except Exception as failure:  # noqa: BLE001
                     outcome.status = "failed"
                     outcome.error = f"{type(failure).__name__}: {failure}"
                     outcome.seconds = time.monotonic() - started
@@ -170,9 +164,6 @@ def _run_reviewer(reviewer, scope, contexts, redactions, settings, cancel, emit,
                     raw = findings_mod.parse(content)
                     break
                 except findings_mod.ReviewFormatError as failure:
-                    # A malformed reply is worth one more try: models
-                    # often wrap their JSON in a sentence on the first
-                    # attempt.
                     last_error = failure
                     if attempt == 0:
                         continue
@@ -193,7 +184,7 @@ def _run_reviewer(reviewer, scope, contexts, redactions, settings, cancel, emit,
             },
         )
         return outcome
-    except Exception as failure:  # noqa: BLE001 - one model's problem
+    except Exception as failure:  # noqa: BLE001
         outcome.status = "failed"
         outcome.error = f"{type(failure).__name__}: {failure}"
         outcome.seconds = time.monotonic() - started
@@ -335,8 +326,6 @@ def run(
         )
 
     if not usable:
-        # Every reviewer the user picked cannot be reached. Say which one and
-        # why, and point at the settings rather than failing quietly.
         names = ", ".join(
             f"{item.get('label') or item.get('model_id')} ({item['reason']})"
             for item in unusable
@@ -442,8 +431,7 @@ def run(
                         status="failed",
                         error=f"{type(failure).__name__}: {failure}",
                     )
-        # The reviewers report in the order the user set them, not in the
-        # order they happened to finish.
+
         outcomes = [
             finished.get(entry.get("model_id") or "")
             for entry in usable

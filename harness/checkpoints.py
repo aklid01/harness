@@ -25,9 +25,7 @@ from . import paths
 
 
 def _dir(session_id) -> Path:
-    # Stored inside the owning workspace's session dir, so identical session
-    # ids in different workspaces never collide (callers run within a bound
-    # workspace context).
+
     return paths.session_dir() / "_checkpoints" / str(session_id)
 
 

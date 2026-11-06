@@ -154,7 +154,7 @@ class ModelCase(unittest.TestCase):
 
         self.assertEqual(len(providers.list_groups()), 1)
         self.assertEqual([m["id"] for m in providers.list_models("grp-1")], ["mdl-b"])
-        # the deleted model was active: the provider's other model takes over
+
         self.assertEqual(providers.get_active_model_id(), "mdl-b")
 
     def test_deleting_last_model_removes_provider_and_key(self):
@@ -212,7 +212,7 @@ class ModelCase(unittest.TestCase):
         providers.set_active("mdl-b")
         self.assertEqual(providers.active_model_params(), {"top_p": 0.9})
         self.assertFalse(providers.active_model_capabilities()["supports_tools"])
-        self.assertEqual(providers.active_context_window(), 128_000)  # unset falls back
+        self.assertEqual(providers.active_context_window(), 128_000)
 
     def test_effort_is_per_model(self):
         providers.save_group(self.group())
@@ -251,7 +251,6 @@ class ModelCase(unittest.TestCase):
         )
         self.assertEqual(providers.get_active_provider_id(), "https://a.example/v1")
 
-        # the first write keeps the original file next to the new one
         providers.set_active(models[1]["id"])
         backup = self.file.with_name("providers.json.bak")
         self.assertTrue(backup.exists())
@@ -313,7 +312,7 @@ class ModelCase(unittest.TestCase):
     def test_migration_report_counts_the_migration_not_the_live_registry(self):
         self.write(LEGACY)
         providers.list_models()
-        providers.set_active(providers.list_models()[1]["id"])  # writes the backup
+        providers.set_active(providers.list_models()[1]["id"])
         first = providers.migration_report()[0]
         self.assertIn(
             "moved 2 legacy entries into 2 model(s) under 2 provider(s)", first
@@ -350,7 +349,7 @@ class ModelCase(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             self.model("mdl-b", "GLM again", "glm-5.3-flash")
         self.assertIn("glm-5.3-flash", str(caught.exception))
-        # the refusal must not have created the second model
+
         self.assertEqual(len(providers.list_models("grp-1")), 1)
 
     def test_the_same_model_id_under_two_providers_is_allowed(self):
@@ -443,7 +442,7 @@ class ModelCase(unittest.TestCase):
                     },
                     "grp-1",
                 )
-            except Exception as failure:  # pragma: no cover - reported below
+            except Exception as failure:
                 errors.append(failure)
 
         threads = [threading.Thread(target=add, args=(i,)) for i in range(8)]

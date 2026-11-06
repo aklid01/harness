@@ -40,7 +40,7 @@ class TurnSpills(unittest.TestCase):
         self.assertTrue(result.startswith(text[: history.CAP]))
         self.assertIn(history.CAPPED, result)
         self.assertNotIn(text, result)
-        # The spill file holds the whole output and is registered for sweep.
+
         spills = history._turn_spills()
         self.assertEqual(len(spills), 1)
         self.assertEqual(spills[0].read_text(encoding="utf-8"), text)
@@ -74,8 +74,7 @@ class Strip(unittest.TestCase):
         self.assertEqual(shrunk, 1)
         self.assertIn(history.TRIMMED, messages[1]["content"])
         self.assertLess(len(messages[1]["content"]), 1000)
-        # Idempotent: the trimmed content carries the marker, so a second
-        # pass leaves it byte-identical.
+
         before = messages[1]["content"]
         self.assertEqual(history.strip(messages), 0)
         self.assertEqual(messages[1]["content"], before)
@@ -95,7 +94,7 @@ class Strip(unittest.TestCase):
             tool_result("a" * 2000),
             user(f"{history.SUMMARY} carried over"),
         ]
-        # Everything up to and including the newest summary is frozen.
+
         self.assertEqual(history.strip(messages), 0)
 
     def test_result_after_the_summary_stubs(self):
@@ -150,14 +149,14 @@ class Prepare(unittest.TestCase):
         request, note = history.prepare(messages, window=200)
         self.assertTrue(note, "the user is told the request was trimmed")
         self.assertIn("left out", note)
-        # The locked prefix is byte-identical.
+
         frozen = history.frozen_prefix_len(messages)
         self.assertEqual(request[:frozen], messages[:frozen])
-        # The live tail never disappears.
+
         self.assertEqual(request[-1], messages[-1])
-        # The stored transcript is untouched: stubs are copies.
+
         self.assertEqual(messages[3]["content"], "t" * 200)
-        # A tool result that survived the trim still follows its asker.
+
         for index, message in enumerate(request):
             if message["role"] == "tool":
                 self.assertTrue(request[index - 1].get("tool_calls"))

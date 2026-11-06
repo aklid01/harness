@@ -304,8 +304,7 @@ class ScopeArguments(unittest.TestCase):
         self.assertEqual(scope.parse_scope(""), ("run", ""))
 
     def test_parse_scope_falls_back_to_run_for_junk(self):
-        # A typo must not widen what is sent to a provider, so the fallback is
-        # the narrowest scope, not an error the caller has to know about.
+
         self.assertEqual(scope.parse_scope("junk"), ("run", ""))
         self.assertEqual(scope.parse_scope("base:"), ("run", ""))
 

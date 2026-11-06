@@ -256,7 +256,7 @@ class EngineCase(unittest.TestCase):
         runner = Runner(mode="plan")
         self.llm.side_effect = [(fake_message("a"), USAGE), (fake_message("b"), USAGE)]
         runner.handle_input("one")
-        # The switch now goes through the sticky mode, not a raw mode stamp.
+
         runner.sticky_mode = None
         runner.handle_input("two")
         bodies = [m.get("content") for m in runner.messages]

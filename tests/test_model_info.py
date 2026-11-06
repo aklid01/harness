@@ -169,7 +169,7 @@ class ApplyTests(unittest.TestCase):
         info = {"supports_images": False, "supports_tools": False}
         applied = providers.apply_model_info(payload, info, include_bools=True)
         self.assertEqual(payload, {"supports_images": False, "supports_tools": False})
-        self.assertEqual(len(applied), 1)  # tools was already off
+        self.assertEqual(len(applied), 1)
 
     def test_empty_info_is_a_noop(self):
         payload = {"context_window": None}
@@ -248,7 +248,7 @@ class FetchAndBackstopTests(ProviderCase):
         row = providers.get_provider(stored["id"])
         self.assertEqual(row["context_window"], 4096)
         self.assertEqual(row["max_output_tokens"], 256)
-        # The save path never flips capability switches, even on clear evidence.
+
         self.assertTrue(row["supports_images"])
 
     def test_backstop_keeps_user_values(self):

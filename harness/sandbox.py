@@ -61,20 +61,15 @@ def wrap(command):
             command,
         ]
 
-    return None  # Windows, or Linux without bubblewrap
+    return None
 
 
-# --- Windows: run through a POSIX shell so ordinary commands work -----------
-# cmd.exe has no cat/head/tail/grep/sed/ls/find/printf and honours almost none
-# of the shell syntax a coding model reaches for, so nearly every command fails
-# and burns the turn. Git for Windows ships a real bash; run through it. The
-# WindowsApps stub on PATH is the WSL launcher and must not be used.
 _BASH_HINTS = (
     "C:/Program Files/Git/bin/bash.exe",
     "C:/Program Files (x86)/Git/bin/bash.exe",
     os.path.expandvars(r"%LOCALAPPDATA%/Programs/Git/bin/bash.exe"),
 )
-_BASH = None  # resolved once: path, or "" when none is available
+_BASH = None
 
 
 def _find_bash():
@@ -134,7 +129,6 @@ def run(command, timeout=60):
             cwd=str(root),
         )
     except NotADirectoryError:
-        # The configured root vanished; run from the process cwd rather than fail.
         return subprocess.run(
             sandboxed or command,
             shell=sandboxed is None,

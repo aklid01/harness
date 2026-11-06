@@ -172,9 +172,7 @@ class Cli(ReviewCase):
         self.write("app.py", "value = 1\n")
         commit_all(self.root, "first")
         self.write("app.py", "value = 2\n")
-        # The CLI resolves its own paths, and the home directory is where it
-        # looks for the provider registry. Point it at the temp dir so the
-        # machine's own settings are never read or written.
+
         self.home = Path(self.tmp.name) / "home"
         self.home.mkdir()
 

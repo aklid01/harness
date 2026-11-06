@@ -1,574 +1,135 @@
 # Harness
 
-A minimal desktop coding agent (personal educational build).
-Tauri 2 shell + Python agent engine: the UI is TypeScript/HTML, the engine
-stays Python, and the two talk over a local WebSocket.
-Inspired by the [Neural Code walkthrough](https://youtu.be/Lu1UWqVTbQg) - renamed to `harness` for personal use.
+Harness is a personal desktop coding agent. A Tauri 2 desktop shell hosts a
+TypeScript web UI and a Python engine connected over a local WebSocket.
 
-## Run
+## Quick start
+
+Requirements: Python with `uv`, Node.js, Rust, and the Tauri 2 prerequisites.
 
 ```powershell
 uv sync
 cd desktop
 npm install
-npm run dev          # build:web + tauri dev
-npm run build        # release build without the installer bundle
+npm run dev
 ```
 
-The Tauri shell spawns the Python sidecar itself (`uv run python -m harness.server`,
-falling back to the project venv interpreter), picks a free localhost port and
-loads the renderer against it, and kills the whole sidecar process tree on
-exit. The window opens with the last active workspace and provider. Type a
-message, Enter sends it (Shift+Enter for a newline). The round send/stop
-button shows an arrow when idle and an animated spinner while the agent works;
-clicking it stops the turn between steps (the in-flight model call finishes
-first).
+`npm run dev` builds the web UI, starts the Tauri app, and lets the app start
+the Python sidecar. For a release build without an installer bundle:
 
-The engine can also be run on its own, with no UI at all:
+```powershell
+npm run build
+```
+
+The engine can also run without the desktop app:
 
 ```powershell
 uv run python -m harness.server --port 8765 --project-root . --app-data-dir <data-dir>
 ```
 
-## UI tour
+## Using Harness
 
-- Composer: message box plus a mode chip (shown only when the session isn't
-  in the default build mode), provider/model picker, reasoning effort picker,
-  permission level (Default, Strict, Allow All, Autopilot), attach-files
-  button, send/stop button, Settings. Workspace and git branch shown in the
-  context panel.
-- Left: workspaces, each listing its sessions with LLM-generated titles
-  (rename/delete via right-click, current session highlighted). New session
-  opens as a tab; tabs, sidebar and the backend stay on one session id.
-- Center: chat with markdown answers, compact one-line tool entries (output
-  collapsed until opened, denied/blocked/skipped calls badged), a live
-  activity line narrating each step, thinking indicator, red error cards.
-  Each assistant message streams into one bubble and is finalized in place.
-- Right: plan checklist (from `write_todos`) and running token totals.
+Type a request in the composer and press Enter. Use Shift+Enter for a newline.
+The default build mode can inspect and edit the workspace through the agent's
+tools. The send button becomes Stop while a turn is running.
 
-There is no workflow selector: typing runs a build turn, the default.
-`/plan`, `/ask` and `/build` are the explicit switches, and typing `/` opens
-an autocomplete listing every command with a one-line description.
+Commands:
 
-- `/plan <message>` plans that one turn, read-only. `/ask <message>`
-  answers that one turn, read-only. `/build <message>` builds now, even in
-  a sticky mode.
-- A bare `/plan` or `/ask` makes every following message run that way
-  until `/build` or a click on the mode chip clears it. The session
-  remembers the mode across restarts.
+```text
+/plan <message>   plan one turn without editing files
+/ask <message>    answer one question without editing files
+/build <message>  build one turn
+/rewind           return to an earlier point in the session
+/sessions         browse previous sessions
+/compact          summarize the current history
+/multi-model-review  review the current change with configured reviewers
+```
 
-Ask mode is read-only Q&A: a session that starts in ask gets a
-research-identity system prompt, the write tools are withheld exactly as in
-plan mode, and any bash command the permission classifier does not rate as
-read-only is refused outright - no approval dialog offers an edit path.
-Read-only commands (grep, ls, git status/diff/log, ...) still run silently.
+A bare `/plan` or `/ask` makes that mode sticky until `/build` or the mode
+control clears it. An ambiguous build request may enter planning automatically;
+the UI lets you approve the plan, skip it, or cancel it.
 
-Plan mode is read-only: a session that starts in plan gets a
-planning-identity system prompt, mid-session switches add an explicit mode
-notice to the transcript (plus a per-turn reminder), and any write call is
-refused before it runs, so the model describes changes instead of making
-them. Sessions started in Build keep their build identity; switch modes
-with a slash command or a mid-session switch notice. Reasoning effort and
-temperature are per-model settings, forwarded to the API only when set, and
-only to models that support them.
+Sessions, workspaces, model selection, permissions, plans, token usage, and
+provider settings are managed in the desktop UI. Messages can be steered into
+a running turn or queued for the next turn. Files can be attached or dropped
+onto the composer; they are copied into session-scoped storage and treated as
+read-only input.
 
-## Automatic planning
+## Providers and configuration
 
-When a build request is ambiguous enough that a wrong guess would cost
-rework, the model may enter plan mode on its own. The decision happens
-inside the build turn's first model call: the write tools are withheld and
-the model answers a structured `plan_decision` signal - plan (with a
-one-line reason) or build. A model that never answers the signal just
-builds; nothing is ever silently read-only.
+Providers and models are configured in `providers.json`. API keys are stored in
+the operating system keyring when possible. The app can fall back to `.env` or
+`~/.agents/env` for a key belonging to the configured provider, and labels that
+key as plaintext in Settings.
 
-Directive requests - "build me...", "fix...", "add...", "rename..." with a
-clear target - never pause, even with minor open questions: the model makes
-reasonable assumptions and states them in its reply. Saying "just do it",
-"don't ask" or "no plan" always means build. `/plan` always plans.
+Workspace instructions can be placed in `AGENTS.md`. The engine also reads
+global instructions from `~/.agents/AGENTS.md` and the app data directory.
+These files are injected into the model context at the start of a session.
 
-When the model plans on its own, the mode chip beside the composer reads
-"Plan · auto" with the reason on hover, a compact note lands in the
-transcript, and the plan (with its assumptions and open questions) is
-yours to decide with one action: approve and build, skip planning and
-build now, or cancel. The approval step blocks nothing else and can be
-turned off (or made automatic) in Settings > Agents; a non-interactive run
-returns the plan and stops. After a plan is approved or skipped, the model
-does not re-plan the same request again.
+Session data is stored under the app data directory, normally
+`%APPDATA%\\Harness`. Local settings, provider files, keys, and session logs
+should not be committed.
 
-Per-role models still apply: when a plan role is configured
-(Settings > Agents), plan turns run on it, and an approved build runs on
-the build role's model. Plain builds always use the session model.
+## Safety and failures
 
-While a turn runs, typing and pressing Enter files the message instead of
-dropping it. A **steer** joins the running conversation at the next
-model-call boundary (the current tool or answer finishes first), so the model
-adapts work in progress; if the turn ends first, the steer auto-sends after
-it. A **queue** waits for the turn to end, then runs as the next turn
-automatically. Pending messages show above the composer with a STEER or
-QUEUE badge and can be edited or removed until they are sent. The default
-(Enter) action is Queue, changeable in Settings > General; the caret next to
-Send picks the other one per message. If the provider fails, queued messages
-are discarded and named in the error card (their text returns to the
-composer); steers stay pending. A manual Stop keeps everything pending.
+Permission modes control tool execution. Read-only plan and ask turns withhold
+write tools, and denied commands remain denied in every permission mode.
+Attached files are staged outside the workspace and are never edited in place.
+Treat their contents as untrusted data.
 
-Models that stream reasoning show it in a collapsible "Thinking" block above
-the answer (toggle next to the effort picker; the control appears only for
-models with reasoning enabled). Reasoning is kept in the transcript but is
-never sent back to the provider.
-
-## Attachments
-
-Attach files to a message with the paperclip button or by dropping them on
-the composer. Every file type is accepted - nothing is filtered by extension
-or MIME type. Attached files show as chips (name, type, size) above the
-composer, can be removed before sending, and stay on the sent message.
-
-Attachments work in every submission path: a normal send, a mid-turn steer,
-and a queued message. Pending items keep their files while they wait, and a
-message can be nothing but files.
-
-Each file is copied into session-scoped storage under the app data area
-(`sessions/attachments/<project>/<session id>/`), never into the workspace
-and never modified where the user left it. The agent receives a manifest with
-the name, type, size and path of every file, delivered with the message
-itself, so it can refer to a file by name in later turns. The manifest is
-repeated every turn, so a trimmed or compacted transcript still says which
-files exist.
-
-The agent reads attachments with its usual `read_file`: text files come back
-as text, and PDFs and Office documents are extracted to text first (PDF text
-needs `pypdf`, which `uv sync` installs). A file with no readable text - a
-scan, a legacy `.doc`, an archive - says so plainly instead of handing back
-mojibake, and the agent is told to report that rather than guess. Images are
-passed to the model as images when the model is marked as able to see them
-(Settings > Models); otherwise they are delivered as a path only.
-
-The manifest also gives the agent the staged path, so it can look at an
-attachment with the shell (`ls`, `head`) as well as with `read_file`. That
-works in ask turns too: a command the permission layer rates as read-only
-runs there without a prompt, whatever shape it has - a merged stderr and a
-shell variable included.
-
-Attached files are read-only: the agent cannot edit them in place, and any
-change it makes goes to a copy in the workspace. Reading them needs no
-permission prompt in any permission mode, in every turn (build, ask and plan
-alike, automatic plans included), and subagents can
-read them too.
-
-Limits are configurable with `HARNESS_MAX_ATTACHMENT_BYTES` (25 MB per file)
-and `HARNESS_MAX_ATTACHMENT_FILES` (10 files per message). A file over the
-limit is refused by name, with the limit, and the rest of the message still
-goes. Two files with the same name both survive - the second one is staged
-as `name (2).ext`.
-
-The session log keeps the attachment metadata only (name, type, size, staged
-path), never the bytes. Deleting the session deletes the files with it.
-
-Attached content is untrusted data. Instructions inside a file are content to
-analyse, not orders to follow, and the system prompt says so.
-
-## Project rules
-
-Every workspace can keep its instructions in `AGENTS.md`, and they are
-injected into the system prompt the model sees. Three files are read, project
-first then global, each capped at 20,000 characters:
-
-1. `<workspace>\AGENTS.md` - the project's own rules
-2. `~\.agents\AGENTS.md` - the engine's global rules
-3. `<app-data>\AGENTS.md` - the app profile's global rules (`%APPDATA%\Harness`
-   by default, alongside `providers.json`; the old `harness-electron` tree is
-   adopted on first launch)
-
-The prompt says outright that where the project rules disagree with the app's
-own defaults, the project rules win. Skills are listed the same way but by
-name and description only - their bodies are read on demand with
-`read_skill`, so a 26 KB skill costs nothing until it is used. The rules are
-re-read whenever a session starts, so editing `AGENTS.md` takes effect on the
-next session in that workspace.
-
-## Providers, models and keys
-
-Non-secret config lives in `providers.json`: providers, each holding its own
-models (id, name, base_url, disabled, plus a `models` list). Secrets live in
-the OS keyring:
-
-- Windows Credential Manager, macOS Keychain, Linux Secret Service
-- service `harness`, one entry per provider id
-
-A provider owns the connection and the credentials; each model owns its
-display name, its API model id and its own settings (reasoning effort,
-temperature, context window, output token limit, tool calling, image support,
-extra parameters). Ids are generated and stable, so several models can share
-one provider (GLM 5.3 Flash and DeepSeek V4.1 Flash under NVIDIA), each can be
-edited, renamed or deleted on its own, and none of them overwrite another.
-The one-model-per-provider file the early builds wrote migrates on first use;
-the original is kept as `providers.json.bak` and the Settings panel reports
-what moved.
-
-The UI never displays full secrets, only masked (`sk-...xyz`) and key status.
-Settings offers Add model, Add model to an existing provider, Edit, Test
-(runs the `harness-ok` probe, then a side-effect-free tool-calling probe, and
-reports latency plus the model it tested), Delete model, Delete provider, Set
-active, and one-time Migrate (imports `settings.json`/`.env` keys into the
-keyring).
-
-Fallback: if a provider has no keyring entry, `./.env` (then `~/.agents/env`)
-is used and flagged as plaintext in Settings - but only when that key points
-at the provider's own host, so a mismatched key fails fast with "no API key"
-instead of a confusing 401. `settings.json`, `.env`, `providers.json`,
-`providers.json.bak` and `*.jsonl` session logs are git-ignored.
-
-## When a request fails
-
-A failed model request never ends the session. `harness/errors.py` classifies
-the failure - connection, DNS, timeout, 408/429/5xx, auth, unknown model id,
-unsupported parameter, malformed body, interrupted stream - and
-`harness/retry.py` retries only the transient ones, on a fixed schedule:
-3s, 5s, 15s, 20s and 30s before retries one through five. The schedule runs
-inside one shared window (343s) sized to span every attempt at its full read
-timeout plus every scheduled wait, so a first attempt that burns its whole
-45s read timeout still leaves the whole schedule behind it - a 30s window
-that could not hold two 20s timeouts meant a slow provider killed
-conversations instead of getting the second chance it needed. `Retry-After`
-is respected when it fits the window, one retry slot per endpoint so a
-failing host is not hammered, and every wait is cancellable (Stop, or
-switching model). A bad key or an unknown model id fails straight away; a
-stream that breaks after text has already arrived is reported rather than
-silently re-sent, since sending it again would duplicate the answer.
-
-The composer shows one status area for the whole retry process: the exact
-error the upstream returned (`the provider reported a server error:
-overloaded (HTTP 503)`), a **Things to do** line taken from the failure kind
-and status (`401` wants a new key, `404` a different model id, `429` a wait
-and a Retry), and the countdown (`Retry 2 of 5 · trying again in 5s`, then
-`attempt in flight…`). When the retries are spent, a final error card carries
-the provider's own message, the same next-step hint, and **Retry** /
-**Switch model**. The card is part of the conversation: it survives the
-transcript reconcile that follows a turn, and it stays put when you switch
-sessions. Retrying rewinds the conversation to the message that failed - the
-message is never duplicated - and leaves project files alone. Switching model
-keeps the workspace, session, history, unsaved composer text and permission
-state, and while a request is in flight it stops that request first rather
-than letting two models write into one session. No restart is ever needed to
-recover from an upstream failure.
+Transient provider failures are classified and retried with bounded delays.
+Authentication errors and unknown model IDs fail immediately. A failed request
+keeps the session alive and offers retry or model switching in the UI.
 
 ## Multi-model review
 
-One or more reviewer models critique the change the agent just made. Each
-reviewer sees only the diff, never another reviewer's answer, and the review
-is advisory and read-only: it never edits a file by itself.
-
-Run it by hand with:
-
-```text
-/multi-model-review
-```
-
-The card appears in the conversation and follows the review: an offer, live
-per-model progress, the results, a partial result when one model failed, a
-failure, or a plain "nothing to review". It never blocks the agent - you can
-keep chatting, steer or queue messages while it runs, and a new agent run
-cancels a review that is still going (the card says so).
-
-Before a multi-model run the card shows what it is about to spend, in
-tokens, so the cost is never a surprise.
-
-### Settings
-
-Settings > Review holds the whole feature. Nothing is on by default.
-
-- **Reviewer models** - one row per reviewer: the model (from Settings >
-  Models, so it reuses that model's own key and settings), an optional
-  **focus** (one of the twelve targets below, or all of them), and an
-  on/off switch. A reviewer whose provider is missing, switched off or has
-  no key is flagged in the list and skipped at run time, with a note - never
-  silently dropped.
-- **After a run that edited files** - `Off` (a review only happens when you
-  ask), `Offer a card` (the card asks first) or `Start it` (it runs by
-  itself and spends a model's tokens without asking).
-- **Run the reviewers** - in parallel (they finish together and cost the
-  same) or one after another (easier to follow while they run).
-- **Severity to report** - findings below this are counted but not shown.
-- **Show the reviewers the whole file** - off sends only the diff.
-- **Limits** - maximum reviewers, maximum files, maximum diff size and
-  maximum tokens. Files over a limit are left out and named in the report.
-- **Excluded files** - one glob per line. Lockfiles, generated and vendored
-  code, build output and binary files are excluded already.
-- **Extra instructions for the reviewers** - added to every reviewer's
-  prompt.
-
-The settings live with the other role configuration in `agents.json`, which
-holds no secrets: a reviewer is named by the id it already has in
-`providers.json` and borrows the same keyring entry.
-
-### What gets reviewed
-
-| Scope | What it covers |
-| --- | --- |
-| `run` (default) | the files this agent run changed |
-| `uncommitted` | everything the working tree changed against HEAD |
-| `staged` | what is in the index, ready to commit |
-| `base:<ref>` | everything that differs from a branch or commit |
-
-In a git repository the diff comes from git itself, so a reviewer sees the
-same change `git diff` shows. Outside a repository there is no diff engine,
-so the change is reconstructed from the checkpoint journal - the before and
-after bytes the engine already keeps for every edit it makes - and the scope
-is exactly the files changed since the run's checkpoint. A repository with no
-commits, a detached HEAD and untracked files are all handled. With nothing to
-review, the engine says so and does nothing.
-
-### Review targets
-
-Every finding carries a category tag, and the reviewers must cover all
-twelve:
-
-1. `correctness` - logic errors, off-by-one, wrong conditions, unhandled
-   states, broken invariants, regressions.
-2. `error-handling` - swallowed exceptions, missing failure paths, unchecked
-   return values, unhelpful error text, missing retries or timeouts.
-3. `security` - injection, unsafe deserialization, path traversal, secrets in
-   code or logs, unsafe shell construction, missing validation, weak crypto.
-4. `performance` - needless complexity, repeated work in loops, N+1 access,
-   blocking calls in async paths, unbounded memory growth.
-5. `concurrency` - races, deadlocks, shared mutable state, leaked files or
-   processes, missing cleanup, non-idempotent retries.
-6. `quality` - duplication, dead code, god functions, deep nesting, magic
-   values, unclear names, misleading comments, leaky abstractions.
-7. `maintainability` - deviations from the project's own conventions, its
-   `AGENTS.md` rules or the patterns in neighbouring code.
-8. `tests` - new behaviour without tests, weak or tautological assertions,
-   missing edge cases, flaky patterns, tests that mask the exit code.
-9. `dependencies` - unnecessary new dependencies, version or platform
-   assumptions (including Windows paths and encoding), breaking changes to
-   stored data, missing migrations.
-10. `documentation` - undocumented behaviour, stale docs, unclear config
-    options, poor error text for developers.
-11. `observability` - missing or noisy logging, no diagnostic context,
-    sensitive data in logs.
-12. `agent-experience` - unclear tool schemas, ambiguous prompts, unbounded
-    tool output, missing budget handling, behaviour that would confuse a
-    model consuming it.
-
-The prompt that asks for all of this lives in one place:
-`harness/review/prompt.py`. That is the file to edit when the reviewers
-should look harder or softer at something.
-
-### Report format
-
-A reviewer answers with one JSON object:
-
-```json
-{
-  "findings": [
-    {
-      "category": "security",
-      "severity": "high",
-      "file": "harness/server.py",
-      "line": 812,
-      "end_line": 818,
-      "summary": "The reviewer's one-sentence summary.",
-      "why": "Why it matters: the failure it causes.",
-      "fix": "A concrete fix - a patch or a snippet.",
-      "confidence": "high"
-    }
-  ],
-  "note": "optional note about the change as a whole"
-}
-```
-
-Severity is one of `blocker`, `high`, `medium`, `low`, `nit`; confidence is
-one of `high`, `medium`, `low`. A finding must cite a line that really
-appears in the diff it was shown - anything else is discarded before it can
-reach a user, an agent or a report. A malformed reply is retried once and
-then reported as a failed review for that model rather than passed on.
-
-The merged report carries the verdict (`clean`, `suggestions` or `changes
-requested`), counts by severity and by category, the findings sorted by
-severity and then by agreement, and the per-model status (ran, skipped or
-failed, with tokens and duration). Findings two models raised at the same
-place are merged and marked as agreeing; findings two models read
-differently at the same place are both kept and labelled with each other.
-
-The report is saved with the session, so reopening a chat restores the card,
-the report and the dismissed findings. A rewind marks any review made after
-the rewind point as stale. Reports belong to one session and are never
-reachable from another.
-
-### Sending findings to the agent
-
-The card's **Apply fix** and **Send findings to the agent** hand the
-findings to the agent, which fixes them with its ordinary tools - so the
-ordinary permission check and the ordinary checkpoint both still apply. The
-card itself never edits a file. The findings reach the agent as a tool
-result, so they enter the context budget the way any tool output does:
-capped while the turn runs, stubbed once it is over, and summarised if the
-history is compacted. The agent can be told to "address the review" and
-refer to findings by id (`R1`, `R2`, ...).
-
-### Command reference
-
-Every chat understands these, typed straight into the composer:
-
-```text
-/plan <message>   plan this turn, read-only (a bare /plan makes every
-                  following message plan until /build)
-/ask <message>    answer this turn, read-only (a bare /ask is sticky the
-                  same way)
-/build <message>  build now, the default (a bare /build leaves plan or ask)
-/rewind           jump back to an earlier point in this chat
-/sessions         open a past chat
-/compact          summarise the history so far and free up the context window
-/multi-model-review [scope] [options]
-
-  run | uncommitted | staged | base:<ref>   what to review
-  --models a,b          review with these model ids
-  --focus <target>      point one reviewer at one target
-  --severity <s>        the lowest severity to report
-  --force               run again even when nothing changed
-  --json                print the structured report
-  --help                the full text
-```
-
-The same review runs headless, for scripts and CI:
+The optional multi-model review is advisory and read-only. Configure reviewers
+in Settings, then run `/multi-model-review` or use the headless command:
 
 ```powershell
-python -m harness.review --scope uncommitted --json
+uv run python -m harness.review --scope uncommitted --json
 ```
 
-The exit code is the verdict: `0` clean or suggestions, `1` changes
-requested, `2` no reviewer configured or none reachable, `3` nothing to
-review, `4` every reviewer failed.
-
-### Safety
-
-- Reviewed code is untrusted data. The prompt says so explicitly, and the
-  reviewers hold no tools and no shell, so an instruction inside a diff has
-  nothing to act on. The same framing protects the agent when it reads the
-  report.
-- Secrets detected in the diff are redacted before any reviewer sees them,
-  and the card says that a redaction happened. The line count never changes,
-  so a finding still points at the line it pointed at.
-- A review never reads or re-sends attached files unless they are in scope.
-- Reviewing never modifies the workspace.
-
-## Sessions
-
-Chats live under the app data dir (`%APPDATA%\Harness\sessions\<project>\`
-by default; change it in Settings > Storage) as one JSONL file each, with a
-`titles.json` sidecar. A legacy `~/.agents/sessions` tree is migrated on
-startup. New sessions get an LLM-generated title after the
-first turn; rename or delete any session by right-clicking it - the workspace
-does not have to be open, the op carries its own root - and it disappears
-from the sidebar at once, closing any tab that had it. Workspaces themselves
-can be removed from the list by right-clicking their row: their tabs close,
-their sessions leave the sidebar, and the folder on disk is untouched. An
-early Windows build saved sessions next to the code instead; the app moves
-those into place on startup.
+Reviewers receive the selected diff, not tools or another reviewer's response.
+Secrets are redacted before review, and applying findings sends them back
+through the normal agent and permission flow.
 
 ## Architecture
 
 ```text
-Tauri webview (renderer)  <-- WebSocket -->  harness/server.py  <-- events -->  agent engine (Runner)
+Tauri webview  <-- local WebSocket -->  harness/server.py  <-- events -->  Runner
 ```
 
-- `desktop/`: the Tauri 2 shell. `src-tauri/src/` (Rust) spawns and tree-kills
-  the sidecar, picks the port, owns workspace and storage plumbing over IPC;
-  `web/` holds the renderer (tabs, chat, composer, Settings) and the
-  `window.harness` bridge over Tauri IPC. Build: `npm run build:web`,
-  typecheck: `npm run typecheck`.
-- `harness/server.py`: the sidecar. One WebSocket, one `Session` per client
-  key, so many tabs and workspaces share one engine process.
-- `harness/events.py`: bus (`message`, `message_delta`, `tool_call/result`,
-  `todos`, `usage`, `status`, `note`, `session`, `compacted`, `error`, `retry`,
-  ...) and blocking `interact()` for approvals and picks. No UI imports.
-- `harness/agent.py`: `Runner` emits events; same turn logic as the original
-  loop (cap/strip/compact, permissions, subagents unchanged). It also owns
-  the per-turn intent (command > sticky mode > the model's `plan_decision`
-  signal > build default) and the automatic-planning behaviour - the
-  decision procedure text lives in one documented place there
-  (`AUTO_PLAN_RULES`).
-- `harness/permissions.py`: allow/ask/deny policy with modes (default, strict,
-  allow-all, autopilot). The deny list wins in every mode; autopilot only ever
-  auto-allows what the policy would otherwise ask about.
-- `harness/providers.py`: registry + keyring + migration + connection test.
-- `harness/attachments.py`: files the user attached - staging under the app
-  data area, the manifest the agent reads, text extraction, the limits.
-- `harness/llm.py`: lazy per-provider client, optional token streaming, the
-  request body for the active model.
-- `harness/errors.py` + `harness/retry.py`: failure classification and the
-  bounded retry loop `call_llm` runs inside.
-- `harness/review/`: the multi-model review - what to review (`scope`), what
-  must not be sent (`redact`), the reviewer's instructions (`prompt`), what
-  a finding is and what survives validation (`findings`), merging several
-  reviewers (`aggregate`), running them (`engine`) and the saved report
-  (`report`).
+- `desktop/` contains the Tauri shell and web renderer.
+- `harness/server.py` exposes the local WebSocket sidecar.
+- `harness/agent.py` runs turns, tools, permissions, planning, and subagents.
+- `harness/events.py` defines the UI-independent event bus.
+- `harness/providers.py` manages providers, models, keys, and migrations.
+- `harness/attachments.py` stages files and extracts readable content.
+- `harness/review/` implements multi-model review and report persistence.
 
-Possible future API clients can attach to the same event layer; none is built.
+## Development checks
 
-## Tests
-
-One entrypoint runs the whole engine suite (20 modules) and its exit code is
-the verdict:
+Run the full engine suite:
 
 ```powershell
-python scripts/run_tests.py                  # or: uv run python scripts/run_tests.py
+python scripts/run_tests.py
 ```
 
-Single files run the same way:
+Run the renderer end to end check:
 
 ```powershell
-uv run python tests/test_engine_headless.py   # engine with no UI attached
-uv run python tests/test_providers.py         # registry, masking, fallback
-uv run python tests/test_provider_models.py   # several models per provider, migration
-uv run python tests/test_retry.py             # classification, deadline, cancel
-uv run python tests/test_llm_retry.py         # call_llm retries, stream breaks
-uv run python tests/test_model_switch.py      # retry after switching models
-uv run python tests/test_session_lifecycle.py # one session, one tab, one request per turn
-uv run python tests/test_tool_flow.py         # tool calls end to end against a mock endpoint
-uv run python tests/test_text_tools.py        # XML text tool calls: parse, validate, refuse
-uv run python tests/test_sessions.py          # storage, migration, LLM titles
-uv run python tests/test_permissions.py       # policy modes, deny-list supremacy
-uv run python tests/test_llm_params.py        # effort/temperature forwarding
-uv run python tests/test_intent.py            # intent resolution, sticky mode, auto-plan
-uv run python tests/test_agent_roles.py            # plan/build role routing
-uv run python tests/test_e2e_workflow.py      # auto-plan -> approval -> oversight, end to end
-uv run python tests/test_instructions.py      # AGENTS.md injection, 20k cap
-uv run python tests/test_oversight.py         # decision review gate
-uv run python tests/test_paths.py             # workspace/app-data resolution
-uv run python tests/test_sandbox.py           # sandbox wrap/run
-uv run python tests/test_server_protocol.py   # sidecar ops and replies
-uv run python tests/test_attachments.py       # attach, stage, manifest, limits
-uv run python tests/test_review_scope.py      # what gets reviewed, what is skipped
-uv run python tests/test_review_prompt.py     # the twelve targets, untrusted framing
-uv run python tests/test_review_findings.py   # parsing, validation against the diff
-uv run python tests/test_review_aggregate.py  # merge, agreement, disagreement
-uv run python tests/test_review_engine.py     # parallel, partial failure, redaction
-uv run python tests/test_review_persistence.py # saved report, dismissed, stale, cache
-uv run python tests/test_review_command.py    # the command's arguments and exit codes
+node desktop/scripts/renderer-check.mjs
 ```
 
-The renderer has no unit harness, so its rules are checked end to end:
-`node desktop/scripts/renderer-check.mjs` builds the web assets, launches the
-real Tauri window against a provider whose endpoint is dead, drives the
-composer and the sidebar over the DevTools Protocol (WebView2 remote
-debugging), and writes a pass/fail report to `tests/renderer-check.txt`: the
-retry card ticking, the error card offering a
-next step and surviving both the post-turn reconcile and a session switch,
-a deleted session leaving the sidebar at once (tab or no tab, workspace open
-or not), the workspace removal, the plan panel starting closed, and the
-attachment flow: picking files, taking one back, a file over the limit
-refused by name, and the accepted file travelling with its message. It
-also drives the multi-model review: the review settings and their save, a
-review with two reviewers that agree, the grouping switch, dismissing a
-finding, sending the findings to the agent and applying one fix, a partial
-result when a reviewer fails, a failed review, nothing to review, the
-automatic run after the agent edits a file, and the card coming back with
-its session.
+Check the desktop shell and web build:
 
-## Notes
+```powershell
+cd desktop/src-tauri
+cargo check
+cd ..
+npm run typecheck
+npm run build:web
+```
 
-- On Windows there is no OS sandbox (`sandbox: none`). The approval dialog is
-  the guardrail: `rm`, `sudo`, `curl`, `git push`-style commands stay denied
-  in every permission mode.
-- `.explain/` holds personal study notes (git-ignored).
+The renderer check writes its report to `tests/renderer-check.txt`.

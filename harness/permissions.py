@@ -85,10 +85,8 @@ def current_mode():
     return MODE
 
 
-# Last matching rule wins, so put the catch-all first.
 BASH_RULES = {
     "*": "ask",
-    # read-only: let them through
     "ls*": "allow",
     "pwd": "allow",
     "cd *": "allow",
@@ -132,7 +130,6 @@ BASH_RULES = {
     "git ls-files*": "allow",
     "pytest*": "allow",
     "python -m pytest*": "allow",
-    # risky: never, even if the user says yes
     "rm *": "deny",
     "sudo *": "deny",
     "chmod *": "deny",
@@ -153,18 +150,13 @@ def decide(command):
         for pattern, rule in BASH_RULES.items():
             if fnmatch(part, pattern):
                 action = rule
-        # Setting a shell variable is not a command and touches nothing on
-        # disk, so a segment that only assigns is read-only. A deny rule
-        # still wins.
+
         if action != "deny" and _assignment_only(_shell_words(part)):
             action = "allow"
-        # A read-only command that redirects into a real file overwrites data,
-        # so an "allow" it earned disappears the moment it writes one.
+
         if action == "allow" and redirect_writes_file(part):
             action = "ask"
-        # Same for commands that smuggle a second command or a write primitive
-        # past a prefix rule: the allow was earned by the prefix, not by what
-        # the segment actually does.
+
         if action == "allow" and (
             _has_substitution(part) or _hides_write_primitive(part)
         ):
@@ -185,9 +177,6 @@ def inside_project(path):
         return False
 
 
-# Tools with no explicit branch in check() that are safe to run unattended.
-# Anything else that is not bash/write/str_replace falls through to "ask", so a
-# future mutating tool can never silently inherit the default-allow.
 _KNOWN_SAFE = ("read_file", "read_skill", "write_todos", "task")
 
 
@@ -214,8 +203,6 @@ def check(name, args):
     return "ask", f"{name} has no permission rule"
 
 
-# Levels are conservative and derived from the command/tool itself. The model's
-# own suggestion is never trusted for risk - only the command text is.
 RISK_LEVELS = ("low", "medium", "high", "critical")
 
 

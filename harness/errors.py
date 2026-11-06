@@ -32,9 +32,7 @@ TRANSIENT_KINDS = frozenset(
     {"network", "timeout", "rate_limited", "server", "malformed"}
 )
 
-# What the user can actually do about it. A status the provider named
-# outranks the generic kind, because 401 and 403 reach us the same way and
-# want different actions.
+
 HINTS = {
     "network": "Check the base URL and your connection, then press Retry.",
     "timeout": "The provider is too slow to answer. Press Retry, or switch model.",
@@ -246,11 +244,6 @@ def classify(exc, model=None, model_id=None, kind=None):
     if mapped is None:
         mapped = _by_name(name) or _by_status(status) or _by_text(text)
         if mapped is None and name == "APIError" and status is None:
-            # The SDK raises the base APIError when it cannot map the
-            # provider's answer onto one of its status errors. That opaque
-            # failure belongs to the provider ("This model is currently
-            # unavailable. Please try again later." is exactly this shape), so
-            # it is worth another try instead of ending the turn on the spot.
             mapped = "server"
     if mapped == "stream_interrupted":
         return ModelError(

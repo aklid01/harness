@@ -42,10 +42,6 @@ def split_command(command):
             quote = char
             current.append(char)
         elif char == "&" and _ends_with_redirect(current):
-            # fd duplication (2>&1, >&2): the '&' belongs to the redirect, not
-            # to a command separator. Cutting it there left a bare "2>" that
-            # read as a file write and an orphan "1" that matched no rule, so
-            # a read-only probe was rated as a mutating one.
             current.append(char)
         elif char in "&|;\n\r":
             parts.append("".join(current))
@@ -81,9 +77,6 @@ def _assignment_only(words):
     return bool(words) and all(_is_assignment(word) for word in words)
 
 
-# Allow-listed commands that can hide a write or a second command. Checked on
-# the parsed words of a segment, not prefixes, because the dangerous argument
-# can sit anywhere (`find . -name x -delete`, `sort -o out in`, sed's `w`).
 _WRITE_PRIMITIVES = (
     ("find", ("-delete", "-exec", "-execdir", "-ok", "-okdir")),
     ("sort", ("-o", "--output")),
@@ -101,8 +94,6 @@ def _hides_write_primitive(segment):
             continue
         for primitive in primitives:
             if primitive == "w":
-                # sed's w command lives inside the script text, after a
-                # delimiter (`s/x/y/w file`) or after space (`x;w file`)
                 if any(_re.search(r"(?<![\w\\])w\s+\S", arg) for arg in args):
                     return True
             elif any(arg == primitive or arg.startswith(primitive) for arg in args):
@@ -119,7 +110,6 @@ def _has_substitution(segment):
     return "$(" in segment or "`" in segment or "<(" in segment
 
 
-# Commands that only read, when their arguments do not redirect or edit.
 _READONLY_TOOLS = {
     "ls",
     "dir",
@@ -180,8 +170,8 @@ _READONLY_TOOLS = {
     "cat.exe",
     "grep.exe",
 }
-# Commands that install, fetch, build or execute code: real side effects, but
-# not inherently destructive on their own.
+
+
 _ACTION_TOOLS = {
     "pip",
     "pip3",
@@ -217,7 +207,7 @@ _ACTION_TOOLS = {
     "mypy",
     "docker",
 }
-# Commands that remove, overwrite, move or change permissions / config.
+
 _DESTRUCTIVE_TOOLS = {
     "rm",
     "rmdir",
@@ -323,15 +313,12 @@ def redirect_writes_file(command):
             i += 1
             continue
         if char == ">":
-            # A fd number in front and the & of 2>&1 are not file sinks.
             j = i + 1
             if j < n and seg[j] == ">":
                 j += 1
             while j < n and seg[j] in " \t":
                 j += 1
             if j < n and seg[j] == "&":
-                # 2>&1 / >&2 duplicate a descriptor, which is not a write.
-                # `>&file` instead sends both streams into the file.
                 if j + 1 < n and seg[j + 1].isdigit():
                     i = j + 1
                     continue
@@ -357,7 +344,7 @@ def _classify_segment(segment):
     args = [w for w in words[1:]]
 
     if _assignment_only(words):
-        return "low"  # a shell variable touches nothing on disk
+        return "low"
 
     if base == "sed":
         return "high" if any(a.startswith("-i") for a in args) else "low"
@@ -373,9 +360,9 @@ def _classify_segment(segment):
             else "low"
         )
     if base in ("black", "isort", "autopep8", "gofmt", "rustfmt", "prettier"):
-        return "medium"  # rewrites source in place
+        return "medium"
     if base in ("mkdir", "touch"):
-        return "low"  # creating a dir/bumping mtime cannot destroy data
+        return "low"
     if base == "git":
         sub = next((a for a in args if not a.startswith("-")), "")
         if sub in ("reset", "clean", "push", "rebase", "filter-branch"):
@@ -409,7 +396,7 @@ def _classify_segment(segment):
         return "medium"
     if base in _SHELL_CONSUMERS or base in ("eval", "exec", "xargs", "source", "."):
         return "high"
-    return "medium"  # unknown executable: conservative
+    return "medium"
 
 
 def _outside_quotes(text):
@@ -470,10 +457,10 @@ def _strip_redirects(command):
     separately on the original text by redirect_writes_file.
     """
     s = str(command)
-    s = _re.sub(r"\d*>&\d", " ", s)  # 2>&1, 1>&2 (fd dup)
-    s = _re.sub(r"\d*>>?\s*[\"']?[^\"'\s;&|<>]+[\"']?", " ", s)  # > file, 2>nul
-    s = _re.sub(r"\d*>>?", " ", s)  # any leftover > / >>
-    s = _re.sub(r"<\s*\S+", " ", s)  # stdin redirects
+    s = _re.sub(r"\d*>&\d", " ", s)
+    s = _re.sub(r"\d*>>?\s*[\"']?[^\"'\s;&|<>]+[\"']?", " ", s)
+    s = _re.sub(r"\d*>>?", " ", s)
+    s = _re.sub(r"<\s*\S+", " ", s)
     return s
 
 
@@ -486,10 +473,7 @@ def classify_bash(command):
     """
     text = str(command or "")
     low = text.lower()
-    # Quoted text is the receiving command's data, so the scans below run
-    # outside quotes - unless the receiver outside the quotes is a shell,
-    # which turns the payload back into code and the original text is what
-    # gets scanned.
+
     outside = _outside_quotes(low)
     scanned = low if _has_shell_consumer(outside) else outside
     if _re.search(r"\|\s*(sudo\s+)?(sh|bash|zsh|dash|ksh)\b", scanned) and _re.search(
