@@ -125,9 +125,8 @@ node desktop/scripts/renderer-check.mjs
 Check the desktop shell and web build:
 
 ```powershell
-cd desktop/src-tauri
-cargo check
-cd ..
+cd desktop
+npm run check:rust
 npm run typecheck
 npm run build:web
 ```

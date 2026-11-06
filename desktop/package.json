@@ -5,6 +5,9 @@
   "description": "Tauri shell for the Harness Python engine",
   "scripts": {
     "build:web": "node scripts/build-web.mjs",
+    "format:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "lint:rust": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "check:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml --check && npm run lint:rust",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev": "npm run build:web && tauri dev",
     "build": "npm run build:web && tauri build --no-bundle",

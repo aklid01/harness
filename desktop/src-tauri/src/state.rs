@@ -1,5 +1,3 @@
-
-
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -35,7 +33,7 @@ impl AppState {
     }
 }
 
-pub fn bootstrap() -> AppState {
+pub fn bootstrap() -> Result<AppState, getrandom::Error> {
     let data_root = paths::data_root();
     paths::adopt_legacy_data_root(&data_root);
 
@@ -51,20 +49,17 @@ pub fn bootstrap() -> AppState {
     let logs = paths::logs_dir(&data_root);
     let _ = std::fs::create_dir_all(&logs);
 
-    AppState {
+    Ok(AppState {
         port,
         repo,
         project_root,
         data_root,
         log_path: logs.join("sidecar.log"),
-        auth_token: sidecar::new_token(),
+        auth_token: sidecar::new_token()?,
         sidecar: Mutex::new(None),
         shutting_down: AtomicBool::new(false),
-    }
+    })
 }
-
-
-
 
 pub fn spawn_sidecar(app: AppHandle) {
     std::thread::spawn(move || {
@@ -81,10 +76,6 @@ pub fn spawn_sidecar(app: AppHandle) {
 
         match started {
             Ok(child) => {
-
-
-
-
                 let mut stopped = false;
                 if let Ok(mut slot) = state.sidecar.lock() {
                     *slot = Some(child);
@@ -117,10 +108,6 @@ fn backend_error_dialog(app: &AppHandle, detail: &str) {
         .kind(MessageDialogKind::Error)
         .show(|_| {});
 }
-
-
-
-
 
 fn monitor_sidecar(app: AppHandle) {
     const MAX_RESPAWNS: u32 = 3;

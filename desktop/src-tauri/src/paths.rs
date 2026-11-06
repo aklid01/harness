@@ -1,8 +1,3 @@
-
-
-
-
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -44,16 +39,11 @@ fn roaming_dir() -> PathBuf {
 }
 
 pub fn data_root() -> PathBuf {
-
-
-
     if let Some(dir) = std::env::var_os("HARNESS_DATA_ROOT") {
         return PathBuf::from(dir);
     }
     roaming_dir().join("Harness")
 }
-
-
 
 pub fn adopt_legacy_data_root(root: &Path) {
     if root.exists() {
@@ -139,7 +129,6 @@ pub fn save_recents(root: &Path, list: &[String]) {
     write_json(&recents_file(root), &list);
 }
 
-
 pub fn push_recent(root: &Path, project_root: &str) {
     if project_root.is_empty() {
         return;
@@ -191,7 +180,6 @@ pub fn reset_custom_data_dir(root: &Path) {
     let _ = fs::remove_file(data_dir_file(root));
 }
 
-
 pub fn current_data_dir(root: &Path) -> (PathBuf, &'static str) {
     if let Some(dir) = std::env::var_os("HARNESS_APP_DATA") {
         return (PathBuf::from(dir), "env");
@@ -205,8 +193,6 @@ pub fn current_data_dir(root: &Path) -> (PathBuf, &'static str) {
 pub fn repo_root() -> PathBuf {
     // Where the APP CODE lives - never HARNESS_PROJECT_ROOT: that env var is
     // the agent's workspace (read by bootstrap for project_root), and using
-
-
 
     if let Ok(exe) = std::env::current_exe() {
         for dir in exe.ancestors().skip(1).take(8) {

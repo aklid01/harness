@@ -1,8 +1,6 @@
-
-
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -59,7 +57,7 @@ pub fn start(
     log_path: &Path,
     auth_token: &str,
 ) -> std::io::Result<Sidecar> {
-    let log = open_log(log_path);
+    let log = open_log(log_path)?;
     let args = backend_args(port, project_root, data_dir, auth_token);
     let venv = crate::paths::venv_python(repo);
     log_line(
@@ -109,13 +107,10 @@ fn backend_args(port: u16, project_root: &Path, data_dir: &Path, auth_token: &st
     ]
 }
 
-
-
-
-pub fn new_token() -> String {
+pub fn new_token() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes).expect("OS entropy for the sidecar auth token");
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    getrandom::fill(&mut bytes)?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn uv_available() -> bool {
@@ -183,7 +178,7 @@ fn watch_early_exit(child: &mut Child, window: Duration) -> Option<String> {
     }
 }
 
-fn open_log(path: &Path) -> Arc<Mutex<File>> {
+fn open_log(path: &Path) -> io::Result<Arc<Mutex<File>>> {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -197,10 +192,8 @@ fn open_log(path: &Path) -> Arc<Mutex<File>> {
                 .append(true)
                 .open(log_fallback())
         })
-        .unwrap_or_else(|_| {
-            File::create(std::env::temp_dir().join("harness-sidecar.log")).expect("log file")
-        });
-    Arc::new(Mutex::new(file))
+        .or_else(|_| File::create(std::env::temp_dir().join("harness-sidecar.log")))?;
+    Ok(Arc::new(Mutex::new(file)))
 }
 
 fn log_fallback() -> PathBuf {

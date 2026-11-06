@@ -5,12 +5,15 @@ mod state;
 
 use tauri::Manager;
 
-pub fn run() {
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            app.manage(state::bootstrap());
+            let app_state = state::bootstrap().map_err(|err| {
+                std::io::Error::other(format!("failed to create auth token: {err}"))
+            })?;
+            app.manage(app_state);
             state::spawn_sidecar(handle);
             Ok(())
         })
@@ -26,7 +29,7 @@ pub fn run() {
             commands::restart_app,
         ])
         .build(tauri::generate_context!())
-        .expect("failed to build the Harness window")
+        .map_err(|err| std::io::Error::other(format!("failed to build the Harness window: {err}")))?
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<state::AppState>() {
@@ -34,4 +37,5 @@ pub fn run() {
                 }
             }
         });
+    Ok(())
 }
