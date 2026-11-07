@@ -416,6 +416,11 @@ let reqSeq = 0;
 let sharedWs: WebSocket | null = null;
 let wsGen = 0;
 let connected = false;
+/* A ready frame after the first one means the socket reconnected, possibly to
+   a fresh engine after a sidecar respawn: every tab must re-issue its open so
+   transcript, mode chip and pending state come from the engine, not from what
+   this tab last showed. */
+let everReady = false;
 let bootPort = location.search
   ? (new URLSearchParams(location.search).get("port") ?? "8765")
   : "8765";
@@ -2245,9 +2250,10 @@ function issueOpen(ctx: Ctx): void {
     send(ctx, { op: "open", id: openId ?? "" });
     return;
   }
-  // resume: use the remembered session, else fall back to the workspace's most
-  // recent session once the list arrives (never a fresh blank if history exists).
-  const last = prefs.lastSessionByWs[ctx.root];
+  // resume: on a reconnect resync the tab's own session is the truth; at first
+  // open fall back to the workspace's most recent session once the list arrives
+  // (never a fresh blank if history exists).
+  const last = ctx.sessionId ?? prefs.lastSessionByWs[ctx.root];
   if (last) {
     send(ctx, { op: "open", id: last });
     return;
@@ -3334,6 +3340,8 @@ function settleReply(msg: ServerEnvelope): boolean {
 }
 function handleReady(msg: ServerEnvelope): void {
   connected = true;
+  const resync = everReady;
+  everReady = true;
   const root = String(msg.ready?.project_root ?? bootRoot);
   if (root) bootRoot = root;
   void fetchRecents();
@@ -3342,6 +3350,7 @@ function handleReady(msg: ServerEnvelope): void {
       `connected · ${activeCtx.project || baseName(activeCtx.root)}`,
       "online",
     );
+    if (resync) for (const t of tabs) t.hadReady = false;
     if (!activeCtx.hadReady) issueOpen(activeCtx);
 
     for (const t of tabs) if (!t.hadReady) issueOpen(t);
