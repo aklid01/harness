@@ -5500,6 +5500,7 @@ function renderSendExtraMenu(): void {
 let cmdIndex = 0;
 let cmdMatches: Array<{ cmd: string; help: string }> = [];
 let cmdDismissed = "";
+let composingCmd = false;
 
 /* The first token of the entry, when it is a command position: the text
    starts with "/" (leading space tolerated, like the engine's parser). */
@@ -5516,8 +5517,10 @@ function updateCmdMenu(): void {
     : [];
   // Escape dismisses for this token; clearing the composer re-arms it.
   if (!token) cmdDismissed = "";
+  // Don't show menu if user is dismissing or no matches
   if (!token || !matches.length || token === cmdDismissed) {
     cmdMatches = [];
+    composingCmd = false;
     cmdMenu.classList.add("hidden");
     cmdMenu.replaceChildren();
     return;
@@ -5542,6 +5545,7 @@ function updateCmdMenu(): void {
     };
     cmdMenu.appendChild(btn);
   });
+  composingCmd = true;
   cmdMenu.classList.remove("hidden");
 }
 
@@ -5644,7 +5648,10 @@ providerBtn.onclick = (e) => {
 };
 
 document.addEventListener("click", (e) => {
-  closeAllMenus();
+  // Don't close command menu if user is actively composing a command in the input field
+  if (!composingCmd || e.target === entry) {
+    closeAllMenus();
+  }
   const t = e.target as HTMLElement;
   if (contextMenu && !contextMenu.contains(t)) hideContextMenu();
 });

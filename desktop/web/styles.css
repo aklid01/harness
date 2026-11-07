@@ -1664,6 +1664,7 @@ button {
   transition:
     border-color 0.14s ease,
     box-shadow 0.14s ease;
+  position: relative;
 }
 .composer-box:focus-within {
   border-color: var(--accent-line);
