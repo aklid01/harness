@@ -491,6 +491,7 @@ let modelInfoReply: ((data: ModelInfoResult) => void) | null = null;
 let pendingModelsStatus = "";
 let pendingModelsStatusOk = false;
 let activeApproval: { ctx: Ctx; id: string } | null = null;
+let activePick: { ctx: Ctx; id: string } | null = null;
 let pendingRewindCount: number | null = null;
 let popHideTimer: number | null = null;
 
@@ -2648,11 +2649,32 @@ interface ModalGuard {
 }
 let modalGuard: ModalGuard | null = null;
 
+/* An engine interaction (approval or pick) owns the modal slot while it is
+   pending: whatever replaces or closes the dialog answers it first, so a
+   pending approval is never left invisible to the keyboard path (Enter would
+   resolve a dialog the user cannot see) and the engine is never left waiting
+   on a dialog that is gone. */
+function answerPendingEngineDialogs(): void {
+  if (activeApproval) {
+    send(activeApproval.ctx, {
+      op: "approval_reply",
+      id: activeApproval.id,
+      allow: false,
+    });
+    activeApproval = null;
+  }
+  if (activePick) {
+    send(activePick.ctx, { op: "pick_reply", id: activePick.id, index: null });
+    activePick = null;
+  }
+}
+
 export function showModal(
   html: string,
   backdrop: BackdropBehavior = "close",
   onCancel?: () => void,
 ): void {
+  answerPendingEngineDialogs();
   modalBox.classList.remove("wide");
   modalBox.classList.remove("settings-modal");
   modalBox.style.width = "";
@@ -2667,7 +2689,9 @@ export function showModal(
   modal.classList.remove("hidden");
 }
 export function hideModal(): void {
+  answerPendingEngineDialogs();
   activeApproval = null;
+  activePick = null;
   modal.classList.add("hidden");
   modalBox.innerHTML = "";
   modelInfoReply = null;
@@ -2841,8 +2865,9 @@ function askPick(ctx: Ctx, title: string, rows: string[], id: string): void {
   }
   // The engine blocks until this is answered, so a backdrop click cancels the
   // pick instead of dropping the dialog and leaving the turn waiting.
-  const cancel = (): void => {
-    send(ctx, { op: "pick_reply", id, index: null });
+  const reply = (index: number | null): void => {
+    activePick = null;
+    send(ctx, { op: "pick_reply", id, index });
     hideModal();
   };
   showModal(
@@ -2850,15 +2875,13 @@ function askPick(ctx: Ctx, title: string, rows: string[], id: string): void {
       `<div class="pick-list">${rows.map((r, i) => `<button class="pick-item" data-i="${i}">${escapeHtml(r)}</button>`).join("")}</div>` +
       `<div class="modal-actions"><button class="btn" id="mCancel">Cancel</button></div>`,
     "close",
-    cancel,
+    () => reply(null),
   );
+  activePick = { ctx, id };
   modalBox.querySelectorAll<HTMLButtonElement>(".pick-item").forEach((btn) => {
-    btn.onclick = () => {
-      send(ctx, { op: "pick_reply", id, index: Number(btn.dataset["i"]) });
-      hideModal();
-    };
+    btn.onclick = () => reply(Number(btn.dataset["i"]));
   });
-  el<HTMLButtonElement>("mCancel").onclick = cancel;
+  el<HTMLButtonElement>("mCancel").onclick = () => reply(null);
 }
 
 /* ---------------- approval (keyboard-first) ---------------- */
