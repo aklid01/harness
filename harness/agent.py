@@ -23,6 +23,7 @@ from . import (
     permissions,
     providers,
     session,
+    shellrisk,
     texttools,
     tools,
 )
@@ -1780,14 +1781,14 @@ class Runner:
                 f"{verb} instead of calling {name}."
             )
         elif (
-            self.mode == "ask"
+            self.mode in ("plan", "ask")
             and name == "bash"
-            and permissions.decide(str(args.get("command") or "")) != "allow"
+            and not shellrisk.read_only_bash(str(args.get("command") or ""))
         ):
             result = (
-                "Ask mode is read-only: this command can change the "
-                "workspace, so it was not run. Answer from what you can "
-                "read instead."
+                f"{self.mode.capitalize()} mode is read-only: this command "
+                "can change the workspace, so it was not run. Answer from "
+                "what you can read instead."
             )
         else:
             hold = self._review_gate(name, args, message)

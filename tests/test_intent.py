@@ -233,6 +233,33 @@ class IntentCase(IsolatedCase):
             "the plan turn keeps the checklist: it is the plan's own step list",
         )
 
+    def test_plan_mode_refuses_mutating_bash_without_executing(self):
+        """The plan fence covers bash: reads run, workspace changes refuse."""
+        runner = Runner()
+        self.llm.side_effect = [
+            (fake_message(None, [("bash", {"command": "mkdir -p sub"})]), USAGE),
+            (fake_message("mapped the layout from the listing"), USAGE),
+        ]
+        with mock.patch("harness.agent.execute") as exe:
+            exe.side_effect = AssertionError("plan turns never execute writes")
+            runner.handle_input("/plan map the layout")
+        results = [p["result"] for t, p in self.seen if t == events.TOOL_RESULT]
+        self.assertTrue(results and "read-only" in results[0].lower(), results)
+
+    def test_plan_mode_still_runs_readonly_bash(self):
+        runner = Runner()
+        self.llm.side_effect = [
+            (fake_message(None, [("bash", {"command": "git status"})]), USAGE),
+            (fake_message("the tree is clean"), USAGE),
+        ]
+        with mock.patch(
+            "harness.agent.execute", return_value=({"command": "git status"}, "clean")
+        ) as exe:
+            runner.handle_input("/plan check the tree")
+        self.assertEqual(exe.call_count, 1)
+        results = [p["result"] for t, p in self.seen if t == events.TOOL_RESULT]
+        self.assertTrue(results and "clean" in results[0], results)
+
 
 class StickyPersistence(unittest.TestCase):
     """The sticky mode survives a restart, through the sidecar and the op."""

@@ -7,7 +7,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
 os.environ.setdefault("API_KEY", "test-key")
 os.environ.setdefault("MODEL", "test-model")
 
-from harness.shellrisk import classify_bash
+from harness.shellrisk import classify_bash, read_only_bash
 
 
 class ShellRiskCase(unittest.TestCase):
@@ -67,6 +67,46 @@ class ShellRiskCase(unittest.TestCase):
     def test_unknown_executable_is_conservatively_medium(self):
         level, _ = classify_bash("./some-unheard-of-binary --flag")
         self.assertEqual(level, "medium")
+
+
+class ReadOnlyBash(unittest.TestCase):
+    """The plan/ask bash fence judges what a command does, not its prefix.
+
+    Plan and ask turns promise read-only behavior, so every segment must be a
+    known reader: no redirects into files, no substitutions, no write
+    primitives, no directory creation, no code execution.
+    """
+
+    def test_inspection_passes(self):
+        for command in (
+            "git status",
+            "git log --oneline -5",
+            "git diff HEAD",
+            "ls -la src 2>&1",
+            "cat README.md | head -20",
+            "find . -name '*.py'",
+            "grep -rn todo harness/",
+            'P1="/tmp/x"; ls -la "$P1"',
+        ):
+            self.assertTrue(read_only_bash(command), command)
+
+    def test_writes_and_execution_fail(self):
+        for command in (
+            "mkdir -p build/out",
+            "touch marker.tmp",
+            "pytest -q",
+            "python -m pytest",
+            "npm test",
+            "echo hi > out.txt",
+            "sort -o evil.txt in.txt",
+            "find . -name '*.tmp' -delete",
+            "sed -i 's/a/b/' file",
+            "git add .",
+            "echo $(git rev-parse HEAD)",
+            "rm -rf build",
+            "cat x | sh",
+        ):
+            self.assertFalse(read_only_bash(command), command)
 
 
 if __name__ == "__main__":

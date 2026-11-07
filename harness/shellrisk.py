@@ -501,6 +501,30 @@ def classify_bash(command):
     return worst, _RISK_REASON.get(worst, worst)
 
 
+def read_only_bash(command):
+    """True when every part of the command only reads.
+
+    The plan/ask bash fence refuses anything else before execution, so this
+    leans conservative: redirects into files, substitutions, write primitives,
+    directory creation and every executable that is not a known reader fail,
+    including ones the risk levels rate low because their damage is small.
+    """
+    text = str(command or "")
+    if redirect_writes_file(text):
+        return False
+    for segment in split_command(_strip_redirects(text)):
+        words = _shell_words(segment)
+        if _assignment_only(words):
+            continue
+        if _has_substitution(segment):
+            return False
+        if _base_command(words) in ("mkdir", "touch"):
+            return False
+        if _hides_write_primitive(segment) or _classify_segment(segment) != "low":
+            return False
+    return True
+
+
 _RISK_REASON = {
     "low": "read-only inspection with no side effects.",
     "medium": "installs, builds, tests, or runs code.",
