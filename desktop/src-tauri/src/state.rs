@@ -77,6 +77,7 @@ pub fn spawn_sidecar(app: AppHandle) {
         match started {
             Ok(child) => {
                 let mut stopped = false;
+                let started_at = std::time::Instant::now();
                 if let Ok(mut slot) = state.sidecar.lock() {
                     *slot = Some(child);
                     if state.is_shutting_down() {
@@ -87,7 +88,7 @@ pub fn spawn_sidecar(app: AppHandle) {
                     }
                 }
                 if !stopped {
-                    std::thread::spawn(move || monitor_sidecar(app));
+                    std::thread::spawn(move || monitor_sidecar(app, started_at));
                 }
             }
             Err(err) => {
@@ -109,11 +110,15 @@ fn backend_error_dialog(app: &AppHandle, detail: &str) {
         .show(|_| {});
 }
 
-fn monitor_sidecar(app: AppHandle) {
+fn monitor_sidecar(app: AppHandle, started_at: std::time::Instant) {
+    use std::time::{Duration, Instant};
+
     const MAX_RESPAWNS: u32 = 3;
-    let mut respawns = 0u32;
+    const STABLE_FOR: Duration = Duration::from_secs(60);
+    let mut respawns: u32 = 0;
+    let mut alive_since = started_at;
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(500));
         let state = app.state::<AppState>();
         if state.is_shutting_down() {
             return;
@@ -121,53 +126,72 @@ fn monitor_sidecar(app: AppHandle) {
         let exited = match state.sidecar.lock() {
             Ok(mut slot) => match slot.as_mut() {
                 Some(child) => match child.try_wait() {
-                    Ok(Some(status)) => {
-                        let dead = slot.take();
-                        drop(dead);
-                        Some(status)
+                    Ok(Some(_)) => {
+                        slot.take();
+                        true
                     }
-                    Ok(None) => None,
-                    Err(_) => None,
+                    _ => false,
                 },
-                None => continue,
+                None => false,
             },
-            Err(_) => continue,
+            Err(_) => false,
         };
-        let Some(_status) = exited else {
+        if !exited {
             continue;
-        };
+        }
         if state.is_shutting_down() {
             return;
         }
-        respawns += 1;
-        if respawns > MAX_RESPAWNS {
-            backend_error_dialog(
-                &app,
-                "The backend stopped repeatedly and was not restarted. \
-                 Restart the app; the log has the details.",
-            );
-            return;
+        // A crash loop and one crash after hours of uptime are different
+        // failures: stability refills the respawn budget.
+        if alive_since.elapsed() > STABLE_FOR {
+            respawns = 0;
         }
-        eprintln!("harness: sidecar exited, respawning (attempt {respawns})");
-        std::thread::sleep(std::time::Duration::from_millis(500 * respawns as u64));
-        let state = app.state::<AppState>();
-        let (data_dir, _) = paths::current_data_dir(&state.data_root);
-        match sidecar::start(
-            state.port,
-            &state.repo,
-            &state.project_root,
-            &data_dir,
-            &state.log_path,
-            &state.auth_token,
-        ) {
-            Ok(child) => {
-                if let Ok(mut slot) = state.sidecar.lock() {
-                    *slot = Some(child);
-                }
-            }
-            Err(err) => {
-                backend_error_dialog(&app, &err.to_string());
+        loop {
+            respawns += 1;
+            if respawns > MAX_RESPAWNS {
+                backend_error_dialog(
+                    &app,
+                    "The backend stopped repeatedly and was not restarted. \
+                     Restart the app; the log has the details.",
+                );
                 return;
+            }
+            eprintln!("harness: sidecar exited, respawning (attempt {respawns})");
+            std::thread::sleep(Duration::from_millis(500 * respawns as u64));
+            let state = app.state::<AppState>();
+            if state.is_shutting_down() {
+                return;
+            }
+            let (data_dir, _) = paths::current_data_dir(&state.data_root);
+            match sidecar::start(
+                state.port,
+                &state.repo,
+                &state.project_root,
+                &data_dir,
+                &state.log_path,
+                &state.auth_token,
+            ) {
+                Ok(child) => {
+                    alive_since = Instant::now();
+                    let mut stopped = false;
+                    if let Ok(mut slot) = state.sidecar.lock() {
+                        *slot = Some(child);
+                        if state.is_shutting_down() {
+                            if let Some(child) = slot.take() {
+                                child.stop();
+                                stopped = true;
+                            }
+                        }
+                    }
+                    if stopped {
+                        return;
+                    }
+                    break;
+                }
+                Err(err) => {
+                    eprintln!("harness: sidecar failed to respawn: {err}");
+                }
             }
         }
     }
