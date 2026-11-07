@@ -200,6 +200,24 @@ class Session:
     def _thread(self, target, *args):
         threading.Thread(target=target, args=args, daemon=True).start()
 
+    def _spawn_turn(self, target, *args):
+        """Start a turn worker, and unbrick the session if the thread cannot.
+
+        ``running`` goes True before the spawn; a failed Thread.start (thread
+        resources exhausted) must not leave the session refusing every input
+        while nothing runs and no ``done`` ever fires.
+        """
+        try:
+            self._thread(target, *args)
+        except RuntimeError:
+            with self.lock:
+                self.running = False
+            self.on_event(
+                events.ERROR,
+                {"text": "the turn could not be started - try again"},
+            )
+            self._send({"event": "done", "payload": {}})
+
     def track(self, thread):
         """Remember a background worker so ``join_background`` can wait."""
         with self.lock:
@@ -250,19 +268,19 @@ class Session:
         attachments: list | None = None,
     ) -> bool:
         with self.lock:
-            if self._seen_submission(submission_id):
-                self.on_event(events.NOTE, {"text": "that submission was already sent"})
-                return False
             if self.running:
                 self.on_event(
                     events.NOTE, {"text": "already running - press Stop first"}
                 )
                 return False
+            if self._seen_submission(submission_id):
+                self.on_event(events.NOTE, {"text": "that submission was already sent"})
+                return False
             self.running = True
         self.cancel.clear()
 
         self.cancel_review()
-        self._thread(self._turn, text, None, self._keep_attachments(attachments))
+        self._spawn_turn(self._turn, text, None, self._keep_attachments(attachments))
         return True
 
     def _keep_attachments(self, items):
@@ -291,13 +309,13 @@ class Session:
         text = str(text or "").strip()
         kind = kind if kind in ("steer", "queue") else None
         with self.lock:
-            if self._seen_submission(submission_id):
-                self.on_event(events.NOTE, {"text": "that submission was already sent"})
-                return False
             if not self.running:
                 self.on_event(
                     events.NOTE, {"text": "nothing is running - send it normally"}
                 )
+                return False
+            if self._seen_submission(submission_id):
+                self.on_event(events.NOTE, {"text": "that submission was already sent"})
                 return False
             if not text or kind is None:
                 self.on_event(events.NOTE, {"text": "empty message or unknown kind"})
@@ -418,7 +436,7 @@ class Session:
                 follow = self.mailbox.take_next()
                 if follow is not None:
                     self.cancel.clear()
-                    self._thread(
+                    self._spawn_turn(
                         self._turn,
                         follow["text"],
                         follow["kind"],
@@ -496,7 +514,9 @@ class Session:
             self.running = True
         self.cancel.clear()
         self.cancel_review()
-        self._thread(self._resend, count, text, restore_files, attachments)
+        self._spawn_turn(
+            self._resend, count, text, restore_files, attachments
+        )
         return True
 
     def _resend(self, count, text, restore_files=True, attachments=None):
@@ -585,7 +605,7 @@ class Session:
         with self.workspace():
             plan_mod.save(self.session_id, phase="building")
         self.on_event(events.PLAN_APPROVED, {"task": task})
-        self._thread(self._handoff_worker, plan_text, task)
+        self._spawn_turn(self._handoff_worker, plan_text, task)
         return True
 
     def _handoff_worker(self, plan_text, task):

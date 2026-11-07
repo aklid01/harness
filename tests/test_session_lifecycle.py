@@ -202,6 +202,32 @@ class SessionCase(unittest.TestCase):
         )
         self.assertEqual(len(self.calls), 1, "one model request")
 
+    def test_a_failed_turn_spawn_does_not_wedge_the_session(self):
+        """running goes True before the worker spawns; a failed spawn must
+        settle the turn, or every later input is refused with "already
+        running" and no done ever fires - the tab is bricked until restart.
+        """
+        self.dispatch(op="open", session="t1", root=str(self.root))
+        self.assertTrue(self.done("t1", kind="session"))
+
+        real_thread = threading.Thread
+
+        class BrokenThread(real_thread):
+            def start(self):
+                raise RuntimeError("can't start new thread")
+
+        raised = None
+        with mock.patch("harness.server.threading.Thread", BrokenThread):
+            try:
+                self.dispatch(op="submit", session="t1", text="Hi", mode="build")
+            except RuntimeError as failure:
+                raised = failure
+        self.assertIsNone(raised, f"submit must survive a failed spawn: {raised}")
+        self.assertTrue(self.done("t1"), "a failed spawn must still settle the turn")
+
+        self.dispatch(op="submit", session="t1", text="Again", mode="build")
+        self.assertTrue(self.done("t1"), "the session must accept inputs again")
+
     def test_two_draft_tabs_starting_a_session_at_once_get_distinct_sessions(self):
         """The regression behind the app data: two first prompts in the same
         second both landed in one session file, doubling the first turn.
