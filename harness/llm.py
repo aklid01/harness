@@ -24,8 +24,6 @@ from .tools import TOOL_SCHEMAS
 
 _client_cache = {}
 
-RETRY = "retry"
-
 
 def get_client():
     """Client for the active provider. Rebuilt when credentials change."""
@@ -207,7 +205,7 @@ def _progress(caps):
         error = state.get("error")
         if error is not None:
             payload.update(error.payload())
-        events.emit(RETRY, payload)
+        events.emit(events.RETRY, payload)
 
     return emit
 

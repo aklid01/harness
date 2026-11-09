@@ -181,13 +181,14 @@ class BypassRegression(unittest.TestCase):
 
     def test_withheld_sets_name_real_tools(self):
 
-        from harness import agent, subagent, tools
+        from harness import toolsets, tools
 
         real = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
-        for withheld in (subagent.WITHHELD, agent.READONLY_WITHHELD):
-            self.assertLessEqual(
-                withheld, real, f"withheld names that are not tools: {withheld - real}"
-            )
+        self.assertLessEqual(
+            toolsets.READONLY_WITHHELD,
+            real,
+            f"withheld names that are not tools: {toolsets.READONLY_WITHHELD - real}",
+        )
 
 
 class ReadonlyShapeRegression(unittest.TestCase):

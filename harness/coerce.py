@@ -1,8 +1,9 @@
 """Coercion helpers for config values read out of JSON settings files.
 
 A leaf module on purpose: the role config (agent_roles) and the review
-settings (review/config) both need these, and neither may reach into the
-other subpackage to get them.
+settings (review/config) both need these. The section vocabulary lives in
+review/config and flows one way, into agent_roles; this module stays below
+both of them.
 """
 
 

@@ -883,7 +883,7 @@ class SubagentExclusion(IsolatedCase):
         events.reset()
 
     def test_the_decision_tool_is_never_in_the_subagent_toolset(self):
-        from harness import subagent, tools
+        from harness import toolsets, tools
 
         registry = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
         self.assertNotIn(
@@ -892,7 +892,7 @@ class SubagentExclusion(IsolatedCase):
             "the decision tool is not a registry tool, so no guest loop can get it",
         )
         self.assertTrue(
-            {"write_file", "str_replace", "task"} <= subagent.WITHHELD,
+            {"write_file", "str_replace", "task"} <= toolsets.READONLY_WITHHELD,
             "a guest cannot write either",
         )
 

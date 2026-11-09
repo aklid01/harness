@@ -25,15 +25,13 @@ import json
 from . import instructions, providers
 from . import shellrisk as shellrisk_mod
 from .llm import call_llm
+from .toolsets import REVIEWABLE
 
 MODEL_VERDICTS = ("approve", "revise", "clarify", "escalate")
 
 VERDICTS = MODEL_VERDICTS + ("error",)
 
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
-
-
-REVIEWABLE = ("write_file", "str_replace", "bash")
 
 
 SMALL_EDIT_CHARS = 2000

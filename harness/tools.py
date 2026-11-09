@@ -25,16 +25,7 @@ from . import history, paths, sandbox
 from .permissions import approval_info, check
 from .skills import read_skill
 from .todos import TODO_SCHEMA, write_todos
-
-REQUIRES = {
-    "bash": {"shell": True, "workspace": True, "approval": True},
-    "read_file": {"workspace": True},
-    "write_file": {"workspace": True, "approval": True},
-    "str_replace": {"workspace": True, "approval": True},
-    "read_skill": {"skills": True},
-    "write_todos": {},
-    "task": {"workspace": True},
-}
+from .toolsets import READONLY_WITHHELD, REQUIRES
 
 _AVAILABILITY_CACHE = None
 _AVAILABILITY_KEY = None
@@ -545,7 +536,7 @@ def _task(description: str) -> str:
     so an implementation never reads the registry back."""
     from . import subagent
 
-    guest = [s for s in TOOL_SCHEMAS if s["function"]["name"] not in subagent.WITHHELD]
+    guest = [s for s in TOOL_SCHEMAS if s["function"]["name"] not in READONLY_WITHHELD]
     return subagent.task(
         description,
         execute=execute,

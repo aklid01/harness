@@ -10,7 +10,7 @@ and every trim costs the whole prompt cache.
 """
 
 from . import config
-from .history import estimate, strip
+from .history import SUMMARY, estimate, strip
 from .llm import active_model, get_client
 
 SYSTEM_PROMPT = """
@@ -44,7 +44,7 @@ Rules:
 - No preamble and no sign-off. Start at the first heading.
 """
 
-HANDOFF = """<summary>
+HANDOFF = SUMMARY + """
 Everything before this point has been compacted out of the context window to
 free up room. This is the record of it - treat it as your own memory of the
 work so far, not as something the user told you.
