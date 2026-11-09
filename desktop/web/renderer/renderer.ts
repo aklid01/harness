@@ -497,7 +497,7 @@ let pendingModelsStatus = "";
 let pendingModelsStatusOk = false;
 let activeApproval: { ctx: Ctx; id: string } | null = null;
 let activePick: { ctx: Ctx; id: string } | null = null;
-let pendingRewindCount: number | null = null;
+let rewindRequest: { ctx: Ctx; count: number } | null = null;
 let popHideTimer: number | null = null;
 
 const EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"];
@@ -2704,6 +2704,7 @@ export function hideModal(): void {
   modalBackdropBehavior = "close";
   modalBackdropCancel = null;
   modalGuard = null;
+  rewindRequest = null;
 }
 /* Run the action a backdrop click asked for, now that any dirty check passed. */
 function dismissModal(): void {
@@ -2974,14 +2975,15 @@ function resolveApprovalSkip(ctx: Ctx, id: string): void {
 /* ---------------- rewind (conversation + files) ---------------- */
 function confirmRewind(ctx: Ctx, idx: number): void {
   if (ctx.busy) return;
-  pendingRewindCount = idx;
+  rewindRequest = { ctx, count: idx };
   send(ctx, { op: "rewind_preview", count: idx });
 }
 function openRewindConfirm(
+  ctx: Ctx,
   count: number,
   changes: Array<{ path: string; action: string; dirty: boolean }>,
 ): void {
-  pendingRewindCount = count;
+  rewindRequest = { ctx, count };
   const dirty = changes.some((c) => c.dirty);
   const list = changes.length
     ? `<ul class="rewind-list">${changes.map((c) => `<li><span class="rw-path" title="${escapeHtml(c.path)}">${escapeHtml(baseName(c.path))}</span><span class="rw-act ${c.action === "delete" ? "del" : "res"}">${c.action === "delete" ? "will be deleted" : "restored to pre-edit"}</span>${c.dirty ? `<span class="rw-dirty">edited since</span>` : ""}</li>`).join("")}</ul>`
@@ -2996,15 +2998,15 @@ function openRewindConfirm(
       `<div class="modal-actions"><button class="btn" id="rwCancel">Cancel</button><button class="btn primary" id="rwOk">Rewind</button></div>`,
   );
   el<HTMLButtonElement>("rwCancel").onclick = () => {
-    pendingRewindCount = null;
+    rewindRequest = null;
     hideModal();
   };
   el<HTMLButtonElement>("rwOk").onclick = () => {
-    if (!activeCtx) return;
-    const c = pendingRewindCount ?? count;
-    pendingRewindCount = null;
+    if (!rewindRequest) return;
+    const target = rewindRequest;
+    rewindRequest = null;
     hideModal();
-    send(activeCtx, { op: "rewind_to", count: c });
+    send(target.ctx, { op: "rewind_to", count: target.count });
   };
 }
 
@@ -3274,6 +3276,7 @@ function submit(ctx: Ctx, text: string): void {
 
 function connect(): void {
   wsGen += 1;
+  settingsRequested = false;
   const gen = wsGen;
   setConn(`connecting… (port ${bootPort})`, "connecting");
   dlog("ws", "WS-CONNECT", `ws://127.0.0.1:${bootPort}`, "gen", gen);
@@ -3892,7 +3895,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       count?: number;
       changes?: Array<{ path: string; action: string; dirty: boolean }>;
     };
-    openRewindConfirm(data.count ?? 0, data.changes ?? []);
+    openRewindConfirm(ctx, data.count ?? 0, data.changes ?? []);
   } else if (
     msg.reply === "get_transcript" &&
     msg.ok &&
