@@ -27,9 +27,6 @@ from .llm import call_llm
 MAX_TURNS = 12
 
 
-WITHHELD = {"task", "write_todos", "str_replace", "write_file"}
-
-
 def _workspace_root() -> str:
     from . import paths
 

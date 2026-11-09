@@ -34,6 +34,7 @@ from .context import reminder
 from .llm import call_llm, system_prompt
 from .review import command as review_command
 from .todos import active_form
+from .toolsets import READONLY_WITHHELD
 from .tools import available_tool_names, execute
 
 log = logging.getLogger(__name__)
@@ -161,7 +162,6 @@ PLAN_DECISION_TOOL = {
 }
 
 
-READONLY_WITHHELD = {"write_file", "str_replace", "write_todos", "task"}
 BUILD_MAX_TOOLS = 200
 
 
@@ -1482,6 +1482,7 @@ class Runner:
                 break
         usage = None
         history.begin_turn()
+        tools.begin_turn()
 
         self._file_state = context_mod.git_state()
         while True:

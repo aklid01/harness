@@ -67,7 +67,7 @@ def _is_assignment(word):
     return all(char.isascii() and (char.isalnum() or char == "_") for char in name)
 
 
-def _assignment_only(words):
+def assignment_only(words):
     """True when the words are nothing but shell variable assignments.
 
     `P1=/tmp/x` changes nothing on disk, but judged as an unknown executable
@@ -84,9 +84,9 @@ _WRITE_PRIMITIVES = (
 )
 
 
-def _hides_write_primitive(segment):
+def hides_write_primitive(segment):
     """True if an allow-listed "read-only" command carries a write primitive."""
-    words = _shell_words(segment)
+    words = shell_words(segment)
     base = _base_command(words)
     args = words[1:]
     for name, primitives in _WRITE_PRIMITIVES:
@@ -101,7 +101,7 @@ def _hides_write_primitive(segment):
     return False
 
 
-def _has_substitution(segment):
+def has_substitution(segment):
     """True if the segment can run hidden text: $(), backticks, or <().
 
     Conservative by design - single quotes would make these literal, but a
@@ -257,7 +257,7 @@ _SHELL_CONSUMERS = (
 )
 
 
-def _shell_words(segment):
+def shell_words(segment):
     """Split one command segment into words, honouring quotes and escapes."""
     words, cur, quote, i = [], [], None, 0
     seg = segment
@@ -339,11 +339,11 @@ def redirect_writes_file(command):
 
 
 def _classify_segment(segment):
-    words = _shell_words(segment)
+    words = shell_words(segment)
     base = _base_command(words)
     args = [w for w in words[1:]]
 
-    if _assignment_only(words):
+    if assignment_only(words):
         return "low"
 
     if base == "sed":
@@ -438,7 +438,7 @@ _CATASTROPHIC_PATTERNS = (
 
 def _is_catastrophic(command):
     for segment in split_command(command):
-        words = _shell_words(segment)
+        words = shell_words(segment)
         base = _base_command(words)
         if base in _CATASTROPHIC_COMMANDS:
             return True
@@ -513,14 +513,14 @@ def read_only_bash(command):
     if redirect_writes_file(text):
         return False
     for segment in split_command(_strip_redirects(text)):
-        words = _shell_words(segment)
-        if _assignment_only(words):
+        words = shell_words(segment)
+        if assignment_only(words):
             continue
-        if _has_substitution(segment):
+        if has_substitution(segment):
             return False
         if _base_command(words) in ("mkdir", "touch"):
             return False
-        if _hides_write_primitive(segment) or _classify_segment(segment) != "low":
+        if hides_write_primitive(segment) or _classify_segment(segment) != "low":
             return False
     return True
 

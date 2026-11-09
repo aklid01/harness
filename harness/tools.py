@@ -25,16 +25,7 @@ from . import history, paths, sandbox
 from .permissions import approval_info, check
 from .skills import read_skill
 from .todos import TODO_SCHEMA, write_todos
-
-REQUIRES = {
-    "bash": {"shell": True, "workspace": True, "approval": True},
-    "read_file": {"workspace": True},
-    "write_file": {"workspace": True, "approval": True},
-    "str_replace": {"workspace": True, "approval": True},
-    "read_skill": {"skills": True},
-    "write_todos": {},
-    "task": {"workspace": True},
-}
+from .toolsets import READONLY_WITHHELD, REQUIRES
 
 _AVAILABILITY_CACHE = None
 _AVAILABILITY_KEY = None
@@ -311,8 +302,9 @@ def execute(tool_call, note="", call_key=None, cancel=None) -> tuple[dict, str]:
 
     from . import events
 
-    if call_key is not None and call_key in _EXECUTED:
-        return _EXECUTED[call_key]
+    executed = _executed()
+    if call_key is not None and call_key in executed:
+        return executed[call_key]
 
     name = tool_call.function.name
     try:
@@ -338,9 +330,10 @@ def execute(tool_call, note="", call_key=None, cancel=None) -> tuple[dict, str]:
             info = approval_info(name, args, reason, note)
             if not events.interact(events.APPROVAL, info):
                 return args, "The user denied this tool call."
-            _USER_APPROVED.append((name, dict(args)))
-            while len(_USER_APPROVED) > _USER_APPROVED_LIMIT:
-                _USER_APPROVED.pop(0)
+            approved = _approved()
+            approved.append((name, dict(args)))
+            while len(approved) > _USER_APPROVED_LIMIT:
+                approved.pop(0)
         if name in ("write_file", "str_replace"):
             outcome = args, _tracked_write(name, args)
         else:
@@ -357,28 +350,54 @@ def execute(tool_call, note="", call_key=None, cancel=None) -> tuple[dict, str]:
     return outcome
 
 
-_EXECUTED: dict = {}
+_EXECUTED = contextvars.ContextVar("tools_executed", default=None)
 _EXECUTED_LIMIT = 64
-
-
-_USER_APPROVED: list = []
+_USER_APPROVED = contextvars.ContextVar("tools_user_approved", default=None)
 _USER_APPROVED_LIMIT = 32
+
+
+def begin_turn():
+    """Fresh registries for one turn.
+
+    A server turn runs in its own thread and would start empty anyway; this
+    also resets one shared thread that runs several turns in sequence. A
+    context that never calls it gets lazily created registries on first use.
+    """
+    _EXECUTED.set({})
+    _USER_APPROVED.set([])
+
+
+def _executed() -> dict:
+    seen = _EXECUTED.get()
+    if seen is None:
+        seen = {}
+        _EXECUTED.set(seen)
+    return seen
+
+
+def _approved() -> list:
+    approved = _USER_APPROVED.get()
+    if approved is None:
+        approved = []
+        _USER_APPROVED.set(approved)
+    return approved
 
 
 def user_approved(name, args) -> bool:
     """Was this exact call approved by the user through the permission dialog?"""
-    return any(n == name and a == args for n, a in _USER_APPROVED)
+    return any(n == name and a == args for n, a in _approved())
 
 
 def _remember(call_key, outcome):
-    _EXECUTED[call_key] = outcome
-    while len(_EXECUTED) > _EXECUTED_LIMIT:
-        _EXECUTED.pop(next(iter(_EXECUTED)))
+    seen = _executed()
+    seen[call_key] = outcome
+    while len(seen) > _EXECUTED_LIMIT:
+        seen.pop(next(iter(seen)))
 
 
 def executed_calls() -> dict:
     """The registry, for tests and diagnostics."""
-    return dict(_EXECUTED)
+    return dict(_executed())
 
 
 def current_cancel():
@@ -517,7 +536,7 @@ def _task(description: str) -> str:
     so an implementation never reads the registry back."""
     from . import subagent
 
-    guest = [s for s in TOOL_SCHEMAS if s["function"]["name"] not in subagent.WITHHELD]
+    guest = [s for s in TOOL_SCHEMAS if s["function"]["name"] not in READONLY_WITHHELD]
     return subagent.task(
         description,
         execute=execute,

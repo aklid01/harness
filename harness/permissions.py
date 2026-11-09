@@ -12,14 +12,15 @@ from pathlib import Path
 
 from . import paths
 from .shellrisk import (
-    _assignment_only,
-    _has_substitution,
-    _hides_write_primitive,
-    _shell_words,
+    assignment_only,
     classify_bash,
+    has_substitution,
+    hides_write_primitive,
     redirect_writes_file,
+    shell_words,
     split_command,
 )
+from .toolsets import SAFE_TOOLS
 
 
 def project_root():
@@ -151,14 +152,14 @@ def decide(command):
             if fnmatch(part, pattern):
                 action = rule
 
-        if action != "deny" and _assignment_only(_shell_words(part)):
+        if action != "deny" and assignment_only(shell_words(part)):
             action = "allow"
 
         if action == "allow" and redirect_writes_file(part):
             action = "ask"
 
         if action == "allow" and (
-            _has_substitution(part) or _hides_write_primitive(part)
+            has_substitution(part) or hides_write_primitive(part)
         ):
             action = "ask"
         verdicts.append(action)
@@ -175,9 +176,6 @@ def inside_project(path):
         return root in Path(path).resolve().parents or Path(path).resolve() == root
     except OSError:
         return False
-
-
-_KNOWN_SAFE = ("read_file", "read_skill", "write_todos", "task")
 
 
 def check(name, args):
@@ -198,7 +196,7 @@ def check(name, args):
             return "ask", f"{name} inside {root}: {args['path']}"
         return "allow", None
 
-    if name in _KNOWN_SAFE:
+    if name in SAFE_TOOLS:
         return "allow", None
     return "ask", f"{name} has no permission rule"
 

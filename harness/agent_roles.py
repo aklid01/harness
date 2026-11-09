@@ -20,15 +20,8 @@ from pathlib import Path
 
 from . import paths
 from .coerce import as_bool, as_int, as_text
-from .review.config import (
-    AUTO_RUN,
-)
-from .review.config import (
-    clean_section as _clean_review,
-)
-from .review.config import (
-    defaults as _review_defaults,
-)
+from .review.config import AUTO_RUN, clean_section
+from .review.config import defaults as review_defaults
 
 FORMAT_VERSION = 1
 
@@ -98,7 +91,7 @@ def normalise(raw) -> dict:
     raw = raw if isinstance(raw, dict) else {}
     out = {"version": FORMAT_VERSION}
 
-    out["review"] = _clean_review(raw.get("review"))
+    out["review"] = clean_section(raw.get("review"))
     for role, default in DEFAULTS.items():
         merged = dict(default)
         merged.update(_clean_role(raw.get(role), plan=role == "plan"))
@@ -156,7 +149,7 @@ def review_settings() -> dict:
     too: review/config stays a leaf that never imports back into its parent.
     """
     section = get().get("review")
-    return section if section is not None else copy.deepcopy(_review_defaults())
+    return section if section is not None else copy.deepcopy(review_defaults())
 
 
 def save_review_section(section) -> dict:
