@@ -112,7 +112,7 @@ class ToolFlowCase(unittest.TestCase):
     def setUp(self):
         events.reset()
         tools._AVAILABILITY_CACHE = None
-        tools._EXECUTED.clear()
+        tools.begin_turn()
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "workspace"

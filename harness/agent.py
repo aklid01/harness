@@ -1482,6 +1482,7 @@ class Runner:
                 break
         usage = None
         history.begin_turn()
+        tools.begin_turn()
 
         self._file_state = context_mod.git_state()
         while True:
