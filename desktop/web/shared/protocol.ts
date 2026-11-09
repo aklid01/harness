@@ -502,5 +502,9 @@ export interface ServerEnvelope {
   error?: string;
 
   info?: { found: boolean; applied: string[]; note?: string };
-  ready?: { project: string; project_root: string };
+  ready?: {
+    project: string;
+    project_root: string;
+    commands?: Array<{ cmd: string; help: string }>;
+  };
 }

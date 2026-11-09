@@ -508,27 +508,7 @@ const MODE_CHIP_TEXT: Record<Mode, string> = {
   plan: "Plan",
 };
 
-const COMMAND_HELP: Array<{ cmd: string; help: string }> = [
-  {
-    cmd: "/plan",
-    help: "plan this turn, read-only (alone: plan until /build)",
-  },
-  {
-    cmd: "/ask",
-    help: "answer this turn, read-only (alone: ask until /build)",
-  },
-  { cmd: "/build", help: "build now, the default (alone: leave plan or ask)" },
-  { cmd: "/rewind", help: "jump back to an earlier point in this chat" },
-  { cmd: "/sessions", help: "open a past chat" },
-  {
-    cmd: "/compact",
-    help: "summarise the history so far and free up the context window",
-  },
-  {
-    cmd: "/multi-model-review",
-    help: "have independent reviewer models critique the change",
-  },
-];
+let commandHelp: Array<{ cmd: string; help: string }> = [];
 const PERMS: Array<{ label: string; value: string }> = [
   { label: "Default", value: "default" },
   { label: "Strict", value: "strict" },
@@ -3345,6 +3325,7 @@ function handleReady(msg: ServerEnvelope): void {
   connected = true;
   const resync = everReady;
   everReady = true;
+  if (msg.ready?.commands) commandHelp = msg.ready.commands;
   const root = String(msg.ready?.project_root ?? bootRoot);
   if (root) bootRoot = root;
   void fetchRecents();
@@ -5548,7 +5529,7 @@ function cmdToken(value: string): string {
 function updateCmdMenu(): void {
   const token = cmdToken(entry.value);
   const matches = token
-    ? COMMAND_HELP.filter((c) => c.cmd.startsWith(token))
+    ? commandHelp.filter((c) => c.cmd.startsWith(token))
     : [];
   // Escape dismisses for this token; clearing the composer re-arms it.
   if (!token) cmdDismissed = "";
