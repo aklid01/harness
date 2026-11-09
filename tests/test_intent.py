@@ -457,7 +457,10 @@ class TodoChecklist(unittest.TestCase):
                     [
                         (
                             "write_file",
-                            {"path": str(self.root / "PLAN-RESULT.md"), "content": "done"},
+                            {
+                                "path": str(self.root / "PLAN-RESULT.md"),
+                                "content": "done",
+                            },
                         )
                     ],
                 ),
@@ -470,9 +473,13 @@ class TodoChecklist(unittest.TestCase):
         self.assertTrue(self.done())
         # The build turn's reconcile crossed the file's step off, from
         # evidence, and said so on the wire.
-        todos_events = [m["payload"]["todos"] for m in self.sent if m.get("event") == events.TODOS]
+        todos_events = [
+            m["payload"]["todos"] for m in self.sent if m.get("event") == events.TODOS
+        ]
         self.assertTrue(todos_events, "the checklist reached the UI")
-        self.assertEqual(todos_events[-1][0]["status"], "done", "the written file completed its step")
+        self.assertEqual(
+            todos_events[-1][0]["status"], "done", "the written file completed its step"
+        )
         self.assertEqual(todos_events[-1][1]["status"], "pending")
         # The next turn inherits the list: the re-injected <todos> block
         # carries it, so reconcile can keep crossing steps off.
@@ -498,8 +505,16 @@ class TodoChecklist(unittest.TestCase):
         self.assertTrue(self.done(kind="session"))
         steps = {
             "todos": [
-                {"content": "measure first", "activeForm": "measuring", "status": "in_progress"},
-                {"content": "cache the layout", "activeForm": "caching", "status": "pending"},
+                {
+                    "content": "measure first",
+                    "activeForm": "measuring",
+                    "status": "in_progress",
+                },
+                {
+                    "content": "cache the layout",
+                    "activeForm": "caching",
+                    "status": "pending",
+                },
             ]
         }
         self.llm.side_effect = [
@@ -508,16 +523,23 @@ class TodoChecklist(unittest.TestCase):
         ]
         self.dispatch(op="submit", session="s", text="/plan plan the work")
         self.assertTrue(self.done())
-        todos_events = [m["payload"]["todos"] for m in self.sent if m.get("event") == events.TODOS]
+        todos_events = [
+            m["payload"]["todos"] for m in self.sent if m.get("event") == events.TODOS
+        ]
         self.assertTrue(todos_events, "the plan turn's steps reached the checklist")
-        self.assertEqual([t["content"] for t in todos_events[0]], ["measure first", "cache the layout"])
+        self.assertEqual(
+            [t["content"] for t in todos_events[0]],
+            ["measure first", "cache the layout"],
+        )
         writes = [
             p["name"]
             for m in self.sent
             if m.get("event") == events.TOOL_CALL
             for p in [m["payload"]]
         ]
-        self.assertEqual(writes, ["write_todos"], "no workspace write happened in the plan turn")
+        self.assertEqual(
+            writes, ["write_todos"], "no workspace write happened in the plan turn"
+        )
 
 
 class AutoPlanCase(IsolatedCase):

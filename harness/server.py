@@ -514,9 +514,7 @@ class Session:
             self.running = True
         self.cancel.clear()
         self.cancel_review()
-        self._spawn_turn(
-            self._resend, count, text, restore_files, attachments
-        )
+        self._spawn_turn(self._resend, count, text, restore_files, attachments)
         return True
 
     def _resend(self, count, text, restore_files=True, attachments=None):

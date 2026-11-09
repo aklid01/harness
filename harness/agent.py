@@ -20,7 +20,6 @@ from . import (
     history,
     oversight,
     paths,
-    permissions,
     providers,
     session,
     shellrisk,
