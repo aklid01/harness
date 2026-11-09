@@ -142,8 +142,7 @@ fn monitor_sidecar(app: AppHandle, started_at: std::time::Instant) {
         if state.is_shutting_down() {
             return;
         }
-        // A crash loop and one crash after hours of uptime are different
-        // failures: stability refills the respawn budget.
+        // Stability refills the respawn budget: a crash loop and one crash after uptime differ.
         if alive_since.elapsed() > STABLE_FOR {
             respawns = 0;
         }

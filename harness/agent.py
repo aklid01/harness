@@ -1528,10 +1528,7 @@ class Runner:
 
             turn_tools = None
             if self.mode in ("plan", "ask"):
-                # A plan turn keeps write_todos: the checklist is the plan's
-                # own step list (session state, never the workspace), and the
-                # build that follows reconciles it from tool evidence. Ask
-                # turns have no checklist to keep.
+                # A plan turn keeps write_todos: the checklist is the plan's session state; the build reconciles it from evidence.
                 withheld = READONLY_WITHHELD - (
                     {"write_todos"} if self.mode == "plan" else set()
                 )

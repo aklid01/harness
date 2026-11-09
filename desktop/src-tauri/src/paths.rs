@@ -191,9 +191,7 @@ pub fn current_data_dir(root: &Path) -> (PathBuf, &'static str) {
 }
 
 pub fn repo_root() -> PathBuf {
-    // Where the APP CODE lives - never HARNESS_PROJECT_ROOT: that env var is
-    // the agent's workspace (read by bootstrap for project_root), and using
-
+    // App code lives here, never HARNESS_PROJECT_ROOT: that env var is the workspace, not this install.
     if let Ok(exe) = std::env::current_exe() {
         for dir in exe.ancestors().skip(1).take(8) {
             if dir.join("harness").join("server.py").is_file() {

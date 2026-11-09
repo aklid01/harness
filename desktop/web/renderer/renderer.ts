@@ -831,8 +831,7 @@ function setBusy(ctx: Ctx, value: boolean): void {
     setStatusState(value ? "working" : "ready");
     renderTabs();
   }
-  // The steer/queue affordance only exists while a turn runs; it follows the
-  // tab that owns the turn, since the composer is shared between tabs.
+  // The steer/queue affordance follows the tab that owns the turn: the composer is shared.
   if (ctx === activeCtx || !value) {
     promptZone.classList.toggle("busy", value && ctx === activeCtx);
     updateSendExtra();
@@ -1119,8 +1118,7 @@ async function uploadFile(ctx: Ctx, file: File): Promise<void> {
     renderAttachBar(ctx);
   }
   if (!file.size) {
-    // A zero-byte file still has to be staged, so the engine knows it is
-    // there and can say why it has nothing in it.
+    // A zero-byte file still stages, so the engine can say why it is empty.
     const part = await request(ctx, {
       op: "attach_part",
       id: ticket,
@@ -1453,8 +1451,7 @@ function addError(
   meta?: Record<string, unknown>,
 ): void {
   hideThinking(ctx);
-  // A stream that broke halfway has already delivered its answer: keep it
-  // rather than throwing away what the model managed to say.
+  // A stream that broke halfway already said something: keep it.
   if (ctx.streamPre && ctx.streamText.join("").trim()) {
     ctx.streamPre.innerHTML = renderMarkdown(ctx.streamText.join(""));
   } else {
@@ -1484,8 +1481,7 @@ function addError(
       ? (meta?.["discarded_queue"] as unknown[]).map(String)
       : undefined,
   };
-  // Queued texts survive on screen: hand them back to the composer when it
-  // is free, so a provider failure never eats what the user typed.
+  // Hand queued texts back to the composer when it is free: a failure must not eat them.
   const restore = ctx.failure.discarded ?? [];
   if (restore.length && ctx === activeCtx && !entry.value.trim()) {
     entry.value = restore.join("\n\n");
@@ -1602,14 +1598,12 @@ function showRetry(ctx: Ctx, progress: RetryProgress): void {
   const todo = String(progress.hint ?? "").trim();
   hint.textContent = todo ? `Things to do: ${todo}` : "";
   hint.hidden = !todo;
-  // The engine numbers the attempt it is about to make, so retry 1 is its
-  // attempt 2 - the user counts retries.
+  // Retry 1 is the engine's attempt 2: the user counts retries.
   const attempt = Math.max(1, Number(progress.attempt ?? 2) - 1);
   const total = Math.max(1, Number(progress.retries_total ?? 5));
   const wait = Math.max(0, Number(progress.wait ?? 0));
   badge.textContent = `Retry ${attempt} of ${total}`;
-  // One segment per scheduled retry: spent attempts stay lit, the attempt in
-  // flight fills with the countdown, the rest stay dark.
+  // One segment per scheduled retry: spent ones lit, the in-flight one fills.
   const at = Math.min(attempt, total) - 1;
   if (segs.childElementCount !== total) {
     segs.replaceChildren();
@@ -1656,10 +1650,7 @@ function retryFailedRequest(ctx: Ctx): void {
     setActivity("still busy - press Stop first");
     return;
   }
-  // Send first, retire the cards only once the engine accepts: a refused
-  // retry (engine busy) used to null ctx.failure and drop the error card,
-  // which left a thinking bubble for a turn that never started and no way
-  // back to the failure.
+  // Send first; retire the failure card only once the engine accepts the retry.
   if (
     !send(ctx, {
       op: "retry",
@@ -1747,12 +1738,9 @@ const PHASE_SHORT: Record<string, string> = {
   failed: "Failed",
 };
 function showPhase(ctx: Ctx, phase: string | null): void {
-  // A new turn resets the marker sequence; the markers already in the
-  // transcript stay, so the run reads as a timeline rather than being wiped.
+  // A new turn resets the marker sequence; past markers stay as a timeline.
   if (phase === null) {
-    // The turn is over (successfully or not): the phase that was in progress
-    // stops spinning, so a finished run never leaves a live "Planning…" or
-    // "Building…" pill above its result - or above an error card.
+    // On turn end the phase pill stops spinning; no live pill above a result or error.
     settlePhaseCard(ctx);
     ctx.phaseEl = null;
     return;
@@ -1931,14 +1919,11 @@ function renderTranscript(
       }
     }
   });
-  // The failure belongs to the turn that just ended, not to the transcript, so
-  // a reconcile that rebuilds the body has to put it back.
+  // The failure card is per-turn state: a body rebuild must put it back.
   if (ctx.failure) ctx.chatBody.appendChild(failureCard(ctx, ctx.failure));
-  // The review card is not part of the transcript either: it is built from
-  // the saved report, so a rebuild of the body has to put it back too.
+  // The review card is built from the saved report: a body rebuild must put it back.
   if (ctx.reviewCard) ctx.chatBody.appendChild(ctx.reviewCard);
-  // The plan's one-action handoff is not part of the transcript either: a
-  // plan that still awaits its decision gets its bar back after a rebuild.
+  // A plan still awaiting its decision gets its action bar back after a rebuild.
   if (ctx.pendingPlan && !ctx.busy) addPlanActions(ctx, ctx.pendingPlanAuto);
   updateEmptyStateOnly(ctx);
   scrollBottom(ctx);
@@ -2218,9 +2203,7 @@ function issueOpen(ctx: Ctx): void {
     send(ctx, { op: "open", id: openId ?? "" });
     return;
   }
-  // resume: on a reconnect resync the tab's own session is the truth; at first
-  // open fall back to the workspace's most recent session once the list arrives
-  // (never a fresh blank if history exists).
+  // On reconnect the tab's session is the truth; on first open fall back to the workspace's most recent.
   const last = ctx.sessionId ?? prefs.lastSessionByWs[ctx.root];
   if (last) {
     send(ctx, { op: "open", id: last });
@@ -2809,14 +2792,11 @@ function removeWorkspace(ws: WorkspaceRef): void {
   }
   recents = recents.filter((r) => r.root !== ws.root);
   delete sessionsByRoot[ws.root];
-  // Every per-workspace key goes, not just three of five: leaving
-  // modeByWs/tabsByWs behind restored the removed workspace's old tabs and
-  // workflow mode when the same folder was re-added later.
+  // Remove every per-workspace key, or re-adding the folder resurrects old tabs and mode.
   delete prefs.effortByWs[ws.root];
   delete prefs.providerByWs[ws.root];
   delete prefs.lastSessionByWs[ws.root];
-  // The old per-workspace mode pref is gone with the selector; nothing to
-  // clear here any more.
+  // Nothing to clear: the old per-workspace mode pref died with the selector.
   delete prefs.tabsByWs[ws.root];
   window.harness?.forgetWorkspace(ws.root);
   savePrefs();
@@ -2838,8 +2818,7 @@ function askPick(ctx: Ctx, title: string, rows: string[], id: string): void {
     send(ctx, { op: "pick_reply", id, index: null });
     return;
   }
-  // The engine blocks until this is answered, so a backdrop click cancels the
-  // pick instead of dropping the dialog and leaving the turn waiting.
+  // The engine blocks until this is answered: a backdrop click cancels the pick.
   const reply = (index: number | null): void => {
     activePick = null;
     send(ctx, { op: "pick_reply", id, index });
@@ -2880,10 +2859,7 @@ function askApproval(
   risk = "",
   riskReason = "",
 ): void {
-  // A plan review is not a tool permission: it asks what to do with a
-  // finished plan - build it with the plan as context, skip planning and
-  // build now, or cancel (nothing built). Enter builds, Esc cancels, both
-  // through the same activeApproval keyboard path.
+  // A plan review asks what to do with a finished plan; Enter builds, Esc cancels.
   if (tool === "plan") {
     showModal(
       `<h3>Build this plan?</h3>` +
@@ -3195,8 +3171,7 @@ function submit(ctx: Ctx, text: string): void {
     setActivity("not connected - waiting for reconnect…");
     return;
   }
-  // While a turn runs the message becomes steer or queue instead of a new
-  // submission - the engine refuses plain submits while busy anyway.
+  // While a turn runs the message becomes steer or queue, not a new submission.
   if (ctx.busy) {
     if (
       prefs.confirmProtected &&
@@ -3217,8 +3192,7 @@ function submit(ctx: Ctx, text: string): void {
     hideEditBar();
     clearRetryCard(ctx);
     dropFailureCard(ctx);
-    // The engine keeps the files the original message carried; anything
-    // attached here joins them.
+    // Attached files join the ones the original message carried.
     const files = takeAttachments(ctx);
     if (
       !send(ctx, {
@@ -5565,10 +5539,7 @@ entry.addEventListener("input", () => {
 });
 entry.addEventListener("keydown", (e) => {
   if (activeApproval) return;
-  // The menu is interactive only while the first token is still a strict
-  // prefix of a command (the user is choosing). Once the token names a
-  // command it stays up as a label, and the composer behaves normally -
-  // arrows edit, Enter sends.
+  // The menu is interactive only while the token is a strict command prefix; afterwards it is a label.
   const token = cmdToken(entry.value);
   const choosing =
     !cmdMenu.classList.contains("hidden") &&

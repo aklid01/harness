@@ -180,8 +180,7 @@ function startLiveFixture() {
         const toolNames = messages.flatMap((m) =>
           (m.tool_calls ?? []).map((c) => c.function?.name ?? ""),
         );
-        // A write that actually landed, keyed on its tool result: the write's
-        // path alone is not evidence (the checklist step names it too).
+        // Key a landed write on its tool result: the path alone is not evidence (the checklist step names it too).
         const wroteResult = (name) =>
           messages.some(
             (m) =>
@@ -190,10 +189,7 @@ function startLiveFixture() {
               String(m.content ?? "").includes(name),
           );
         if (lastContent.includes("Plan mode:")) {
-          // A read-only plan turn (explicit /plan, or a converted one):
-          // record the plan's steps in the checklist first, then answer with
-          // the plan itself - so the checklist tracks the plan and the build
-          // that follows can tick steps off from real evidence.
+          // A plan turn records its steps in the checklist first, so the build can tick them off from real evidence.
           if (!toolNames.includes("write_todos")) {
             send({
               choices: [

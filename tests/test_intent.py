@@ -471,8 +471,7 @@ class TodoChecklist(unittest.TestCase):
         self.llm.side_effect = iter(answers)
         self.dispatch(op="submit", session="s", text="do the steps")
         self.assertTrue(self.done())
-        # The build turn's reconcile crossed the file's step off, from
-        # evidence, and said so on the wire.
+        # The build turn crossed the file's step off from evidence and said so on the wire.
         todos_events = [
             m["payload"]["todos"] for m in self.sent if m.get("event") == events.TODOS
         ]
@@ -481,8 +480,7 @@ class TodoChecklist(unittest.TestCase):
             todos_events[-1][0]["status"], "done", "the written file completed its step"
         )
         self.assertEqual(todos_events[-1][1]["status"], "pending")
-        # The next turn inherits the list: the re-injected <todos> block
-        # carries it, so reconcile can keep crossing steps off.
+        # The next turn inherits the list through the re-injected <todos> block.
         self.sent.clear()
         self._counts.clear()
         self.llm.side_effect = None
