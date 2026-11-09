@@ -655,18 +655,6 @@ function baseName(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : p;
 }
-function firstUserTitle(messages: Array<Record<string, unknown>>): string {
-  for (const m of messages) {
-    if (m["role"] === "user") {
-      const text = String(m["content"] ?? "")
-        .split(/\s+/)
-        .join(" ")
-        .trim();
-      if (text && !text.startsWith("<")) return text.slice(0, 60);
-    }
-  }
-  return "New Session";
-}
 function displayTitle(raw: string): string {
   return !raw || raw === "(empty)" ? "New Session" : raw;
 }
@@ -4064,7 +4052,6 @@ function syncEffortFromModel(ctx: Ctx): void {
 function modelSummary(): {
   label: string;
   title: string;
-  goesToAgents: boolean;
   oversight: boolean;
 } {
   const cur = providerOptions.find((x) => x.id === activeCtx?.providerId);
@@ -4074,7 +4061,7 @@ function modelSummary(): {
   const oversight = !!(cfg?.oversight?.enabled && cfg.oversight.model_id);
   const ov = oversight ? nameOfModel(cfg!.oversight.model_id) : null;
   const title = ov ? `${sessionTitle} · Oversight: ${ov} on` : sessionTitle;
-  return { label: sessionLabel, title, goesToAgents: false, oversight };
+  return { label: sessionLabel, title, oversight };
 }
 function nameOfModel(id: string): string {
   const m = providerById.get(id);
@@ -4085,9 +4072,8 @@ function refreshModelButton(): void {
   const cur = providerOptions.find((x) => x.id === activeCtx?.providerId);
   providerLabel.textContent = s.label;
   providerLabel.title = s.title;
-  providerBtn.classList.toggle("agents", s.goesToAgents);
   providerBtn.classList.toggle("oversight", s.oversight);
-  providerBtn.classList.toggle("no-provider", !cur && !s.goesToAgents);
+  providerBtn.classList.toggle("no-provider", !cur);
   refreshModeChip();
 }
 export function selectModel(

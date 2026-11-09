@@ -2112,12 +2112,6 @@ body.hide-thinking .think-block {
 .ctl-btn.no-provider .ctl-label {
   color: var(--warn);
 }
-.ctl-btn.agents {
-  border-color: var(--accent-line);
-}
-.ctl-btn.agents .ctl-label {
-  color: var(--accent-text);
-}
 .ctl-btn.oversight .ctl-glyph {
   color: var(--accent-text);
 }

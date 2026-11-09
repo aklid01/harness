@@ -13,7 +13,6 @@ import {
   providerById,
   providerGroups,
   providerOptions,
-  request,
   scrollBottom,
   send,
   setActivity,
@@ -104,11 +103,6 @@ export function reviewView(ctx: Ctx): ReviewView {
     };
   }
   return ctx.review;
-}
-
-function reviewSeverityRank(severity: string): number {
-  const index = REVIEW_SEVERITY_ORDER.indexOf(severity as ReviewSeverity);
-  return index === -1 ? REVIEW_SEVERITY_ORDER.length : index;
 }
 
 function reviewBadgeClass(severity: string): string {
