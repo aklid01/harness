@@ -25,6 +25,7 @@ import contextlib
 
 from . import paths as paths_mod
 from . import permissions as permissions_mod
+from . import plan as plan_mod
 from . import providers as providers_mod
 from . import session as session_mod
 from . import todos as todos_mod
@@ -927,6 +928,243 @@ class Session:
         worker.start()
 
 
+def _op_open(s, obj):
+    s.open_chat(obj.get("id", ""))
+    return {"ok": True}
+
+
+def _op_attach(s, obj):
+    return s.backend._attachment_op(obj.get("op"), obj, s.key)
+
+
+def _op_submit(s, obj):
+    return {
+        "ok": s.submit(
+            obj.get("text", ""),
+            submission_id=obj.get("submission_id"),
+            attachments=obj.get("attachments"),
+        )
+    }
+
+
+def _op_enqueue(s, obj):
+    return {
+        "ok": s.enqueue(
+            obj.get("text", ""),
+            obj.get("kind", "queue"),
+            submission_id=obj.get("submission_id"),
+            attachments=obj.get("attachments"),
+        )
+    }
+
+
+def _op_pending_edit(s, obj):
+    return {"ok": s.edit_pending(obj.get("id", ""), obj.get("text", ""))}
+
+
+def _op_pending_remove(s, obj):
+    return {"ok": s.remove_pending(obj.get("id", ""))}
+
+
+def _op_pending_remove_attachment(s, obj):
+    return {
+        "ok": s.remove_pending_attachment(
+            obj.get("id", ""), obj.get("attachment_id", "")
+        )
+    }
+
+
+def _op_stop(s, obj):
+    s.stop()
+    return {"ok": True}
+
+
+def _op_set_mode(s, obj):
+    return {"ok": s.set_mode(obj.get("mode", "build"))}
+
+
+def _op_plan_action(s, obj):
+    return {"ok": s.plan_action(obj.get("action", ""))}
+
+
+def _op_list_sessions(s, obj):
+    return {"ok": True, "data": s.list_sessions()}
+
+
+def _op_get_transcript(s, obj):
+    try:
+        with s.workspace():
+            data = session_mod.load(obj.get("id", ""))
+        return {"ok": True, "data": data}
+    except OSError as failure:
+        return {"ok": False, "error": str(failure)}
+
+
+def _op_get_plan(s, obj):
+    with s.workspace():
+        data = plan_mod.load(obj.get("id") or s.session_id or "")
+    return {"ok": True, "data": data}
+
+
+def _op_rename_session(s, obj):
+    with s.workspace():
+        session_mod.set_title(obj.get("id", ""), (obj.get("title", "") or "")[:60])
+    s.on_event("sessions_updated", {})
+    return {"ok": True}
+
+
+def _op_delete_session(s, obj):
+    sid = obj.get("id", "")
+    with s.workspace():
+        session_mod.delete_session(sid)
+    checkpoints.delete(sid)
+    attachments_mod.cleanup_session(sid, s.root)
+    s.on_event("sessions_updated", {})
+    return {"ok": True}
+
+
+def _op_rewind_preview(s, obj):
+    return {
+        "ok": True,
+        "data": {
+            "count": obj.get("count", 0),
+            "changes": s.rewind_preview(obj.get("count", 0)),
+        },
+    }
+
+
+def _op_rewind_to(s, obj):
+    if s.running:
+        return {"ok": False, "error": "busy or invalid position"}
+    ok, restored = s.rewind_to(obj.get("count", 0))
+    if ok:
+        return {"ok": True, "data": restored or []}
+    return {"ok": False, "error": "invalid position"}
+
+
+def _op_resend(s, obj):
+    return {
+        "ok": s.resubmit(
+            obj.get("count", 0),
+            obj.get("text", ""),
+            attachments=obj.get("attachments"),
+        )
+    }
+
+
+def _op_get_context(s, obj):
+    info = (
+        git_status(s.root)
+        if s.root
+        else {
+            "has_git": False,
+            "branch": "",
+            "default_branch": "",
+            "is_protected": False,
+        }
+    )
+    info.update(
+        {
+            "project": s.root.name if s.root else "",
+            "project_root": str(s.root or ""),
+        }
+    )
+    return {"ok": True, "data": info}
+
+
+def _op_git_status(s, obj):
+    return {"ok": True, "data": git_status(s.root) if s.root else {"has_git": False}}
+
+
+def _op_git_create_branch(s, obj):
+    if not s.root:
+        return {"ok": False, "error": "no workspace"}
+    ok, detail = git_create_branch(s.root, obj.get("name", ""))
+    return {"ok": ok, "data": detail} if ok else {"ok": False, "error": detail}
+
+
+def _op_set_permissions(s, obj):
+    mode = obj.get("mode", "default")
+    if mode not in permissions_mod.MODES:
+        return {
+            "ok": False,
+            "error": f"unknown permission mode: {mode} - use one of "
+            + ", ".join(permissions_mod.MODES),
+        }
+    s.perms = mode
+    s._mode_ref.value = mode
+    return {"ok": True}
+
+
+def _op_set_active(s, obj):
+    ok = providers_mod.set_active(obj.get("id"))
+    if ok:
+        if s.running:
+            s.stop()
+            s.on_event(
+                events.NOTE,
+                {"text": "model switched - the request in flight was stopped"},
+            )
+        s.active_provider = obj.get("id")
+    return {"ok": bool(ok)}
+
+
+def _op_set_effort(s, obj):
+    pid = s.active_provider or providers_mod.get_active_model_id() or obj.get("id")
+    providers_mod.set_effort(pid, obj.get("effort") or None)
+    s.effort = obj.get("effort") or "default"
+    return {"ok": True}
+
+
+def _op_retry(s, obj):
+    ok = s.resubmit(
+        obj.get("count", 0),
+        obj.get("text", ""),
+        restore_files=False,
+    )
+    return {"ok": bool(ok)}
+
+
+def _op_review(s, obj):
+    return s.backend._review_op(obj.get("op"), obj, s)
+
+
+_SESSION_OPS = {
+    "open": _op_open,
+    "attach_begin": _op_attach,
+    "attach_part": _op_attach,
+    "attach_finish": _op_attach,
+    "attach_discard": _op_attach,
+    "submit": _op_submit,
+    "enqueue": _op_enqueue,
+    "pending_edit": _op_pending_edit,
+    "pending_remove": _op_pending_remove,
+    "pending_remove_attachment": _op_pending_remove_attachment,
+    "stop": _op_stop,
+    "set_mode": _op_set_mode,
+    "plan_action": _op_plan_action,
+    "list_sessions": _op_list_sessions,
+    "get_transcript": _op_get_transcript,
+    "get_plan": _op_get_plan,
+    "rename_session": _op_rename_session,
+    "delete_session": _op_delete_session,
+    "rewind_preview": _op_rewind_preview,
+    "rewind_to": _op_rewind_to,
+    "resend": _op_resend,
+    "get_context": _op_get_context,
+    "git_status": _op_git_status,
+    "git_create_branch": _op_git_create_branch,
+    "set_permissions": _op_set_permissions,
+    "set_active": _op_set_active,
+    "set_effort": _op_set_effort,
+    "retry": _op_retry,
+    "review_start": _op_review,
+    "review_cancel": _op_review,
+    "review_action": _op_review,
+    "review_report": _op_review,
+}
+
+
 class Harness:
     """The single backend service: owns all Sessions and the transport.
 
@@ -1006,208 +1244,10 @@ class Harness:
         if root:
             s.root = Path(str(root)).resolve()
 
-        if op == "open":
-            s.open_chat(obj.get("id", ""))
-            return _reply({"reply": "open", "ok": True})
-        if op in ("attach_begin", "attach_part", "attach_finish", "attach_discard"):
-            return _reply(self._attachment_op(op, obj, key))
-        if op == "submit":
-            return _reply(
-                {
-                    "reply": "submit",
-                    "ok": s.submit(
-                        obj.get("text", ""),
-                        submission_id=obj.get("submission_id"),
-                        attachments=obj.get("attachments"),
-                    ),
-                }
-            )
-        if op == "enqueue":
-            return _reply(
-                {
-                    "reply": "enqueue",
-                    "ok": s.enqueue(
-                        obj.get("text", ""),
-                        obj.get("kind", "queue"),
-                        submission_id=obj.get("submission_id"),
-                        attachments=obj.get("attachments"),
-                    ),
-                }
-            )
-        if op == "pending_edit":
-            return _reply(
-                {
-                    "reply": "pending_edit",
-                    "ok": s.edit_pending(obj.get("id", ""), obj.get("text", "")),
-                }
-            )
-        if op == "pending_remove":
-            return _reply(
-                {"reply": "pending_remove", "ok": s.remove_pending(obj.get("id", ""))}
-            )
-        if op == "pending_remove_attachment":
-            return _reply(
-                {
-                    "reply": "pending_remove_attachment",
-                    "ok": s.remove_pending_attachment(
-                        obj.get("id", ""), obj.get("attachment_id", "")
-                    ),
-                }
-            )
-        if op == "stop":
-            s.stop()
-            return _reply({"reply": "stop", "ok": True})
-        if op == "set_mode":
-            return _reply({"reply": op, "ok": s.set_mode(obj.get("mode", "build"))})
-        if op == "plan_action":
-            return _reply({"reply": op, "ok": s.plan_action(obj.get("action", ""))})
-        if op == "list_sessions":
-            return _reply({"reply": op, "ok": True, "data": s.list_sessions()})
-        if op == "get_transcript":
-            try:
-                with s.workspace():
-                    data = session_mod.load(obj.get("id", ""))
-                return _reply({"reply": op, "ok": True, "data": data})
-            except OSError as failure:
-                return _reply({"reply": op, "ok": False, "error": str(failure)})
-        if op == "get_plan":
-            from . import plan as plan_mod
-
-            with s.workspace():
-                data = plan_mod.load(obj.get("id") or s.session_id or "")
-            return _reply({"reply": op, "ok": True, "data": data})
-        if op == "rename_session":
-            with s.workspace():
-                session_mod.set_title(
-                    obj.get("id", ""), (obj.get("title", "") or "")[:60]
-                )
-            s.on_event("sessions_updated", {})
-            return _reply({"reply": op, "ok": True})
-        if op == "delete_session":
-            sid = obj.get("id", "")
-            with s.workspace():
-                session_mod.delete_session(sid)
-            checkpoints.delete(sid)
-
-            attachments_mod.cleanup_session(sid, s.root)
-            s.on_event("sessions_updated", {})
-            return _reply({"reply": op, "ok": True})
-        if op == "rewind_preview":
-            return _reply(
-                {
-                    "reply": op,
-                    "ok": True,
-                    "data": {
-                        "count": obj.get("count", 0),
-                        "changes": s.rewind_preview(obj.get("count", 0)),
-                    },
-                }
-            )
-        if op == "rewind_to":
-            if s.running:
-                return _reply(
-                    {"reply": op, "ok": False, "error": "busy or invalid position"}
-                )
-            ok, restored = s.rewind_to(obj.get("count", 0))
-            if ok:
-                return _reply({"reply": op, "ok": True, "data": restored or []})
-            return _reply({"reply": op, "ok": False, "error": "invalid position"})
-        if op == "resend":
-            return _reply(
-                {
-                    "reply": "resend",
-                    "ok": s.resubmit(
-                        obj.get("count", 0),
-                        obj.get("text", ""),
-                        attachments=obj.get("attachments"),
-                    ),
-                }
-            )
-        if op == "get_context":
-            info = (
-                git_status(s.root)
-                if s.root
-                else {
-                    "has_git": False,
-                    "branch": "",
-                    "default_branch": "",
-                    "is_protected": False,
-                }
-            )
-            info.update(
-                {
-                    "project": s.root.name if s.root else "",
-                    "project_root": str(s.root or ""),
-                }
-            )
-            return _reply({"reply": op, "ok": True, "data": info})
-        if op == "git_status":
-            return _reply(
-                {
-                    "reply": op,
-                    "ok": True,
-                    "data": git_status(s.root) if s.root else {"has_git": False},
-                }
-            )
-        if op == "git_create_branch":
-            if not s.root:
-                return _reply({"reply": op, "ok": False, "error": "no workspace"})
-            ok, detail = git_create_branch(s.root, obj.get("name", ""))
-            return _reply(
-                {"reply": op, "ok": ok, "data": detail}
-                if ok
-                else {"reply": op, "ok": False, "error": detail}
-            )
-        if op == "set_permissions":
-            mode = obj.get("mode", "default")
-            if mode not in permissions_mod.MODES:
-                return _reply(
-                    {
-                        "reply": op,
-                        "ok": False,
-                        "error": f"unknown permission mode: {mode} - use one of "
-                        + ", ".join(permissions_mod.MODES),
-                    }
-                )
-            s.perms = mode
-
-            s._mode_ref.value = mode
-            return _reply({"reply": op, "ok": True})
-        if op == "set_active":
-            ok = providers_mod.set_active(obj.get("id"))
-            if ok:
-                if s.running:
-                    s.stop()
-                    s.on_event(
-                        events.NOTE,
-                        {"text": "model switched - the request in flight was stopped"},
-                    )
-                s.active_provider = obj.get("id")
-            return _reply({"reply": op, "ok": bool(ok)})
-        if op == "set_effort":
-            pid = (
-                s.active_provider
-                or providers_mod.get_active_model_id()
-                or obj.get("id")
-            )
-            providers_mod.set_effort(pid, obj.get("effort") or None)
-            s.effort = obj.get("effort") or "default"
-            return _reply({"reply": op, "ok": True})
-        if op == "retry":
-            ok = s.resubmit(
-                obj.get("count", 0),
-                obj.get("text", ""),
-                restore_files=False,
-            )
-            return _reply({"reply": "retry", "ok": bool(ok)})
-        if op in (
-            "review_start",
-            "review_cancel",
-            "review_action",
-            "review_report",
-        ):
-            return _reply(self._review_op(op, obj, s))
-        return _reply({"reply": op, "ok": False, "error": f"unknown op: {op}"})
+        handler = _SESSION_OPS.get(op)
+        if handler is None:
+            return _reply({"reply": op, "ok": False, "error": f"unknown op: {op}"})
+        return _reply({"reply": op, **handler(s, obj)})
 
     def _review_op(self, op, obj, s):
         """The card's actions: start, cancel, dismiss, send to the agent.
