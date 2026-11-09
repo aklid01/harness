@@ -497,7 +497,7 @@ let pendingModelsStatus = "";
 let pendingModelsStatusOk = false;
 let activeApproval: { ctx: Ctx; id: string } | null = null;
 let activePick: { ctx: Ctx; id: string } | null = null;
-let pendingRewindCount: number | null = null;
+let rewindRequest: { ctx: Ctx; count: number } | null = null;
 let popHideTimer: number | null = null;
 
 const EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"];
@@ -508,27 +508,7 @@ const MODE_CHIP_TEXT: Record<Mode, string> = {
   plan: "Plan",
 };
 
-const COMMAND_HELP: Array<{ cmd: string; help: string }> = [
-  {
-    cmd: "/plan",
-    help: "plan this turn, read-only (alone: plan until /build)",
-  },
-  {
-    cmd: "/ask",
-    help: "answer this turn, read-only (alone: ask until /build)",
-  },
-  { cmd: "/build", help: "build now, the default (alone: leave plan or ask)" },
-  { cmd: "/rewind", help: "jump back to an earlier point in this chat" },
-  { cmd: "/sessions", help: "open a past chat" },
-  {
-    cmd: "/compact",
-    help: "summarise the history so far and free up the context window",
-  },
-  {
-    cmd: "/multi-model-review",
-    help: "have independent reviewer models critique the change",
-  },
-];
+let commandHelp: Array<{ cmd: string; help: string }> = [];
 const PERMS: Array<{ label: string; value: string }> = [
   { label: "Default", value: "default" },
   { label: "Strict", value: "strict" },
@@ -674,18 +654,6 @@ function trimOneLine(text: string, max: number): string {
 function baseName(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : p;
-}
-function firstUserTitle(messages: Array<Record<string, unknown>>): string {
-  for (const m of messages) {
-    if (m["role"] === "user") {
-      const text = String(m["content"] ?? "")
-        .split(/\s+/)
-        .join(" ")
-        .trim();
-      if (text && !text.startsWith("<")) return text.slice(0, 60);
-    }
-  }
-  return "New Session";
 }
 function displayTitle(raw: string): string {
   return !raw || raw === "(empty)" ? "New Session" : raw;
@@ -2704,6 +2672,7 @@ export function hideModal(): void {
   modalBackdropBehavior = "close";
   modalBackdropCancel = null;
   modalGuard = null;
+  rewindRequest = null;
 }
 /* Run the action a backdrop click asked for, now that any dirty check passed. */
 function dismissModal(): void {
@@ -2974,14 +2943,15 @@ function resolveApprovalSkip(ctx: Ctx, id: string): void {
 /* ---------------- rewind (conversation + files) ---------------- */
 function confirmRewind(ctx: Ctx, idx: number): void {
   if (ctx.busy) return;
-  pendingRewindCount = idx;
+  rewindRequest = { ctx, count: idx };
   send(ctx, { op: "rewind_preview", count: idx });
 }
 function openRewindConfirm(
+  ctx: Ctx,
   count: number,
   changes: Array<{ path: string; action: string; dirty: boolean }>,
 ): void {
-  pendingRewindCount = count;
+  rewindRequest = { ctx, count };
   const dirty = changes.some((c) => c.dirty);
   const list = changes.length
     ? `<ul class="rewind-list">${changes.map((c) => `<li><span class="rw-path" title="${escapeHtml(c.path)}">${escapeHtml(baseName(c.path))}</span><span class="rw-act ${c.action === "delete" ? "del" : "res"}">${c.action === "delete" ? "will be deleted" : "restored to pre-edit"}</span>${c.dirty ? `<span class="rw-dirty">edited since</span>` : ""}</li>`).join("")}</ul>`
@@ -2996,15 +2966,15 @@ function openRewindConfirm(
       `<div class="modal-actions"><button class="btn" id="rwCancel">Cancel</button><button class="btn primary" id="rwOk">Rewind</button></div>`,
   );
   el<HTMLButtonElement>("rwCancel").onclick = () => {
-    pendingRewindCount = null;
+    rewindRequest = null;
     hideModal();
   };
   el<HTMLButtonElement>("rwOk").onclick = () => {
-    if (!activeCtx) return;
-    const c = pendingRewindCount ?? count;
-    pendingRewindCount = null;
+    if (!rewindRequest) return;
+    const target = rewindRequest;
+    rewindRequest = null;
     hideModal();
-    send(activeCtx, { op: "rewind_to", count: c });
+    send(target.ctx, { op: "rewind_to", count: target.count });
   };
 }
 
@@ -3274,6 +3244,7 @@ function submit(ctx: Ctx, text: string): void {
 
 function connect(): void {
   wsGen += 1;
+  settingsRequested = false;
   const gen = wsGen;
   setConn(`connecting… (port ${bootPort})`, "connecting");
   dlog("ws", "WS-CONNECT", `ws://127.0.0.1:${bootPort}`, "gen", gen);
@@ -3342,6 +3313,7 @@ function handleReady(msg: ServerEnvelope): void {
   connected = true;
   const resync = everReady;
   everReady = true;
+  if (msg.ready?.commands) commandHelp = msg.ready.commands;
   const root = String(msg.ready?.project_root ?? bootRoot);
   if (root) bootRoot = root;
   void fetchRecents();
@@ -3892,7 +3864,7 @@ function handleEnvelope(msg: ServerEnvelope, ctx: Ctx): void {
       count?: number;
       changes?: Array<{ path: string; action: string; dirty: boolean }>;
     };
-    openRewindConfirm(data.count ?? 0, data.changes ?? []);
+    openRewindConfirm(ctx, data.count ?? 0, data.changes ?? []);
   } else if (
     msg.reply === "get_transcript" &&
     msg.ok &&
@@ -4080,7 +4052,6 @@ function syncEffortFromModel(ctx: Ctx): void {
 function modelSummary(): {
   label: string;
   title: string;
-  goesToAgents: boolean;
   oversight: boolean;
 } {
   const cur = providerOptions.find((x) => x.id === activeCtx?.providerId);
@@ -4090,7 +4061,7 @@ function modelSummary(): {
   const oversight = !!(cfg?.oversight?.enabled && cfg.oversight.model_id);
   const ov = oversight ? nameOfModel(cfg!.oversight.model_id) : null;
   const title = ov ? `${sessionTitle} · Oversight: ${ov} on` : sessionTitle;
-  return { label: sessionLabel, title, goesToAgents: false, oversight };
+  return { label: sessionLabel, title, oversight };
 }
 function nameOfModel(id: string): string {
   const m = providerById.get(id);
@@ -4101,9 +4072,8 @@ function refreshModelButton(): void {
   const cur = providerOptions.find((x) => x.id === activeCtx?.providerId);
   providerLabel.textContent = s.label;
   providerLabel.title = s.title;
-  providerBtn.classList.toggle("agents", s.goesToAgents);
   providerBtn.classList.toggle("oversight", s.oversight);
-  providerBtn.classList.toggle("no-provider", !cur && !s.goesToAgents);
+  providerBtn.classList.toggle("no-provider", !cur);
   refreshModeChip();
 }
 export function selectModel(
@@ -5545,7 +5515,7 @@ function cmdToken(value: string): string {
 function updateCmdMenu(): void {
   const token = cmdToken(entry.value);
   const matches = token
-    ? COMMAND_HELP.filter((c) => c.cmd.startsWith(token))
+    ? commandHelp.filter((c) => c.cmd.startsWith(token))
     : [];
   // Escape dismisses for this token; clearing the composer re-arms it.
   if (!token) cmdDismissed = "";

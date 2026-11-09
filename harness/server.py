@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import attachments as attachments_mod
 from . import checkpoints, events
+from .commands import COMMANDS
 from .gitops import git_create_branch, git_status
 from .pending import Mailbox
 
@@ -1433,6 +1434,10 @@ async def serve(host="127.0.0.1", port=8765, auth_token=None):
                     "ready": {
                         "project": paths_mod.project_name(),
                         "project_root": str(paths_mod.project_root()),
+                        "commands": [
+                            {"cmd": cmd, "help": text}
+                            for cmd, text in COMMANDS.items()
+                        ],
                     }
                 }
             )
