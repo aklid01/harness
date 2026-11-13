@@ -134,7 +134,6 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
 
     from .. import agent_roles as agents_mod
-    from .. import config as config_mod
     from .. import paths
     from . import engine
     from . import scope as scope_mod
@@ -148,7 +147,6 @@ def main(argv=None):
         scope_context = contextlib.nullcontext()
 
     with scope_context:
-        config_mod.reload()
         settings = dict(agents_mod.review_settings())
         if args.severity:
             settings["severity_threshold"] = args.severity

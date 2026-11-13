@@ -2812,9 +2812,6 @@ body.hide-thinking .think-block {
 .tag.key-missing {
   color: var(--danger);
 }
-.tag.key-env {
-  color: var(--warn);
-}
 .tag.disabled {
   color: var(--text-3);
 }

@@ -57,10 +57,9 @@ read-only input.
 
 ## Providers and configuration
 
-Providers and models are configured in `providers.json`. API keys are stored in
-the operating system keyring when possible. The app can fall back to `.env` or
-`~/.agents/env` for a key belonging to the configured provider, and labels that
-key as plaintext in Settings.
+Providers and models are configured in `providers.json` in the app data
+directory. API keys are stored in the operating system keyring, one entry per
+provider id; there is no plaintext fallback.
 
 Workspace instructions can be placed in `AGENTS.md`. The engine also reads
 global instructions from `~/.agents/AGENTS.md` and the app data directory.

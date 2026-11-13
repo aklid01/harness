@@ -13,9 +13,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-os.environ.setdefault("BASE_URL", "http://127.0.0.1:1/v1")
-os.environ.setdefault("API_KEY", "dummy-key")
-os.environ.setdefault("MODEL", "dummy-model")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 

@@ -1529,13 +1529,10 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
-    from . import config as config_mod
     from . import session as session_mod
 
     paths_mod.init(project_root=args.project_root, app_data_dir=args.app_data_dir)
-    paths_mod.migrate_providers()
     paths_mod.migrate_sessions()
-    config_mod.reload()
     session_mod.migrate_root_sessions()
 
     attachments_mod.clear_staging()

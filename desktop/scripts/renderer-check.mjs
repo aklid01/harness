@@ -748,11 +748,6 @@ function prepareFixtures() {
   fs.mkdirSync(WS_ROOT, { recursive: true });
   fs.mkdirSync(APP_DATA, { recursive: true });
   fs.writeFileSync(
-    path.join(WS_ROOT, ".env"),
-    `BASE_URL=${ENDPOINT}\nAPI_KEY=sk-renderer-check\nMODEL=dead-model\n`,
-    "utf-8",
-  );
-  fs.writeFileSync(
     path.join(WS_ROOT, "README.md"),
     "Throwaway workspace for the renderer check.\n",
     "utf-8",
