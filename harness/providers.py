@@ -153,9 +153,7 @@ def use(target_id) -> contextlib.AbstractContextManager:
 
 
 def _file():
-    if paths.is_initialized():
-        return paths.providers_file()
-    return paths.default_project_root() / "providers.json"
+    return paths.providers_file()
 
 
 def _env_files():
@@ -165,8 +163,6 @@ def _env_files():
         paths.default_project_root() / ".env",
         Path.home() / ".agents" / "env",
     ]
-
-
 def _new_id(prefix):
     return f"{prefix}{secrets.token_hex(4)}"
 

@@ -48,15 +48,6 @@ class PathsCase(unittest.TestCase):
         self.addCleanup(lambda: os.environ.pop("HARNESS_SESSIONS_ROOT", None))
         self.assertEqual(paths.sessions_root(), Path(self.tmp.name) / "elsewhere")
 
-    def test_migrate_copies_legacy_file_once(self):
-        legacy = self.project / "providers.json"
-        legacy.write_text(json.dumps({"active_id": None, "providers": []}))
-        with mock.patch.object(Path, "cwd", return_value=self.project):
-            found = paths.migrate_providers()
-        self.assertEqual(found, legacy)
-        self.assertTrue(paths.providers_file().exists())
-        self.assertIsNone(paths.migrate_providers())
-
     def test_providers_crud_uses_new_location(self):
         providers.save_provider(
             {
@@ -71,8 +62,7 @@ class PathsCase(unittest.TestCase):
         self.assertTrue(paths.providers_file().exists())
         self.assertEqual(providers.get_active_model_id(), "p1")
 
-    def test_env_and_skill_dirs_follow_root(self):
-        self.assertEqual(paths.env_files()[0], self.project.resolve() / ".env")
+    def test_skill_dirs_follow_root(self):
         self.assertEqual(
             paths.skill_dirs()[0], self.project.resolve() / ".agents" / "skills"
         )

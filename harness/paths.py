@@ -103,34 +103,6 @@ def agents_file() -> Path:
     return app_data_dir() / "agents.json"
 
 
-def legacy_providers_files() -> list[Path]:
-    seen: list[Path] = []
-    for candidate in (
-        Path.cwd() / "providers.json",
-        project_root() / "providers.json",
-        Path.home() / ".agents" / "providers.json",
-    ):
-        if candidate not in seen:
-            seen.append(candidate)
-    current = providers_file().resolve() if _INITIALIZED else None
-    return [p for p in seen if current is None or p.resolve() != current]
-
-
-def migrate_providers() -> Path | None:
-    target = providers_file()
-    if target.exists():
-        return None
-    for source in legacy_providers_files():
-        try:
-            if source.is_file():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(source.read_bytes())
-                return source
-        except OSError:
-            continue
-    return None
-
-
 def migrate_sessions() -> Path | None:
     """Move the legacy ~/.agents/sessions tree into the app data dir.
 
@@ -178,10 +150,6 @@ def titles_file(root: Path | str | None = None) -> Path:
 
 def modes_file(root: Path | str | None = None) -> Path:
     return session_dir(root) / "modes.json"
-
-
-def env_files() -> list[Path]:
-    return [project_root() / ".env", Path.home() / ".agents" / "env"]
 
 
 def instruction_files() -> list[Path]:
