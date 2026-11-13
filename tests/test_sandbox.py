@@ -6,14 +6,10 @@ is a pure, correct function everywhere. Where no POSIX shell backs the tool, the
 behaviour tests skip rather than fail a platform we cannot change.
 """
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 
-os.environ.setdefault("BASE_URL", "http://127.0.0.1:1/v1")
-os.environ.setdefault("API_KEY", "test-key")
-os.environ.setdefault("MODEL", "test-model")
 
 from harness import paths, sandbox
 

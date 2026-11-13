@@ -56,7 +56,7 @@ work so far, not as something the user told you.
 def needed(usage, window=None):
     """Has the last request grown past the point where we rebuild?"""
 
-    size = int(window) if window else config.context_window()
+    size = int(window) if window else config.DEFAULT_CONTEXT_WINDOW
     return usage["prompt_tokens"] > size * config.COMPACT_AT
 
 
@@ -134,7 +134,7 @@ def tail_start(messages, budget):
 def compact(messages, window=None):
     """system + summary + a recent tail. The caller freezes what comes back."""
 
-    size = int(window) if window else config.context_window()
+    size = int(window) if window else config.DEFAULT_CONTEXT_WINDOW
     cut = tail_start(messages, size * config.COMPACT_TO)
     if cut <= 1 or cut >= len(messages):
         return messages

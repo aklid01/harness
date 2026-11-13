@@ -7,9 +7,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
-os.environ.setdefault("API_KEY", "test-key")
-os.environ.setdefault("MODEL", "test-model")
 
 from harness import paths, providers
 

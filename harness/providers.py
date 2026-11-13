@@ -27,6 +27,7 @@ import threading
 from pathlib import Path
 from typing import TypedDict
 
+from . import config
 from . import paths
 
 SERVICE = "harness"
@@ -156,13 +157,6 @@ def _file():
     return paths.providers_file()
 
 
-def _env_files():
-    if paths.is_initialized():
-        return paths.env_files()
-    return [
-        paths.default_project_root() / ".env",
-        Path.home() / ".agents" / "env",
-    ]
 def _new_id(prefix):
     return f"{prefix}{secrets.token_hex(4)}"
 
@@ -204,13 +198,6 @@ def _as_bool(value, default=True):
     if isinstance(value, str):
         return value.strip().lower() not in ("0", "false", "no", "off")
     return bool(value)
-
-
-def _same_host(one, two):
-    """True when two base URLs point at the same place (or when either is blank)."""
-    if not one or not two:
-        return True
-    return one.rstrip("/").lower() == two.rstrip("/").lower()
 
 
 def _clean_headers(value):
@@ -796,22 +783,6 @@ def mask(secret):
     return secret[:3] + "..." + secret[-3:] if len(secret) > 8 else "***"
 
 
-def _legacy_env():
-    values = {}
-    for path in _env_files():
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            values.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-    return values
-
-
 def _flat(group, model):
     """Project one stored model into the ModelRow the protocol expects."""
     if not (group and model):
@@ -912,10 +883,8 @@ def active_model_capabilities():
 
 
 def active_context_window():
-    from . import config
-
     window = active_model_capabilities()["context_window"]
-    return int(window) if window else config.context_window()
+    return int(window) if window else config.DEFAULT_CONTEXT_WINDOW
 
 
 def _credential_state(group):
@@ -923,21 +892,13 @@ def _credential_state(group):
     secret = _key_for_group(group["id"])
     if secret:
         return "keyring", secret
-    legacy = _legacy_env()
-
-    if legacy.get("API_KEY") and _same_host(
-        legacy.get("BASE_URL"), group.get("base_url")
-    ):
-        return "plaintext-env", legacy["API_KEY"]
     return "missing", None
 
 
 def _credential_for(group):
     """(base_url, api_key, source) for a provider. Never returns the key twice."""
     if group is None:
-        from . import config
-
-        return config.base_url(), config.api_key(), "legacy-env"
+        return "", None, "missing"
     source, secret = _credential_state(group)
     return group.get("base_url", ""), secret, source
 
@@ -945,12 +906,8 @@ def _credential_for(group):
 def active_config() -> tuple[str | None, str | None, str, str]:
     """(base_url, api_key, model, source). Source names the credential origin."""
     group, model = active_pair()
-    if not (group and model):
-        from . import config
-
-        return config.base_url(), config.api_key(), config.model(), "legacy-env"
     base_url, api_key, source = _credential_for(group)
-    return base_url, api_key, model.get("model", ""), source
+    return base_url, api_key, (model or {}).get("model", ""), source
 
 
 def active_config_for(target_id) -> tuple[str | None, str | None, str, str]:
@@ -1077,17 +1034,6 @@ def migrate_from_settings():
         if group and not _key_for_group(group["id"]):
             set_key(group["id"], key)
             imported += 1
-    legacy = _legacy_env()
-    env_base = legacy.get("BASE_URL")
-    if env_base and not list_models():
-        save_model(
-            {
-                "id": env_base,
-                "name": legacy.get("MODEL", env_base),
-                "base_url": env_base,
-                "model": legacy.get("MODEL", ""),
-            }
-        )
     if get_active_model_id() is None and list_models():
         set_active(list_models()[0]["id"])
     return imported

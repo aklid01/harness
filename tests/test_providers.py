@@ -1,14 +1,10 @@
-"""Provider store: CRUD, masking, legacy fallback, keyring resolution."""
+"""Provider store: CRUD, masking, keyring resolution."""
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
-os.environ.setdefault("API_KEY", "test-key")
-os.environ.setdefault("MODEL", "test-model")
 
 from harness import paths, providers
 
@@ -63,8 +59,7 @@ class ProviderCase(unittest.TestCase):
 
     def test_key_status_masked(self):
         providers.save_provider(self.entry())
-        with mock.patch.object(providers, "_legacy_env", return_value={}):
-            self.assertEqual(providers.provider_status("p1")["key"], "missing")
+        self.assertEqual(providers.provider_status("p1")["key"], "missing")
         self.fake.set_password(providers.SERVICE, "p1", "sk-secret-value")
         self.assertEqual(providers.provider_status("p1")["key"], "keyring")
         masked = providers.mask("sk-secret-value")
@@ -79,9 +74,10 @@ class ProviderCase(unittest.TestCase):
             (base, key, model, source), ("https://x/v1", "sk-ring", "m", "keyring")
         )
 
-    def test_active_config_falls_back_to_legacy(self):
+    def test_active_config_without_a_key_is_missing(self):
+        providers.save_provider(self.entry())
         base, key, model, source = providers.active_config()
-        self.assertEqual((key, source), ("test-key", "legacy-env"))
+        self.assertEqual((base, key, model, source), ("https://x/v1", None, "m", "missing"))
 
     def test_file_has_no_secrets(self):
         providers.save_provider(self.entry())

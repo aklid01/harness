@@ -4138,8 +4138,6 @@ function keyTag(
   if (active) tags.push(`<span class="tag active">active</span>`);
   else if (!disabled) tags.push(`<span class="tag">inactive</span>`);
   if (key === "keyring") tags.push(`<span class="tag key-ok">key</span>`);
-  else if (key === "plaintext-env")
-    tags.push(`<span class="tag key-env">env key</span>`);
   else tags.push(`<span class="tag key-missing">no key</span>`);
   if (disabled) tags.push(`<span class="tag disabled">disabled</span>`);
   return tags.join(" ");

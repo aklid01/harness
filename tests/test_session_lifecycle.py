@@ -16,9 +16,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-os.environ.setdefault("BASE_URL", "http://127.0.0.1:1/v1")
-os.environ.setdefault("API_KEY", "dummy-key")
-os.environ.setdefault("MODEL", "dummy-model")
 
 from harness import events, paths
 from harness import server as server_mod

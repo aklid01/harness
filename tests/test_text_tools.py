@@ -1,14 +1,10 @@
 """Text tool-call compatibility layer: strict parsing, no execution."""
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-os.environ.setdefault("BASE_URL", "http://127.0.0.1:1/v1")
-os.environ.setdefault("API_KEY", "dummy")
-os.environ.setdefault("MODEL", "dummy")
 
 from harness import (
     paths,

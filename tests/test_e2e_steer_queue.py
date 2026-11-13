@@ -31,9 +31,6 @@ from unittest import mock
 
 from tests.mock_provider import _payload, _stream
 
-os.environ.setdefault("BASE_URL", "http://localhost:1/v1")
-os.environ.setdefault("API_KEY", "test-key")
-os.environ.setdefault("MODEL", "test-model")
 
 from harness import agent_roles, events, providers, server
 from harness import paths as paths_mod
