@@ -480,8 +480,8 @@ def _active(data):
     """(group, model) the engine should use, from the file or the context.
 
     A disabled model is never served: the active provider falls back to its
-    first live model, and if none of those are live the first live model in the
-    registry is used rather than silently dropping to the .env provider.
+    first live model, and if none of those are live the first live model in
+    the registry is used.
     """
     override = _ACTIVE_ID.get()
     group, model = _find_model(data, override or _text(data.get("active_id")))
@@ -1008,7 +1008,7 @@ def _import_target(base_url, model=""):
 
 @_transaction
 def migrate_from_settings():
-    """One-time import of settings.json/.env keys into keyring. Returns count."""
+    """One-time import of settings.json keys into keyring. Returns count."""
     try:
         settings = json.loads(
             (paths.project_root() / "settings.json").read_text(encoding="utf-8")
