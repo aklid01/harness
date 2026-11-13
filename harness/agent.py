@@ -34,8 +34,8 @@ from .context import reminder
 from .llm import call_llm, system_prompt
 from .review import command as review_command
 from .todos import active_form
-from .toolsets import READONLY_WITHHELD
 from .tools import available_tool_names, execute
+from .toolsets import READONLY_WITHHELD
 
 log = logging.getLogger(__name__)
 

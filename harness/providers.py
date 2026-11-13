@@ -24,11 +24,9 @@ import functools
 import json
 import secrets
 import threading
-from pathlib import Path
 from typing import TypedDict
 
-from . import config
-from . import paths
+from . import config, paths
 
 SERVICE = "harness"
 FORMAT_VERSION = 2

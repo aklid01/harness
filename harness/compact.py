@@ -44,13 +44,16 @@ Rules:
 - No preamble and no sign-off. Start at the first heading.
 """
 
-HANDOFF = SUMMARY + """
+HANDOFF = (
+    SUMMARY
+    + """
 Everything before this point has been compacted out of the context window to
 free up room. This is the record of it - treat it as your own memory of the
 work so far, not as something the user told you.
 
 {summary}
 </summary>"""
+)
 
 
 def needed(usage, window=None):

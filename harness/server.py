@@ -1471,8 +1471,7 @@ async def serve(host="127.0.0.1", port=8765, auth_token=None):
                         "project": paths_mod.project_name(),
                         "project_root": str(paths_mod.project_root()),
                         "commands": [
-                            {"cmd": cmd, "help": text}
-                            for cmd, text in COMMANDS.items()
+                            {"cmd": cmd, "help": text} for cmd, text in COMMANDS.items()
                         ],
                     }
                 }

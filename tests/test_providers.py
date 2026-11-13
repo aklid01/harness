@@ -5,7 +5,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 from harness import paths, providers
 
 
@@ -77,7 +76,9 @@ class ProviderCase(unittest.TestCase):
     def test_active_config_without_a_key_is_missing(self):
         providers.save_provider(self.entry())
         base, key, model, source = providers.active_config()
-        self.assertEqual((base, key, model, source), ("https://x/v1", None, "m", "missing"))
+        self.assertEqual(
+            (base, key, model, source), ("https://x/v1", None, "m", "missing")
+        )
 
     def test_file_has_no_secrets(self):
         providers.save_provider(self.entry())

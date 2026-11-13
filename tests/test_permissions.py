@@ -3,7 +3,6 @@
 import os
 import unittest
 
-
 from harness import permissions
 
 
@@ -178,7 +177,7 @@ class BypassRegression(unittest.TestCase):
 
     def test_withheld_sets_name_real_tools(self):
 
-        from harness import toolsets, tools
+        from harness import tools, toolsets
 
         real = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
         self.assertLessEqual(

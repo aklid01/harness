@@ -6,12 +6,10 @@ responder. stdlib unittest only: `uv run python tests/test_engine_headless.py`.
 """
 
 import json
-import os
 import sys
 import unittest
 from types import SimpleNamespace
 from unittest import mock
-
 
 from harness import (
     commands,

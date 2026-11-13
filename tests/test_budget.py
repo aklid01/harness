@@ -1,8 +1,6 @@
 """Phase budgets: the limits that end a phase, and the repeat detector."""
 
-import os
 import unittest
-
 
 from harness.budget import Budget, Progress
 

@@ -10,7 +10,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 from harness import paths, sandbox
 
 

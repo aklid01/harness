@@ -14,7 +14,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-
 from harness import events, providers, server
 from harness.errors import ModelError
 

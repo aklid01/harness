@@ -2,12 +2,10 @@
 one-model-per-provider file migrates without losing anything."""
 
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-
 
 from harness import paths, providers
 

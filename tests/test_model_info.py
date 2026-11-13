@@ -1,12 +1,10 @@
 """Auto-configuration from a provider's /models endpoint: normalization of
 heterogeneous payloads, fill-only-empty semantics, and the save backstop."""
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-
 
 from harness import paths, providers
 

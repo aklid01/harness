@@ -3,12 +3,10 @@ sweep deletes the turn's spills, and prepare trims without touching the
 stored transcript. The locked prefix survives all of it."""
 
 import json
-import os
 import unittest
 from unittest import mock
 
 from harness import history
-
 
 
 def user(content):

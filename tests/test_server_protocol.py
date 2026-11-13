@@ -1,7 +1,6 @@
 """Sidecar protocol: ops dispatch and event forwarding, no socket needed."""
 
 import json
-import os
 import tempfile
 import threading
 import time
@@ -9,7 +8,6 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-
 
 from harness import (
     events,

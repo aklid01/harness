@@ -2,12 +2,10 @@
 own file first, the global one as a fallback, and neither allowed to crowd out
 the task."""
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-
 
 from harness import instructions, llm, paths
 

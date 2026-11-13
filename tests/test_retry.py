@@ -1,12 +1,10 @@
 """Retries: a fixed 3/5/15/20/30s schedule, bounded by an attempt count and
 one shared deadline, transient only, cancellable, and never leaking the key."""
 
-import os
 import threading
 import time
 import unittest
 from unittest import mock
-
 
 import openai
 

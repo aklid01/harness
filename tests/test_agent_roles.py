@@ -23,7 +23,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-
 from harness import agent_roles, events, providers, server
 from harness import paths as paths_mod
 

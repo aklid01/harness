@@ -29,11 +29,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from tests.mock_provider import _payload, _stream
-
-
 from harness import agent_roles, events, providers, server
 from harness import paths as paths_mod
+from tests.mock_provider import _payload, _stream
 
 TITLE_MARKER = "Title this coding task"
 

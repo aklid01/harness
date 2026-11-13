@@ -33,7 +33,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-
 from harness import attachments as att
 from harness import events, providers, server
 from harness import paths as paths_mod

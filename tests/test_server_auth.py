@@ -6,11 +6,9 @@ only thing that separates the app from everything else on the machine.
 
 import asyncio
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
-
 
 from harness import paths
 from harness import server as server_mod

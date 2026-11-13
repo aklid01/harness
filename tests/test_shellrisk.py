@@ -1,8 +1,6 @@
 """The shell-risk classifier: the verdicts the approval dialog is built on."""
 
-import os
 import unittest
-
 
 from harness.shellrisk import classify_bash, read_only_bash
 

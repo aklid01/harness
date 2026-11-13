@@ -11,7 +11,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-
 from harness import errors, history, llm, paths, providers, retry
 
 

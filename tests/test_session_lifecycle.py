@@ -16,7 +16,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-
 from harness import events, paths
 from harness import server as server_mod
 from harness import session as session_mod

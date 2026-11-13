@@ -19,7 +19,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-
 from harness import agent_roles, commands, events, server
 from harness import paths as paths_mod
 from harness import plan as plan_mod
@@ -878,7 +877,7 @@ class SubagentExclusion(IsolatedCase):
         events.reset()
 
     def test_the_decision_tool_is_never_in_the_subagent_toolset(self):
-        from harness import toolsets, tools
+        from harness import tools, toolsets
 
         registry = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
         self.assertNotIn(

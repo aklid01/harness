@@ -6,11 +6,9 @@ budget exhausted, provider error - and each asserts the returned report and
 the events a user would see.
 """
 
-import os
 import unittest
 from types import SimpleNamespace
 from unittest import mock
-
 
 from harness import events, subagent
 

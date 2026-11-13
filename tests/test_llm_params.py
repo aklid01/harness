@@ -1,12 +1,10 @@
 """Reasoning effort / temperature reach the provider call only when set."""
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-
 
 from harness import llm, paths, providers
 

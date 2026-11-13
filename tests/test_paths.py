@@ -1,12 +1,10 @@
 """Paths: explicit project root plus app-data dir, with legacy migration."""
 
-import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-
 
 from harness import (
     paths,

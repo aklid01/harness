@@ -8,12 +8,10 @@ asked for it.
 """
 
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-
 
 from harness import commands, events, history, paths
 from harness.compact import compact, needed, safe_boundary, tail_start
